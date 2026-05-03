@@ -4,6 +4,7 @@ export type StoredModelTurn = {
   maker: string;
   badge: string;
   accent: string;
+  logoUrl?: string;
   steps: number;
   response?: string;
   critique?: string;

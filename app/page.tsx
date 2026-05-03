@@ -54,6 +54,7 @@ type RunModel = {
   maker: string;
   badge: string;
   accent: string;
+  logoUrl: string;
   selected: boolean;
   reasoning: boolean;
   steps: number;
@@ -130,6 +131,7 @@ const INITIAL_MODELS: RunModel[] = COUNCIL_MODELS.map((model, index) => ({
   maker: model.maker,
   badge: model.shortName.slice(0, 1),
   accent: model.accent,
+  logoUrl: model.logoUrl,
   selected: index < 3,
   reasoning: true,
   steps: 0,
@@ -397,6 +399,7 @@ export default function Home() {
         maker: m.maker,
         badge: m.badge,
         accent: m.accent,
+        logoUrl: m.logoUrl,
         steps: m.steps,
         response: m.response,
         critique: m.critique,
@@ -457,7 +460,7 @@ export default function Home() {
       synthesis: "",
       models: nextRunModelIds.map((id) => {
         const base = INITIAL_MODELS.find((m) => m.id === id)!;
-        return { id: base.id, label: base.label, maker: base.maker, badge: base.badge, accent: base.accent, steps: 0, activityLog: [] };
+        return { id: base.id, label: base.label, maker: base.maker, badge: base.badge, accent: base.accent, logoUrl: base.logoUrl, steps: 0, activityLog: [] };
       }),
       createdAt: Date.now(),
       status: "complete",
@@ -920,7 +923,10 @@ function PastTurnsFeed({
                       onOpenModel(m.id);
                     }}
                   >
-                    <span className="modelBadge small" style={{ ["--badge-color" as string]: m.accent } as React.CSSProperties}>{m.badge}</span>
+                    <ModelBadge
+                      model={{ ...(live ?? INITIAL_MODELS.find((x) => x.id === m.id)!), ...m }}
+                      small
+                    />
                     {m.label}
                   </button>
                 );
@@ -1639,10 +1645,11 @@ function ModelResponseModal({ model, onClose }: { model: RunModel; onClose: () =
 function ModelBadge({ model, small = false }: { model: RunModel; small?: boolean }) {
   return (
     <span
-      className={small ? "modelBadge small" : "modelBadge"}
+      className={`${small ? "modelBadge small" : "modelBadge"}${model.logoUrl ? "" : " noLogo"}`}
       style={{ "--badge-color": model.accent } as React.CSSProperties}
+      aria-label={`${model.maker} logo`}
     >
-      {model.badge}
+      {model.logoUrl ? <img src={model.logoUrl} alt="" aria-hidden="true" /> : model.badge}
     </span>
   );
 }

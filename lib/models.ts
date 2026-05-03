@@ -4,6 +4,7 @@ export type CouncilModel = {
   shortName: string;
   maker: string;
   accent: string;
+  logoUrl: string;
   description: string;
   defaultSelected: boolean;
   reasoning?: "thinking" | "native";
@@ -16,6 +17,7 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     shortName: "GPT",
     maker: "OpenAI",
     accent: "#2563eb",
+    logoUrl: "/model-logos/openai.svg",
     description: "Strong default for synthesis, software, and high-context reasoning.",
     defaultSelected: true,
     reasoning: "thinking",
@@ -26,6 +28,7 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     shortName: "Claude",
     maker: "Anthropic",
     accent: "#c2410c",
+    logoUrl: "/model-logos/claude.ico",
     description: "Careful long-form judgment, planning, and nuanced critique.",
     defaultSelected: true,
   },
@@ -35,6 +38,7 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     shortName: "Gemini",
     maker: "Google",
     accent: "#0f766e",
+    logoUrl: "/model-logos/gemini.svg",
     description: "Broad multimodal reasoning with strong systems and research coverage.",
     defaultSelected: true,
   },
@@ -44,6 +48,7 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     shortName: "Grok",
     maker: "xAI",
     accent: "#7c3aed",
+    logoUrl: "/model-logos/grok.svg",
     description: "Direct contrarian checks and fast alternate framing.",
     defaultSelected: false,
   },
