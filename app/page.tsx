@@ -302,13 +302,17 @@ export default function Home() {
   }, []);
 
   function toggleModel(id: string) {
-    setModels((current) =>
-      current.map((model) => {
+    setModels((current) => {
+      // Search mode: radio behavior — exactly one selected, can't deselect the active one.
+      if (!councilEnabled) {
+        return current.map((model) => ({ ...model, selected: model.id === id }));
+      }
+      return current.map((model) => {
         if (model.id !== id) return model;
         if (model.selected && current.filter((item) => item.selected).length <= 2) return model;
         return { ...model, selected: !model.selected };
-      }),
-    );
+      });
+    });
   }
 
   function toggleReasoning(id: string) {
@@ -321,6 +325,30 @@ export default function Home() {
     setModels((current) =>
       current.map((model, index) => ({ ...model, selected: index < 3, reasoning: true })),
     );
+  }
+
+  function enterSearchMode() {
+    setCouncilEnabled(false);
+    setModels((current) => {
+      const firstSelectedIdx = current.findIndex((m) => m.selected);
+      const keepIdx = firstSelectedIdx >= 0 ? firstSelectedIdx : 0;
+      return current.map((model, index) => ({ ...model, selected: index === keepIdx }));
+    });
+  }
+
+  function enterCouncilMode() {
+    setCouncilEnabled(true);
+    setModels((current) => {
+      const selectedCount = current.filter((m) => m.selected).length;
+      if (selectedCount >= 2) return current;
+      // Top up to 3 from the front, preserving any existing selection.
+      const toSelect = new Set(current.filter((m) => m.selected).map((m) => m.id));
+      for (const m of current) {
+        if (toSelect.size >= 3) break;
+        toSelect.add(m.id);
+      }
+      return current.map((model) => ({ ...model, selected: toSelect.has(model.id) }));
+    });
   }
 
   function startNewThread() {
@@ -657,6 +685,8 @@ export default function Home() {
               setQuery={setQuery}
               councilEnabled={councilEnabled}
               setCouncilEnabled={setCouncilEnabled}
+              enterSearchMode={enterSearchMode}
+              enterCouncilMode={enterCouncilMode}
               menuOpen={menuOpen}
               setMenuOpen={setMenuOpen}
               selectorOpen={selectorOpen}
@@ -1002,7 +1032,8 @@ function timeAgo(timestamp: number): string {
    ========================================================= */
 
 function CouncilComposer({
-  query, setQuery, councilEnabled, setCouncilEnabled, menuOpen, setMenuOpen,
+  query, setQuery, councilEnabled, setCouncilEnabled, enterSearchMode, enterCouncilMode,
+  menuOpen, setMenuOpen,
   selectorOpen, setSelectorOpen, selectedCount, models, toggleModel, toggleReasoning,
   selectTopThree, attachments, onFilesSelected, onRemoveAttachment, runCouncil,
 }: {
@@ -1010,6 +1041,8 @@ function CouncilComposer({
   setQuery: (value: string) => void;
   councilEnabled: boolean;
   setCouncilEnabled: (value: boolean) => void;
+  enterSearchMode: () => void;
+  enterCouncilMode: () => void;
   menuOpen: boolean;
   setMenuOpen: (value: boolean) => void;
   selectorOpen: boolean;
@@ -1091,7 +1124,7 @@ function CouncilComposer({
                         type="button"
                         onClick={() => {
                           if (item.upload) { fileInputRef.current?.click(); setMenuOpen(false); }
-                          else if (item.active) { setCouncilEnabled(true); setMenuOpen(false); setSelectorOpen(true); }
+                          else if (item.active) { enterCouncilMode(); setMenuOpen(false); setSelectorOpen(true); }
                         }}
                       >
                         <Icon size={16} />
@@ -1122,14 +1155,14 @@ function CouncilComposer({
               <button
                 type="button"
                 className={!councilEnabled ? "modeTab active" : "modeTab"}
-                onClick={() => setCouncilEnabled(false)}
+                onClick={() => enterSearchMode()}
               >
                 <Search size={14} /> Search
               </button>
               <button
                 type="button"
                 className={councilEnabled ? "modeTab active" : "modeTab"}
-                onClick={() => setCouncilEnabled(true)}
+                onClick={() => enterCouncilMode()}
               >
                 <Layers3 size={14} /> Council
               </button>
@@ -1142,7 +1175,7 @@ function CouncilComposer({
               type="button"
               onClick={() => setSelectorOpen(!selectorOpen)}
             >
-              {selectedCount} models <ChevronDown size={14} />
+              {councilEnabled ? `${selectedCount} models` : "1 model"} <ChevronDown size={14} />
             </button>
             <button className="iconBtn" type="button" aria-label="Voice input">
               <Mic size={18} />
@@ -1166,6 +1199,7 @@ function CouncilComposer({
             toggleModel={toggleModel}
             toggleReasoning={toggleReasoning}
             selectTopThree={selectTopThree}
+            councilEnabled={councilEnabled}
           />
         ) : null}
       </div>
@@ -1178,24 +1212,31 @@ function CouncilComposer({
    ========================================================= */
 
 function ModelSelector({
-  models, selectedCount, toggleModel, toggleReasoning, selectTopThree,
+  models, selectedCount, toggleModel, toggleReasoning, selectTopThree, councilEnabled,
 }: {
   models: RunModel[];
   selectedCount: number;
   toggleModel: (id: string) => void;
   toggleReasoning: (id: string) => void;
   selectTopThree: () => void;
+  councilEnabled: boolean;
 }) {
   return (
     <aside className="modelSelector">
       <div className="selectorHeader">
         <div>
-          <h2>Council members</h2>
-          <p>{selectedCount} of {models.length} selected · minimum 2</p>
+          <h2>{councilEnabled ? "Council members" : "Search model"}</h2>
+          <p>
+            {councilEnabled
+              ? `${selectedCount} of ${models.length} selected · minimum 2`
+              : `Pick one model to answer · ${models.length} available`}
+          </p>
         </div>
-        <button className="quickSelect" type="button" onClick={selectTopThree}>
-          Reset to 3
-        </button>
+        {councilEnabled ? (
+          <button className="quickSelect" type="button" onClick={selectTopThree}>
+            Reset to 3
+          </button>
+        ) : null}
       </div>
       <div className="modelRows">
         {models.map((model) => (
@@ -1224,7 +1265,11 @@ function ModelSelector({
           </div>
         ))}
       </div>
-      <p className="selectorHint">Each model answers independently before synthesis.</p>
+      <p className="selectorHint">
+        {councilEnabled
+          ? "Each model answers independently before synthesis."
+          : "Search runs against the selected model only."}
+      </p>
     </aside>
   );
 }
