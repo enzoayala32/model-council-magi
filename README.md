@@ -4,7 +4,7 @@ An open-source, Perplexity-style **Model Council** for the web. Ask one question
 
 Built with Next.js 16 (App Router), React 19, and OpenRouter.
 
-![Council UI](./perplexity-council-redesign.png)
+<img width="2484" height="1682" alt="CleanShot 2026-05-03 at 10 34 01@2x" src="https://github.com/user-attachments/assets/40e29268-4575-471e-b4cf-d27ad569d696" />
 
 ---
 
