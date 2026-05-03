@@ -1197,13 +1197,25 @@ function CouncilComposer({
           </div>
 
           <div className="composerRight">
-            <button
-              className="modelCountButton"
-              type="button"
-              onClick={() => setSelectorOpen(!selectorOpen)}
-            >
-              {councilEnabled ? `${selectedCount} models` : "1 model"} <ChevronDown size={14} />
-            </button>
+            <div className="modelSelectorWrap">
+              <button
+                className="modelCountButton"
+                type="button"
+                onClick={() => setSelectorOpen(!selectorOpen)}
+              >
+                {councilEnabled ? `${selectedCount} models` : "1 model"} <ChevronDown size={14} />
+              </button>
+              {selectorOpen ? (
+                <ModelSelector
+                  models={models}
+                  selectedCount={selectedCount}
+                  toggleModel={toggleModel}
+                  cycleReasoningEffort={cycleReasoningEffort}
+                  selectTopThree={selectTopThree}
+                  councilEnabled={councilEnabled}
+                />
+              ) : null}
+            </div>
             <button className="iconBtn" type="button" aria-label="Voice input">
               <Mic size={18} />
             </button>
@@ -1218,17 +1230,6 @@ function CouncilComposer({
             </button>
           </div>
         </div>
-
-        {selectorOpen ? (
-          <ModelSelector
-            models={models}
-            selectedCount={selectedCount}
-            toggleModel={toggleModel}
-            cycleReasoningEffort={cycleReasoningEffort}
-            selectTopThree={selectTopThree}
-            councilEnabled={councilEnabled}
-          />
-        ) : null}
       </div>
     </div>
   );

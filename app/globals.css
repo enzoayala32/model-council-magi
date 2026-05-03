@@ -685,74 +685,90 @@ a { color: inherit; }
    Model selector popover
    ========================================================= */
 
+.modelSelectorWrap {
+  position: relative;
+  display: inline-flex;
+}
+
 .modelSelector {
   position: absolute;
   right: 0;
   bottom: calc(100% + 8px);
   z-index: 25;
-  width: min(100%, 480px);
-  padding: 10px;
+  width: 360px;
+  max-width: calc(100vw - 24px);
+  max-height: min(70vh, 460px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   background: var(--bg-elev);
   box-shadow: var(--shadow-lg);
   animation: panelDown 200ms ease both;
+  font-size: 12.5px;
 }
 
 .selectorHeader {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 10px;
-  padding: 6px 6px 10px;
+  gap: 8px;
+  padding: 4px 4px 8px;
+  flex-shrink: 0;
 }
 
 .selectorHeader h2 {
   margin: 0;
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 650;
   color: var(--ink);
 }
 
 .selectorHeader p, .selectorHint {
-  margin: 2px 0 0;
+  margin: 1px 0 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
+.selectorHint { padding: 6px 4px 0; flex-shrink: 0; }
+
 .quickSelect {
-  height: 28px;
-  padding: 0 10px;
+  height: 24px;
+  padding: 0 8px;
   border: 1px solid var(--line);
   border-radius: var(--r-pill);
   background: var(--bg-soft);
   color: var(--ink-soft);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
 }
 
 .modelRows {
-  max-height: 320px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   display: grid;
-  gap: 2px;
+  gap: 1px;
 }
 
 .modelRow {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) auto auto;
-  gap: 12px;
+  grid-template-columns: 26px minmax(0, 1fr) auto auto;
+  gap: 10px;
   align-items: center;
-  padding: 10px 8px;
-  border-radius: 10px;
+  padding: 7px 6px;
+  border-radius: 8px;
   background: transparent;
   transition: background 140ms ease;
 }
+.modelRow .modelBadge { width: 26px; height: 26px; padding: 4px; border-radius: 7px; font-size: 11px; }
 .modelRow:hover { background: var(--bg-soft); }
 
-.modelMeta { display: grid; gap: 1px; min-width: 0; }
-.modelMeta strong { font-size: 13px; font-weight: 650; color: var(--ink); }
-.modelMeta span { color: var(--muted); font-size: 11.5px; }
+.modelMeta { display: grid; gap: 0; min-width: 0; }
+.modelMeta strong { font-size: 12px; font-weight: 650; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.modelMeta span { color: var(--muted); font-size: 10.5px; }
 
 .reasoningToggle {
   display: flex;
@@ -767,13 +783,13 @@ a { color: inherit; }
 .effortCycler {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 10px;
+  gap: 6px;
+  padding: 3px 8px;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--bg-soft);
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
