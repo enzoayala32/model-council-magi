@@ -9,6 +9,7 @@ type StreamRequest = {
   apiKey?: string;
   attachments?: UploadedAttachment[];
   history?: ConversationTurn[];
+  webGrounding?: boolean;
 };
 
 type ConversationTurn = {
@@ -77,6 +78,7 @@ export async function POST(request: Request) {
         const selectedModels = normalizeSelection(body.selectedModels);
         const attachments = normalizeAttachments(body.attachments);
         const history = normalizeHistory(body.history);
+        const webGrounding = Boolean(body.webGrounding);
 
         if (!prompt) {
           send({ type: "error", error: "Enter a prompt for the council." });
@@ -101,7 +103,7 @@ export async function POST(request: Request) {
 
         const draftResults = await Promise.all(
           selectedModels.map((modelId, index) =>
-            runDraft({ modelId, prompt, attachments, history, apiKey, send, offset: index, signal }),
+            runDraft({ modelId, prompt, attachments, history, apiKey, send, offset: index, signal, webGrounding }),
           ),
         );
         const successfulDrafts = draftResults.filter((result) => result.ok && result.content);
@@ -196,6 +198,7 @@ async function runDraft({
   send,
   offset,
   signal,
+  webGrounding,
 }: {
   modelId: string;
   prompt: string;
@@ -205,6 +208,7 @@ async function runDraft({
   send: (event: StreamEvent) => void;
   offset: number;
   signal: AbortSignal;
+  webGrounding: boolean;
 }) {
   const model = getCouncilModel(modelId);
   const label = model?.label ?? modelId;
@@ -231,12 +235,28 @@ async function runDraft({
     await delay(140);
   }
 
+  if (webGrounding) {
+    steps += 1;
+    send({
+      type: "model_step",
+      modelId,
+      label,
+      step: "Searching the live web for grounding context",
+      steps,
+      status: "thinking",
+      phase: "drafting",
+    });
+    await delay(120);
+  }
+
   try {
     send({
       type: "model_step",
       modelId,
       label,
-      step: "Calling OpenRouter for the long-form independent answer",
+      step: webGrounding
+        ? "Calling OpenRouter (web-grounded) for the long-form independent answer"
+        : "Calling OpenRouter for the long-form independent answer",
       steps: steps + 2,
       status: "thinking",
       phase: "drafting",
@@ -249,7 +269,8 @@ async function runDraft({
       temperature: 0.28,
       reasoningEffort: model?.reasoning ? "high" : "medium",
       signal,
-      messages: buildDraftMessages(prompt, attachments, history),
+      web: webGrounding,
+      messages: buildDraftMessages(prompt, attachments, history, webGrounding),
     });
 
     send({
@@ -504,10 +525,18 @@ function renderHistoryBlock(history: ConversationTurn[]) {
   ].join("\n\n");
 }
 
-function buildDraftMessages(prompt: string, attachments: UploadedAttachment[], history: ConversationTurn[]) {
-  const systemPrompt = history.length
+function buildDraftMessages(
+  prompt: string,
+  attachments: UploadedAttachment[],
+  history: ConversationTurn[],
+  webGrounding = false,
+) {
+  let systemPrompt = history.length
     ? `${COUNCIL_MEMBER_SYSTEM_PROMPT}\n\nThis is a follow-up question inside an existing thread. The user's earlier questions and the council's prior answers are provided. Stay strictly on-topic to the current question, treat prior answers as established context, and do not re-derive earlier conclusions unless the user is challenging them.`
     : COUNCIL_MEMBER_SYSTEM_PROMPT;
+  if (webGrounding) {
+    systemPrompt = `${systemPrompt}\n\nWeb grounding is enabled. Live web search results will be injected before your response. Treat them as authoritative for time-sensitive facts. When you use a search result, cite it inline as a markdown link to the source URL. Prefer recent, primary sources. If results conflict, say which you trust and why.`;
+  }
 
   const userText = history.length
     ? [renderHistoryBlock(history), `# Current user question\n${prompt}`].join("\n\n")

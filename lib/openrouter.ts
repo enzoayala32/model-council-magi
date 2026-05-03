@@ -18,6 +18,8 @@ type ChatCompletionOptions = {
   temperature?: number;
   reasoningEffort?: "low" | "medium" | "high";
   signal?: AbortSignal;
+  web?: boolean;
+  webMaxResults?: number;
 };
 
 type OpenRouterChoice = {
@@ -58,7 +60,21 @@ export async function createChatCompletion({
   temperature = 0.25,
   reasoningEffort = "medium",
   signal,
+  web = false,
+  webMaxResults = 5,
 }: ChatCompletionOptions) {
+  const body: Record<string, unknown> = {
+    model,
+    messages,
+    temperature,
+    max_tokens: maxTokens,
+    reasoning: {
+      effort: reasoningEffort,
+    },
+  };
+  if (web) {
+    body.plugins = [{ id: "web", max_results: webMaxResults }];
+  }
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     signal,
@@ -68,15 +84,7 @@ export async function createChatCompletion({
       "HTTP-Referer": process.env.OPENROUTER_SITE_URL ?? "http://localhost:3000",
       "X-Title": process.env.OPENROUTER_APP_NAME ?? "Open Model Council",
     },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature,
-      max_tokens: maxTokens,
-      reasoning: {
-        effort: reasoningEffort,
-      },
-    }),
+    body: JSON.stringify(body),
   });
 
   const payload = (await response.json().catch(() => ({}))) as OpenRouterResponse;

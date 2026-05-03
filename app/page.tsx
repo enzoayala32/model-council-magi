@@ -237,6 +237,7 @@ export default function Home() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [selectorOpen, setSelectorOpen] = useState(false);
   const [councilEnabled, setCouncilEnabled] = useState(true);
+  const [webGrounding, setWebGrounding] = useState(false);
   const [activeModal, setActiveModal] = useState<string | null>(null);
   const [runModelIds, setRunModelIds] = useState<string[]>([]);
   const [synthesis, setSynthesis] = useState("");
@@ -554,6 +555,7 @@ export default function Home() {
           selectedModels: nextRunModelIds,
           attachments: attachments.map(({ id: _id, ...attachment }) => attachment),
           history,
+          webGrounding,
         }),
       });
 
@@ -687,6 +689,8 @@ export default function Home() {
               setCouncilEnabled={setCouncilEnabled}
               enterSearchMode={enterSearchMode}
               enterCouncilMode={enterCouncilMode}
+              webGrounding={webGrounding}
+              toggleWebGrounding={() => setWebGrounding((v) => !v)}
               menuOpen={menuOpen}
               setMenuOpen={setMenuOpen}
               selectorOpen={selectorOpen}
@@ -1033,6 +1037,7 @@ function timeAgo(timestamp: number): string {
 
 function CouncilComposer({
   query, setQuery, councilEnabled, setCouncilEnabled, enterSearchMode, enterCouncilMode,
+  webGrounding, toggleWebGrounding,
   menuOpen, setMenuOpen,
   selectorOpen, setSelectorOpen, selectedCount, models, toggleModel, toggleReasoning,
   selectTopThree, attachments, onFilesSelected, onRemoveAttachment, runCouncil,
@@ -1043,6 +1048,8 @@ function CouncilComposer({
   setCouncilEnabled: (value: boolean) => void;
   enterSearchMode: () => void;
   enterCouncilMode: () => void;
+  webGrounding: boolean;
+  toggleWebGrounding: () => void;
   menuOpen: boolean;
   setMenuOpen: (value: boolean) => void;
   selectorOpen: boolean;
@@ -1167,6 +1174,16 @@ function CouncilComposer({
                 <Layers3 size={14} /> Council
               </button>
             </div>
+
+            <button
+              type="button"
+              className={webGrounding ? "modeTab active" : "modeTab"}
+              onClick={toggleWebGrounding}
+              title={webGrounding ? "Web grounding on — models will use live search" : "Enable web grounding"}
+              aria-pressed={webGrounding}
+            >
+              <Globe size={14} /> Web
+            </button>
           </div>
 
           <div className="composerRight">
