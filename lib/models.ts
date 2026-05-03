@@ -62,7 +62,7 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     description: "Direct contrarian checks and fast alternate framing.",
     defaultSelected: false,
     defaultReasoningEffort: "medium",
-    supportsImages: false,
+    supportsImages: true,
   },
   {
     id: "deepseek/deepseek-v4-pro",
