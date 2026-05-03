@@ -286,7 +286,7 @@ async function runDraft({
       reasoningEffort,
       signal,
       web: webGrounding,
-      messages: buildDraftMessages(prompt, attachments, history, webGrounding),
+      messages: buildDraftMessages(prompt, attachments, history, webGrounding, model?.supportsImages ?? true),
     });
 
     send({
@@ -549,6 +549,7 @@ function buildDraftMessages(
   attachments: UploadedAttachment[],
   history: ConversationTurn[],
   webGrounding = false,
+  supportsImages = true,
 ) {
   let systemPrompt = history.length
     ? `${COUNCIL_MEMBER_SYSTEM_PROMPT}\n\nThis is a follow-up question inside an existing thread. The user's earlier questions and the council's prior answers are provided. Stay strictly on-topic to the current question, treat prior answers as established context, and do not re-derive earlier conclusions unless the user is challenging them.`
@@ -563,7 +564,7 @@ function buildDraftMessages(
 
   return [
     { role: "system" as const, content: systemPrompt },
-    { role: "user" as const, content: buildUserContent(userText, attachments) },
+    { role: "user" as const, content: buildUserContent(userText, attachments, supportsImages) },
   ];
 }
 
@@ -630,8 +631,15 @@ function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function buildUserContent(prompt: string, attachments: UploadedAttachment[]): OpenRouterMessageContent {
+function buildUserContent(
+  prompt: string,
+  attachments: UploadedAttachment[],
+  supportsImages = true,
+): OpenRouterMessageContent {
   if (!attachments.length) return prompt;
+
+  const hasUsableImage = supportsImages && attachments.some((a) => a.kind === "image" && a.dataUrl);
+  const skippedImages = !supportsImages && attachments.some((a) => a.kind === "image");
 
   const parts: Exclude<OpenRouterMessageContent, string> = [
     {
@@ -639,14 +647,21 @@ function buildUserContent(prompt: string, attachments: UploadedAttachment[]): Op
       text: [
         prompt,
         "",
-        "Uploaded attachments are included below. Use them when relevant and call out if a file type could not be directly inspected.",
+        hasUsableImage
+          ? "Uploaded attachments are included below. Use them when relevant and call out if a file type could not be directly inspected."
+          : skippedImages
+            ? "The user uploaded image attachments, but this model does not accept image input, so they are omitted. Answer based on the text of the prompt; if the question depends on the image, say so explicitly and answer what you can in general terms."
+            : "Uploaded attachments are included below. Use them when relevant and call out if a file type could not be directly inspected.",
       ].join("\n"),
     },
   ];
 
   for (const attachment of attachments) {
     if (attachment.kind === "image" && attachment.dataUrl) {
-      parts.push({ type: "image_url", image_url: { url: attachment.dataUrl } });
+      if (supportsImages) {
+        parts.push({ type: "image_url", image_url: { url: attachment.dataUrl } });
+      }
+      // else: skip silently — text note above already explains
       continue;
     }
 

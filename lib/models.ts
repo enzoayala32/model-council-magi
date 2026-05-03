@@ -10,6 +10,7 @@ export type CouncilModel = {
   description: string;
   defaultSelected: boolean;
   defaultReasoningEffort: ReasoningEffort;
+  supportsImages: boolean;
 };
 
 export const REASONING_EFFORTS: ReasoningEffort[] = ["low", "medium", "high"];
@@ -25,6 +26,7 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     description: "Strong default for synthesis, software, and high-context reasoning.",
     defaultSelected: true,
     defaultReasoningEffort: "high",
+    supportsImages: true,
   },
   {
     id: "anthropic/claude-opus-4.7",
@@ -36,6 +38,7 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     description: "Careful long-form judgment, planning, and nuanced critique.",
     defaultSelected: true,
     defaultReasoningEffort: "high",
+    supportsImages: true,
   },
   {
     id: "google/gemini-3.1-pro-preview",
@@ -47,6 +50,7 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     description: "Broad multimodal reasoning with strong systems and research coverage.",
     defaultSelected: true,
     defaultReasoningEffort: "high",
+    supportsImages: true,
   },
   {
     id: "x-ai/grok-4.3",
@@ -58,6 +62,7 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     description: "Direct contrarian checks and fast alternate framing.",
     defaultSelected: false,
     defaultReasoningEffort: "medium",
+    supportsImages: false,
   },
   {
     id: "deepseek/deepseek-v4-pro",
@@ -69,6 +74,7 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     description: "Open-weights reasoning model with strong math, code, and long-context analysis.",
     defaultSelected: false,
     defaultReasoningEffort: "high",
+    supportsImages: false,
   },
   {
     id: "moonshotai/kimi-k2.6",
@@ -80,6 +86,7 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     description: "Long-context Chinese-and-English generalist with sharp summarization and retrieval.",
     defaultSelected: false,
     defaultReasoningEffort: "medium",
+    supportsImages: false,
   },
   {
     id: "qwen/qwen3.6-max-preview",
@@ -91,6 +98,7 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     description: "Multilingual frontier model with strong tool use and coding benchmarks.",
     defaultSelected: false,
     defaultReasoningEffort: "high",
+    supportsImages: false,
   },
 ];
 
