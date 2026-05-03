@@ -1,0 +1,332 @@
+{
+  "version": "2.11",
+  "variables": {
+    "--ink": { "type": "color", "value": "#151515" },
+    "--paper": { "type": "color", "value": "#F7F4EC" },
+    "--surface": { "type": "color", "value": "#FFFCF4" },
+    "--line": { "type": "color", "value": "#D9D2C3" },
+    "--muted": { "type": "color", "value": "#6E675E" },
+    "--blue": { "type": "color", "value": "#215CFF" },
+    "--teal": { "type": "color", "value": "#0F766E" },
+    "--orange": { "type": "color", "value": "#C2410C" },
+    "--violet": { "type": "color", "value": "#7C3AED" }
+  },
+  "children": [
+    {
+      "id": "CouncilScreen",
+      "type": "frame",
+      "name": "Open Model Council / Desktop",
+      "x": 0,
+      "y": 0,
+      "width": 1440,
+      "height": 1080,
+      "layout": "vertical",
+      "gap": 22,
+      "padding": 34,
+      "fill": "$--paper",
+      "children": [
+        {
+          "id": "TopNav",
+          "type": "frame",
+          "name": "Top Nav",
+          "width": "fill_container",
+          "height": 54,
+          "layout": "horizontal",
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "id": "BrandCluster",
+              "type": "frame",
+              "width": "fit_content",
+              "height": "fit_content",
+              "layout": "horizontal",
+              "gap": 14,
+              "alignItems": "center",
+              "children": [
+                {
+                  "id": "BrandMark",
+                  "type": "frame",
+                  "width": 48,
+                  "height": 48,
+                  "cornerRadius": 8,
+                  "fill": "$--ink",
+                  "layout": "vertical",
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "BrandDots",
+                      "type": "frame",
+                      "width": "fit_content",
+                      "height": "fit_content",
+                      "layout": "horizontal",
+                      "gap": 4,
+                      "children": [
+                        { "id": "DotOne", "type": "ellipse", "width": 6, "height": 6, "fill": "$--blue" },
+                        { "id": "DotTwo", "type": "ellipse", "width": 6, "height": 6, "fill": "$--teal" },
+                        { "id": "DotThree", "type": "ellipse", "width": 6, "height": 6, "fill": "$--orange" }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "BrandText",
+                  "type": "frame",
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "id": "BrandEyebrow",
+                      "type": "text",
+                      "content": "OpenRouter Council",
+                      "fontSize": 12,
+                      "fontWeight": "700",
+                      "fill": "$--muted"
+                    },
+                    {
+                      "id": "BrandTitle",
+                      "type": "text",
+                      "content": "Open Model Council",
+                      "fontSize": 26,
+                      "fontWeight": "800",
+                      "fill": "$--ink"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "StatusPill",
+              "type": "frame",
+              "width": "fit_content",
+              "height": 40,
+              "layout": "horizontal",
+              "gap": 8,
+              "alignItems": "center",
+              "padding": [14, 0],
+              "cornerRadius": 8,
+              "stroke": { "thickness": 1, "fill": "$--line" },
+              "fill": "$--surface",
+              "children": [
+                { "id": "StatusText", "type": "text", "content": "Parallel answers + synthesized consensus", "fontSize": 13, "fontWeight": "700", "fill": "$--ink" }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "InputRow",
+          "type": "frame",
+          "name": "Input And Model Controls",
+          "width": "fill_container",
+          "height": 520,
+          "layout": "horizontal",
+          "gap": 20,
+          "children": [
+            {
+              "id": "PromptPanel",
+              "type": "frame",
+              "width": 890,
+              "height": "fill_container",
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "cornerRadius": 8,
+              "stroke": { "thickness": 1, "fill": "$--line" },
+              "fill": "$--surface",
+              "children": [
+                {
+                  "id": "PromptHeader",
+                  "type": "frame",
+                  "width": "fill_container",
+                  "height": "fit_content",
+                  "layout": "horizontal",
+                  "justifyContent": "space_between",
+                  "alignItems": "start",
+                  "children": [
+                    {
+                      "id": "PromptCopy",
+                      "type": "frame",
+                      "width": 570,
+                      "height": "fit_content",
+                      "layout": "vertical",
+                      "gap": 7,
+                      "children": [
+                        { "id": "PromptEyebrow", "type": "text", "content": "Ask once", "fontSize": 12, "fontWeight": "800", "fill": "$--muted" },
+                        { "id": "PromptTitle", "type": "text", "content": "Send the same prompt to a council of frontier models.", "textGrowth": "fixed-width", "width": "fill_container", "fontSize": 27, "fontWeight": "800", "lineHeight": 1.14, "fill": "$--ink" }
+                      ]
+                    },
+                    {
+                      "id": "ExampleButton",
+                      "type": "frame",
+                      "width": 110,
+                      "height": 42,
+                      "layout": "horizontal",
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "cornerRadius": 8,
+                      "stroke": { "thickness": 1, "fill": "$--line" },
+                      "fill": "#FFFFFF",
+                      "children": [
+                        { "id": "ExampleText", "type": "text", "content": "Example", "fontSize": 14, "fontWeight": "800", "fill": "$--ink" }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "PromptTextarea",
+                  "type": "frame",
+                  "width": "fill_container",
+                  "height": 264,
+                  "cornerRadius": 8,
+                  "stroke": { "thickness": 1, "fill": "#BFB6A6" },
+                  "fill": "#FFFFFF",
+                  "layout": "vertical",
+                  "padding": 18,
+                  "children": [
+                    { "id": "TextareaHint", "type": "text", "content": "Enter a decision, research question, strategy problem, or creative brief...", "textGrowth": "fixed-width", "width": "fill_container", "fontSize": 18, "lineHeight": 1.45, "fill": "$--muted" }
+                  ]
+                },
+                {
+                  "id": "ActionRow",
+                  "type": "frame",
+                  "width": "fill_container",
+                  "height": 48,
+                  "layout": "horizontal",
+                  "gap": 12,
+                  "children": [
+                    {
+                      "id": "KeyField",
+                      "type": "frame",
+                      "width": "fill_container",
+                      "height": "fill_container",
+                      "layout": "horizontal",
+                      "alignItems": "center",
+                      "padding": [14, 0],
+                      "cornerRadius": 8,
+                      "stroke": { "thickness": 1, "fill": "$--line" },
+                      "fill": "#FFFFFF",
+                      "children": [
+                        { "id": "KeyFieldText", "type": "text", "content": "Optional OpenRouter key, otherwise server env is used", "fontSize": 14, "fill": "$--muted" }
+                      ]
+                    },
+                    {
+                      "id": "RunButton",
+                      "type": "frame",
+                      "width": 160,
+                      "height": "fill_container",
+                      "layout": "horizontal",
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "cornerRadius": 8,
+                      "fill": "$--blue",
+                      "children": [
+                        { "id": "RunText", "type": "text", "content": "Run Council", "fontSize": 15, "fontWeight": "800", "fill": "#FFFFFF" }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "ModeTabs",
+                  "type": "frame",
+                  "width": "fill_container",
+                  "height": 64,
+                  "layout": "horizontal",
+                  "gap": 10,
+                  "children": [
+                    { "id": "BalancedTab", "type": "frame", "width": "fill_container", "height": "fill_container", "layout": "vertical", "justifyContent": "center", "gap": 3, "padding": [14, 0], "cornerRadius": 8, "fill": "$--ink", "children": [{ "id": "BalancedText", "type": "text", "content": "Balanced", "fontSize": 14, "fontWeight": "800", "fill": "#FFFFFF" }, { "id": "BalancedSub", "type": "text", "content": "Best default", "fontSize": 12, "fill": "#D7D2C9" }] },
+                    { "id": "CriticalTab", "type": "frame", "width": "fill_container", "height": "fill_container", "layout": "vertical", "justifyContent": "center", "gap": 3, "padding": [14, 0], "cornerRadius": 8, "stroke": { "thickness": 1, "fill": "$--line" }, "fill": "#FFFFFF", "children": [{ "id": "CriticalText", "type": "text", "content": "Critical", "fontSize": 14, "fontWeight": "800", "fill": "$--ink" }, { "id": "CriticalSub", "type": "text", "content": "Stress test", "fontSize": 12, "fill": "$--muted" }] },
+                    { "id": "CreativeTab", "type": "frame", "width": "fill_container", "height": "fill_container", "layout": "vertical", "justifyContent": "center", "gap": 3, "padding": [14, 0], "cornerRadius": 8, "stroke": { "thickness": 1, "fill": "$--line" }, "fill": "#FFFFFF", "children": [{ "id": "CreativeText", "type": "text", "content": "Creative", "fontSize": 14, "fontWeight": "800", "fill": "$--ink" }, { "id": "CreativeSub", "type": "text", "content": "More range", "fontSize": 12, "fill": "$--muted" }] }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "ModelsPanel",
+              "type": "frame",
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "gap": 14,
+              "padding": 20,
+              "cornerRadius": 8,
+              "stroke": { "thickness": 1, "fill": "$--line" },
+              "fill": "$--surface",
+              "children": [
+                { "id": "ModelsEyebrow", "type": "text", "content": "3 selected", "fontSize": 12, "fontWeight": "800", "fill": "$--muted" },
+                { "id": "ModelsTitle", "type": "text", "content": "Choose models", "fontSize": 24, "fontWeight": "800", "fill": "$--ink" },
+                { "id": "ModelGPT", "type": "frame", "width": "fill_container", "height": 86, "layout": "horizontal", "gap": 12, "padding": 14, "cornerRadius": 8, "stroke": { "thickness": 1, "fill": "$--blue" }, "fill": "#FFFFFF", "children": [{ "id": "GPTStripe", "type": "rectangle", "width": 5, "height": "fill_container", "cornerRadius": 4, "fill": "$--blue" }, { "id": "GPTText", "type": "text", "content": "GPT-5.4 Thinking\nStrong default for synthesis and high-context reasoning.", "textGrowth": "fixed-width", "width": "fill_container", "fontSize": 13, "lineHeight": 1.35, "fill": "$--ink" }] },
+                { "id": "ModelClaude", "type": "frame", "width": "fill_container", "height": 86, "layout": "horizontal", "gap": 12, "padding": 14, "cornerRadius": 8, "stroke": { "thickness": 1, "fill": "$--orange" }, "fill": "#FFFFFF", "children": [{ "id": "ClaudeStripe", "type": "rectangle", "width": 5, "height": "fill_container", "cornerRadius": 4, "fill": "$--orange" }, { "id": "ClaudeText", "type": "text", "content": "Claude Opus 4.7\nCareful long-form judgment and critique.", "textGrowth": "fixed-width", "width": "fill_container", "fontSize": 13, "lineHeight": 1.35, "fill": "$--ink" }] },
+                { "id": "ModelGemini", "type": "frame", "width": "fill_container", "height": 86, "layout": "horizontal", "gap": 12, "padding": 14, "cornerRadius": 8, "stroke": { "thickness": 1, "fill": "$--teal" }, "fill": "#FFFFFF", "children": [{ "id": "GeminiStripe", "type": "rectangle", "width": 5, "height": "fill_container", "cornerRadius": 4, "fill": "$--teal" }, { "id": "GeminiText", "type": "text", "content": "Gemini 3.1 Pro\nBroad reasoning with strong research coverage.", "textGrowth": "fixed-width", "width": "fill_container", "fontSize": 13, "lineHeight": 1.35, "fill": "$--ink" }] },
+                { "id": "ModelGrok", "type": "frame", "width": "fill_container", "height": 86, "layout": "horizontal", "gap": 12, "padding": 14, "cornerRadius": 8, "stroke": { "thickness": 1, "fill": "$--line" }, "fill": "#FFFFFF", "children": [{ "id": "GrokStripe", "type": "rectangle", "width": 5, "height": "fill_container", "cornerRadius": 4, "fill": "$--violet" }, { "id": "GrokText", "type": "text", "content": "Grok 4.3\nDirect contrarian checks and alternate framing.", "textGrowth": "fixed-width", "width": "fill_container", "fontSize": 13, "lineHeight": 1.35, "fill": "$--ink" }] }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "ResultsRow",
+          "type": "frame",
+          "name": "Results",
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "horizontal",
+          "gap": 20,
+          "children": [
+            {
+              "id": "SynthesisPanel",
+              "type": "frame",
+              "width": 820,
+              "height": "fill_container",
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 22,
+              "cornerRadius": 8,
+              "stroke": { "thickness": 1, "fill": "$--line" },
+              "fill": "$--surface",
+              "children": [
+                { "id": "SynthEyebrow", "type": "text", "content": "Synthesizer", "fontSize": 12, "fontWeight": "800", "fill": "$--muted" },
+                { "id": "SynthTitle", "type": "text", "content": "Council answer", "fontSize": 24, "fontWeight": "800", "fill": "$--ink" },
+                {
+                  "id": "SynthContent",
+                  "type": "frame",
+                  "width": "fill_container",
+                  "height": "fill_container",
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": 18,
+                  "cornerRadius": 8,
+                  "stroke": { "thickness": 1, "fill": "$--line" },
+                  "fill": "#FFFFFF",
+                  "children": [
+                    { "id": "ConsensusTitle", "type": "text", "content": "Consensus", "fontSize": 17, "fontWeight": "800", "fill": "$--ink" },
+                    { "id": "ConsensusBody", "type": "text", "content": "The final synthesis highlights where selected models converge, where they disagree, and what to verify before acting.", "textGrowth": "fixed-width", "width": "fill_container", "fontSize": 15, "lineHeight": 1.5, "fill": "$--muted" }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "RawPanel",
+              "type": "frame",
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "gap": 14,
+              "padding": 22,
+              "cornerRadius": 8,
+              "stroke": { "thickness": 1, "fill": "$--line" },
+              "fill": "$--surface",
+              "children": [
+                { "id": "RawEyebrow", "type": "text", "content": "Members", "fontSize": 12, "fontWeight": "800", "fill": "$--muted" },
+                { "id": "RawTitle", "type": "text", "content": "Individual views", "fontSize": 24, "fontWeight": "800", "fill": "$--ink" },
+                { "id": "RawCardOne", "type": "frame", "width": "fill_container", "height": 74, "layout": "vertical", "justifyContent": "center", "gap": 4, "padding": [14, 0], "cornerRadius": 8, "stroke": { "thickness": 1, "fill": "$--line" }, "fill": "#FFFFFF", "children": [{ "id": "RawOne", "type": "text", "content": "GPT-5.4 Thinking\nExpanded independent answer", "fontSize": 13, "lineHeight": 1.35, "fill": "$--ink" }] },
+                { "id": "RawCardTwo", "type": "frame", "width": "fill_container", "height": 74, "layout": "vertical", "justifyContent": "center", "gap": 4, "padding": [14, 0], "cornerRadius": 8, "stroke": { "thickness": 1, "fill": "$--line" }, "fill": "#FFFFFF", "children": [{ "id": "RawTwo", "type": "text", "content": "Claude Opus 4.7\nCollapsed member view", "fontSize": 13, "lineHeight": 1.35, "fill": "$--ink" }] }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
