@@ -659,7 +659,12 @@ export default function Home() {
     }
 
     if (event.type === "synthesis_started") { setSynthesisActivity(event.step); return; }
-    if (event.type === "synthesis_complete") { setSynthesis(event.content); setSynthesisActivity("Synthesis complete"); return; }
+    if (event.type === "synthesis_complete") {
+      setSynthesis(event.content);
+      liveStateRef.current.synthesis = event.content;
+      setSynthesisActivity("Synthesis complete");
+      return;
+    }
     if (event.type === "run_complete") { setPhase("results"); setRunPhase("done"); }
   }
 
