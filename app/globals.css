@@ -764,6 +764,29 @@ a { color: inherit; }
 }
 .reasoningToggle input { accent-color: var(--accent-deep); }
 
+.effortCycler {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+.effortCycler:hover { color: var(--ink); border-color: var(--accent-deep); }
+.effortCycler .effortLabel { color: var(--muted); }
+.effortCycler .effortValue { color: var(--ink); letter-spacing: 0.06em; }
+.effortCycler.effort-low .effortValue { color: #94a3b8; }
+.effortCycler.effort-medium .effortValue { color: var(--accent-deep); }
+.effortCycler.effort-high .effortValue { color: #f59e0b; }
+
 .switch {
   width: 38px;
   height: 22px;

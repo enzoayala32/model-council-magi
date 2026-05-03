@@ -30,7 +30,7 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { COUNCIL_MODELS } from "@/lib/models";
+import { COUNCIL_MODELS, REASONING_EFFORTS, type ReasoningEffort } from "@/lib/models";
 import {
   buildHistory,
   deleteThread as deleteThreadFromList,
@@ -56,7 +56,7 @@ type RunModel = {
   accent: string;
   logoUrl: string;
   selected: boolean;
-  reasoning: boolean;
+  reasoningEffort: ReasoningEffort;
   steps: number;
   status: ModelRunState;
   debateStatus: ModelRunState;
@@ -133,7 +133,7 @@ const INITIAL_MODELS: RunModel[] = COUNCIL_MODELS.map((model, index) => ({
   accent: model.accent,
   logoUrl: model.logoUrl,
   selected: index < 3,
-  reasoning: true,
+  reasoningEffort: model.defaultReasoningEffort,
   steps: 0,
   status: "queued",
   debateStatus: "queued",
@@ -316,15 +316,20 @@ export default function Home() {
     });
   }
 
-  function toggleReasoning(id: string) {
+  function cycleReasoningEffort(id: string) {
     setModels((current) =>
-      current.map((model) => (model.id === id ? { ...model, reasoning: !model.reasoning } : model)),
+      current.map((model) => {
+        if (model.id !== id) return model;
+        const idx = REASONING_EFFORTS.indexOf(model.reasoningEffort);
+        const next = REASONING_EFFORTS[(idx + 1) % REASONING_EFFORTS.length];
+        return { ...model, reasoningEffort: next };
+      }),
     );
   }
 
   function selectTopThree() {
     setModels((current) =>
-      current.map((model, index) => ({ ...model, selected: index < 3, reasoning: true })),
+      current.map((model, index) => ({ ...model, selected: index < 3 })),
     );
   }
 
@@ -556,6 +561,11 @@ export default function Home() {
           attachments: attachments.map(({ id: _id, ...attachment }) => attachment),
           history,
           webGrounding,
+          reasoningEffortByModel: Object.fromEntries(
+            liveStateRef.current.models
+              .filter((m) => nextRunModelIds.includes(m.id))
+              .map((m) => [m.id, m.reasoningEffort]),
+          ),
         }),
       });
 
@@ -698,7 +708,7 @@ export default function Home() {
               selectedCount={selectedModels.length}
               models={models}
               toggleModel={toggleModel}
-              toggleReasoning={toggleReasoning}
+              cycleReasoningEffort={cycleReasoningEffort}
               selectTopThree={selectTopThree}
               attachments={attachments}
               onFilesSelected={async (files) => {
@@ -1039,7 +1049,7 @@ function CouncilComposer({
   query, setQuery, councilEnabled, setCouncilEnabled, enterSearchMode, enterCouncilMode,
   webGrounding, toggleWebGrounding,
   menuOpen, setMenuOpen,
-  selectorOpen, setSelectorOpen, selectedCount, models, toggleModel, toggleReasoning,
+  selectorOpen, setSelectorOpen, selectedCount, models, toggleModel, cycleReasoningEffort,
   selectTopThree, attachments, onFilesSelected, onRemoveAttachment, runCouncil,
 }: {
   query: string;
@@ -1057,7 +1067,7 @@ function CouncilComposer({
   selectedCount: number;
   models: RunModel[];
   toggleModel: (id: string) => void;
-  toggleReasoning: (id: string) => void;
+  cycleReasoningEffort: (id: string) => void;
   selectTopThree: () => void;
   attachments: UploadedAttachment[];
   onFilesSelected: (files: FileList) => void | Promise<void>;
@@ -1214,7 +1224,7 @@ function CouncilComposer({
             models={models}
             selectedCount={selectedCount}
             toggleModel={toggleModel}
-            toggleReasoning={toggleReasoning}
+            cycleReasoningEffort={cycleReasoningEffort}
             selectTopThree={selectTopThree}
             councilEnabled={councilEnabled}
           />
@@ -1229,12 +1239,12 @@ function CouncilComposer({
    ========================================================= */
 
 function ModelSelector({
-  models, selectedCount, toggleModel, toggleReasoning, selectTopThree, councilEnabled,
+  models, selectedCount, toggleModel, cycleReasoningEffort, selectTopThree, councilEnabled,
 }: {
   models: RunModel[];
   selectedCount: number;
   toggleModel: (id: string) => void;
-  toggleReasoning: (id: string) => void;
+  cycleReasoningEffort: (id: string) => void;
   selectTopThree: () => void;
   councilEnabled: boolean;
 }) {
@@ -1263,14 +1273,16 @@ function ModelSelector({
               <strong>{model.label}</strong>
               <span>{model.maker}</span>
             </div>
-            <label className="reasoningToggle">
-              <input
-                type="checkbox"
-                checked={model.reasoning}
-                onChange={() => toggleReasoning(model.id)}
-              />
-              Reasoning
-            </label>
+            <button
+              type="button"
+              className={`effortCycler effort-${model.reasoningEffort}`}
+              onClick={() => cycleReasoningEffort(model.id)}
+              title="Click to cycle reasoning effort: low → medium → high"
+              aria-label={`Reasoning effort: ${model.reasoningEffort}. Click to change.`}
+            >
+              <span className="effortLabel">Effort</span>
+              <span className="effortValue">{model.reasoningEffort}</span>
+            </button>
             <button
               className={model.selected ? "switch on" : "switch"}
               type="button"

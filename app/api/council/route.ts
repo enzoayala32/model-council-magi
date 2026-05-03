@@ -104,7 +104,7 @@ async function queryCouncilModel(
       apiKey,
       maxTokens: 5200,
       temperature: mode === "creative" ? 0.5 : 0.22,
-      reasoningEffort: model?.reasoning ? "high" : "medium",
+      reasoningEffort: model?.defaultReasoningEffort ?? "medium",
       messages: [
         {
           role: "system",

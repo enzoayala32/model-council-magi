@@ -1,4 +1,4 @@
-import { COUNCIL_MODELS, getCouncilModel } from "@/lib/models";
+import { COUNCIL_MODELS, getCouncilModel, isReasoningEffort, type ReasoningEffort } from "@/lib/models";
 import { OpenRouterMessageContent, createChatCompletion } from "@/lib/openrouter";
 
 export const maxDuration = 300;
@@ -10,6 +10,7 @@ type StreamRequest = {
   attachments?: UploadedAttachment[];
   history?: ConversationTurn[];
   webGrounding?: boolean;
+  reasoningEffortByModel?: Record<string, string>;
 };
 
 type ConversationTurn = {
@@ -79,6 +80,7 @@ export async function POST(request: Request) {
         const attachments = normalizeAttachments(body.attachments);
         const history = normalizeHistory(body.history);
         const webGrounding = Boolean(body.webGrounding);
+        const reasoningEffortByModel = normalizeReasoningEfforts(body.reasoningEffortByModel);
 
         if (!prompt) {
           send({ type: "error", error: "Enter a prompt for the council." });
@@ -103,7 +105,18 @@ export async function POST(request: Request) {
 
         const draftResults = await Promise.all(
           selectedModels.map((modelId, index) =>
-            runDraft({ modelId, prompt, attachments, history, apiKey, send, offset: index, signal, webGrounding }),
+            runDraft({
+              modelId,
+              prompt,
+              attachments,
+              history,
+              apiKey,
+              send,
+              offset: index,
+              signal,
+              webGrounding,
+              reasoningEffort: effortFor(modelId, reasoningEffortByModel),
+            }),
           ),
         );
         const successfulDrafts = draftResults.filter((result) => result.ok && result.content);
@@ -131,6 +144,7 @@ export async function POST(request: Request) {
                 send,
                 offset: index,
                 signal,
+                reasoningEffort: effortFor(self.modelId, reasoningEffortByModel),
               }),
             ),
           );
@@ -199,6 +213,7 @@ async function runDraft({
   offset,
   signal,
   webGrounding,
+  reasoningEffort,
 }: {
   modelId: string;
   prompt: string;
@@ -209,6 +224,7 @@ async function runDraft({
   offset: number;
   signal: AbortSignal;
   webGrounding: boolean;
+  reasoningEffort: ReasoningEffort;
 }) {
   const model = getCouncilModel(modelId);
   const label = model?.label ?? modelId;
@@ -267,7 +283,7 @@ async function runDraft({
       apiKey,
       maxTokens: TARGET_DRAFT_TOKENS,
       temperature: 0.28,
-      reasoningEffort: model?.reasoning ? "high" : "medium",
+      reasoningEffort,
       signal,
       web: webGrounding,
       messages: buildDraftMessages(prompt, attachments, history, webGrounding),
@@ -304,6 +320,7 @@ async function runDebate({
   send,
   offset,
   signal,
+  reasoningEffort,
 }: {
   self: { modelId: string; label: string; content: string };
   others: Array<{ modelId: string; label: string; content: string }>;
@@ -313,8 +330,10 @@ async function runDebate({
   send: (event: StreamEvent) => void;
   offset: number;
   signal: AbortSignal;
+  reasoningEffort: ReasoningEffort;
 }) {
   const model = getCouncilModel(self.modelId);
+  void model;
   let steps = 0;
 
   for (const step of DEBATE_STEPS) {
@@ -340,7 +359,7 @@ async function runDebate({
       apiKey,
       maxTokens: TARGET_DEBATE_TOKENS,
       temperature: 0.3,
-      reasoningEffort: model?.reasoning ? "high" : "medium",
+      reasoningEffort,
       signal,
       messages: [
         { role: "system", content: DEBATE_SYSTEM_PROMPT },
@@ -576,6 +595,21 @@ function splitDebateOutput(content: string) {
    Helpers
    ========================================================= */
 
+function normalizeReasoningEfforts(input: Record<string, string> | undefined): Record<string, ReasoningEffort> {
+  if (!input || typeof input !== "object") return {};
+  const out: Record<string, ReasoningEffort> = {};
+  for (const [modelId, effort] of Object.entries(input)) {
+    if (isReasoningEffort(effort)) out[modelId] = effort;
+  }
+  return out;
+}
+
+function effortFor(modelId: string, overrides: Record<string, ReasoningEffort>): ReasoningEffort {
+  const override = overrides[modelId];
+  if (override) return override;
+  return getCouncilModel(modelId)?.defaultReasoningEffort ?? "medium";
+}
+
 function normalizeSelection(selectedModels: string[] | undefined) {
   const knownIds = new Set(COUNCIL_MODELS.map((model) => model.id));
   const requested = (selectedModels ?? [])
@@ -583,7 +617,7 @@ function normalizeSelection(selectedModels: string[] | undefined) {
     .filter((id) => knownIds.has(id));
 
   const fallback = COUNCIL_MODELS.filter((model) => model.defaultSelected).map((model) => model.id);
-  return Array.from(new Set(requested.length ? requested : fallback)).slice(0, 4);
+  return Array.from(new Set(requested.length ? requested : fallback)).slice(0, 7);
 }
 
 function normalizeAttachments(attachments: UploadedAttachment[] | undefined) {
