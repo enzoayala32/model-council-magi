@@ -38,6 +38,7 @@ type StreamEvent =
   | { type: "model_error"; modelId: string; label: string; error: string; steps: number; phase: Phase }
   | { type: "synthesis_started"; step: string }
   | { type: "synthesis_complete"; content: string; usage?: unknown }
+  | { type: "followups_complete"; questions: string[]; usage?: unknown }
   | { type: "run_complete" }
   | { type: "error"; error: string };
 
@@ -59,6 +60,7 @@ const DEBATE_STEPS = [
 const TARGET_DRAFT_TOKENS = 9000;
 const TARGET_DEBATE_TOKENS = 6000;
 const TARGET_SYNTHESIS_TOKENS = 12000;
+const FOLLOWUP_MODEL = "deepseek/deepseek-v4-pro";
 
 export async function POST(request: Request) {
   const encoder = new TextEncoder();
@@ -176,6 +178,29 @@ export async function POST(request: Request) {
 
         if (isAborted()) return;
         send({ type: "synthesis_complete", content: synthesis.content, usage: synthesis.usage });
+
+        try {
+          const followUps = await createChatCompletion({
+            model: process.env.FOLLOWUP_MODEL ?? FOLLOWUP_MODEL,
+            apiKey,
+            maxTokens: 1400,
+            temperature: 0.35,
+            reasoningEffort: "low",
+            signal,
+            messages: buildFollowUpMessages(prompt, synthesis.content),
+          });
+
+          if (isAborted()) return;
+          send({
+            type: "followups_complete",
+            questions: parseFollowUpQuestions(followUps.content),
+            usage: followUps.usage,
+          });
+        } catch {
+          if (isAborted()) return;
+          send({ type: "followups_complete", questions: [] });
+        }
+
         send({ type: "phase", phase: "done" });
         send({ type: "run_complete" });
       } catch (error) {
@@ -529,6 +554,70 @@ function buildSynthesisPrompt(
       : "Now produce the final synthesized answer using the exact heading structure from your system instructions. Be specific and long-form. Do not summarize the process — answer the question.",
   );
   return sections.join("\n\n");
+}
+
+function buildFollowUpMessages(prompt: string, synthesis: string) {
+  return [
+    {
+      role: "system" as const,
+      content: [
+        "You generate follow-up questions for a completed AI council answer.",
+        "Return exactly four questions as a JSON array of strings.",
+        "Every question must be directly grounded in the final synthesis and useful as the user's next click.",
+        "Do not use generic templates. Do not mention inflation, the Fed, benchmarks, or unrelated demo topics unless they are actually in the synthesis.",
+        "Keep each question under 120 characters.",
+        "Return JSON only.",
+      ].join(" "),
+    },
+    {
+      role: "user" as const,
+      content: [
+        `Original user question:\n${prompt}`,
+        "",
+        `Final synthesis:\n${compactForHistory(synthesis, 7000)}`,
+      ].join("\n"),
+    },
+  ];
+}
+
+function parseFollowUpQuestions(content: string) {
+  const parsed = parseQuestionJson(content);
+  const candidates = parsed.length
+    ? parsed
+    : content
+        .split(/\r?\n/)
+        .map((line) => line.replace(/^\s*(?:[-*]|\d+[.)])\s*/, "").trim())
+        .filter(Boolean);
+
+  const seen = new Set<string>();
+  const questions: string[] = [];
+  for (const candidate of candidates) {
+    const question = candidate.replace(/^["']|["']$/g, "").trim();
+    if (!question || !question.endsWith("?") || seen.has(question.toLowerCase())) continue;
+    seen.add(question.toLowerCase());
+    questions.push(question.length > 160 ? `${question.slice(0, 157).trim()}?` : question);
+    if (questions.length === 4) break;
+  }
+  return questions;
+}
+
+function parseQuestionJson(content: string): string[] {
+  const trimmed = content.trim();
+  const jsonBlock = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim() ?? trimmed;
+  try {
+    const parsed = JSON.parse(jsonBlock);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    const start = jsonBlock.indexOf("[");
+    const end = jsonBlock.lastIndexOf("]");
+    if (start < 0 || end <= start) return [];
+    try {
+      const parsed = JSON.parse(jsonBlock.slice(start, end + 1));
+      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+    } catch {
+      return [];
+    }
+  }
 }
 
 function renderHistoryBlock(history: ConversationTurn[]) {

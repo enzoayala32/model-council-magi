@@ -17,6 +17,7 @@ export type StoredTurn = {
   id: string;
   question: string;
   synthesis: string;
+  followUps?: string[];
   models: StoredModelTurn[];
   createdAt: number;
   status: "complete" | "stopped" | "errored";

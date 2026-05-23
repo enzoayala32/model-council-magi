@@ -86,6 +86,7 @@ type CouncilStreamEvent =
   | { type: "model_error"; modelId: string; label: string; error: string; steps: number; phase: RunPhase }
   | { type: "synthesis_started"; step: string }
   | { type: "synthesis_complete"; content: string }
+  | { type: "followups_complete"; questions: string[] }
   | { type: "run_complete" }
   | { type: "error"; error: string };
 
@@ -97,13 +98,6 @@ const SUGGESTIONS: Array<{ icon: LucideIcon; label: string; query: string }> = [
   { icon: Globe, label: "Drivers of US inflation in 2025", query: DEFAULT_QUERY },
   { icon: Telescope, label: "Risks of agentic AI in production", query: "What are the biggest risks of deploying agentic AI systems in production today?" },
   { icon: Sparkles, label: "Best practices for RAG at scale", query: "What are the current best practices for building RAG pipelines at scale?" },
-];
-
-const FOLLOWUPS_DEMO = [
-  "How does this compare to the 2022 inflation cycle?",
-  "Which categories of services contributed the most?",
-  "What does the Fed expect for 2026?",
-  "Show me the data behind the shelter-lag argument.",
 ];
 
 const DEMO_SOURCES = [
@@ -241,6 +235,7 @@ export default function Home() {
   const [activeModal, setActiveModal] = useState<string | null>(null);
   const [runModelIds, setRunModelIds] = useState<string[]>([]);
   const [synthesis, setSynthesis] = useState("");
+  const [followUps, setFollowUps] = useState<string[]>([]);
   const [synthesisActivity, setSynthesisActivity] = useState("");
   const [streamError, setStreamError] = useState("");
   const [attachments, setAttachments] = useState<UploadedAttachment[]>([]);
@@ -252,7 +247,7 @@ export default function Home() {
   const [hydrated, setHydrated] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
-  const liveStateRef = useRef({ models: INITIAL_MODELS, synthesis: "", question: "" });
+  const liveStateRef = useRef({ models: INITIAL_MODELS, synthesis: "", followUps: [] as string[], question: "" });
   const activeThread = useMemo(
     () => threads.find((thread) => thread.id === activeThreadId) ?? null,
     [threads, activeThreadId],
@@ -281,8 +276,9 @@ export default function Home() {
   useEffect(() => {
     liveStateRef.current.models = models;
     liveStateRef.current.synthesis = synthesis;
+    liveStateRef.current.followUps = followUps;
     liveStateRef.current.question = query;
-  }, [models, synthesis, query]);
+  }, [models, synthesis, followUps, query]);
 
   const selectedModels = useMemo(() => models.filter((model) => model.selected), [models]);
   const activeModels = useMemo(() => {
@@ -364,6 +360,7 @@ export default function Home() {
     setQuery("");
     setPhase("entry");
     setSynthesis("");
+    setFollowUps([]);
     setSynthesisActivity("");
     setStreamError("");
     setRunModelIds([]);
@@ -386,6 +383,7 @@ export default function Home() {
     hydrateModelsFromTurn(lastTurn);
     setQuery(lastTurn.question);
     setSynthesis(lastTurn.synthesis);
+    setFollowUps(lastTurn.followUps ?? []);
     setRunModelIds(lastTurn.models.map((m) => m.id));
     setRunPhase("done");
     setPhase("results");
@@ -453,6 +451,7 @@ export default function Home() {
         turns[turns.length - 1] = {
           ...last,
           synthesis: liveStateRef.current.synthesis || last.synthesis,
+          followUps: liveStateRef.current.followUps.length ? liveStateRef.current.followUps : last.followUps,
           models: snapshotModelsForTurn(last.models.map((m) => m.id)),
           status,
         };
@@ -492,6 +491,7 @@ export default function Home() {
       id: newId("turn"),
       question: nextQuery,
       synthesis: "",
+      followUps: [],
       models: nextRunModelIds.map((id) => {
         const base = INITIAL_MODELS.find((m) => m.id === id)!;
         return { id: base.id, label: base.label, maker: base.maker, badge: base.badge, accent: base.accent, logoUrl: base.logoUrl, steps: 0, activityLog: [] };
@@ -532,6 +532,7 @@ export default function Home() {
     setPhase("thinking");
     setRunModelIds(nextRunModelIds);
     setSynthesis("");
+    setFollowUps([]);
     setSynthesisActivity("");
     setStreamError("");
     setResultTab("answer");
@@ -663,6 +664,11 @@ export default function Home() {
       setSynthesis(event.content);
       liveStateRef.current.synthesis = event.content;
       setSynthesisActivity("Synthesis complete");
+      return;
+    }
+    if (event.type === "followups_complete") {
+      setFollowUps(event.questions);
+      liveStateRef.current.followUps = event.questions;
       return;
     }
     if (event.type === "run_complete") { setPhase("results"); setRunPhase("done"); }
@@ -803,6 +809,7 @@ export default function Home() {
                     models={activeModels}
                     query={query}
                     synthesis={synthesis}
+                    followUps={followUps}
                     onOpenModal={setActiveModal}
                     onRunFollowup={(value) => runCouncil(value)}
                   />
@@ -1324,6 +1331,17 @@ function ThinkingStage({
   onStop?: () => void;
 }) {
   const isStreaming = runPhase !== "done";
+  const timelineMessage = streamError
+    || (isStreaming ? synthesisActivity || currentHeadline(models) : "Final synthesis complete.");
+  const synthesisBarMessage =
+    runPhase === "done"
+      ? "Final synthesis complete."
+      : runPhase === "synthesizing" || synthesisActivity
+        ? "Synthesizing drafts and debate critiques…"
+        : runPhase === "debating"
+          ? "Models are debating each other…"
+          : "Awaiting independent drafts…";
+
   return (
     <div className="thinkingPanel">
       <div className="timelineHead">
@@ -1338,7 +1356,7 @@ function ThinkingStage({
       <PhaseTracker runPhase={runPhase} />
 
       <div className="timelineStatus">
-        <p>{streamError || synthesisActivity || currentHeadline(models)}</p>
+        <p>{timelineMessage}</p>
       </div>
 
       <div className="thinkingStack">
@@ -1392,14 +1410,8 @@ function ThinkingStage({
       </div>
 
       <div className="synthesisBar">
-        <span>
-          {runPhase === "synthesizing" || synthesisActivity
-            ? "Synthesizing drafts and debate critiques…"
-            : runPhase === "debating"
-              ? "Models are debating each other…"
-              : "Awaiting independent drafts…"}
-        </span>
-        <div className="dotWave"><i /><i /><i /></div>
+        <span>{synthesisBarMessage}</span>
+        {isStreaming ? <div className="dotWave"><i /><i /><i /></div> : null}
       </div>
     </div>
   );
@@ -1523,11 +1535,12 @@ function SourcesView({ models }: { models: RunModel[] }) {
    ========================================================= */
 
 function ResultsDashboard({
-  models, query, synthesis, onOpenModal, onRunFollowup,
+  models, query, synthesis, followUps, onOpenModal, onRunFollowup,
 }: {
   models: RunModel[];
   query: string;
   synthesis: string;
+  followUps: string[];
   onOpenModal: (id: string) => void;
   onRunFollowup: (query: string) => void;
 }) {
@@ -1663,12 +1676,16 @@ function ResultsDashboard({
 
       <section className="followUps">
         <h3><ArrowRight size={14} /> Related questions</h3>
-        {(useDemoTables ? FOLLOWUPS_DEMO : FOLLOWUPS_DEMO).map((q) => (
-          <button key={q} type="button" onClick={() => onRunFollowup(q)}>
-            <span>{q}</span>
-            <Plus size={16} />
-          </button>
-        ))}
+        {followUps.length ? (
+          followUps.map((q) => (
+            <button key={q} type="button" onClick={() => onRunFollowup(q)}>
+              <span>{q}</span>
+              <Plus size={16} />
+            </button>
+          ))
+        ) : (
+          <p className="followUpsEmpty">DeepSeek could not generate related questions for this answer.</p>
+        )}
       </section>
     </div>
   );

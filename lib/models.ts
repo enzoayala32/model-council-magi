@@ -89,8 +89,8 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     supportsImages: false,
   },
   {
-    id: "qwen/qwen3.6-max-preview",
-    label: "Qwen 3.6 Max Preview",
+    id: "qwen/qwen3.7-max",
+    label: "Qwen 3.7 Max",
     shortName: "Qwen",
     maker: "Alibaba",
     accent: "#9333ea",

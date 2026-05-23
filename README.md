@@ -10,7 +10,7 @@ Built with Next.js 16 (App Router), React 19, and OpenRouter.
 
 ## What it does
 
-- **Convene a council** of frontier models. Default roster: GPT-5.4, Claude Opus 4.7, Gemini 3.1 Pro, Grok 4.3, **DeepSeek V4 Pro**, **Kimi K2.6**, and **Qwen 3.6 Max Preview** — all configurable.
+- **Convene a council** of frontier models. Default roster: GPT-5.4, Claude Opus 4.7, Gemini 3.1 Pro, Grok 4.3, **DeepSeek V4 Pro**, **Kimi K2.6**, and **Qwen 3.7 Max** — all configurable.
 - **Round 1 — Independent drafts.** Each model answers the same question in parallel, with no knowledge of the others. Long-form by design (~1,200–2,500 words target).
 - **Round 2 — Debate.** Each model is then shown the other members' drafts and asked to: critique them per-model, name what they were wrong about themselves, defend what they still believe, and produce a revised answer. Sycophancy is explicitly prohibited.
 - **Round 3 — Synthesis.** A reasoning model reconciles all drafts and debate critiques into one rigorous, in-depth answer (~1,500–3,500 words) with sections for Bottom Line, In-Depth Answer, Where the Council Agreed / Disagreed, Unique Insights, Confidence and Open Questions, and Recommended Next Steps.
@@ -204,7 +204,7 @@ The synthesizer model is set via `SYNTHESIS_MODEL` in `.env` (defaults to `opena
 | Grok 4.3 | `x-ai/grok-4.3` | medium | — |
 | DeepSeek V4 Pro | `deepseek/deepseek-v4-pro` | high | — |
 | Kimi K2.6 | `moonshotai/kimi-k2.6` | medium | — |
-| Qwen 3.6 Max Preview | `qwen/qwen3.6-max-preview` | high | — |
+| Qwen 3.7 Max | `qwen/qwen3.7-max` | high | — |
 
 ---
 

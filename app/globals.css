@@ -1807,6 +1807,11 @@ tbody tr:hover { background: var(--bg-soft); }
 .followUps button:hover { background: var(--bg-soft); color: var(--accent-ink); }
 .followUps button svg { color: var(--muted); flex: 0 0 auto; }
 .followUps button:hover svg { color: var(--accent-deep); }
+.followUpsEmpty {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13.5px;
+}
 
 /* Model badges */
 .modelBadge {
