@@ -14,6 +14,7 @@ import {
   FileText,
   Gavel,
   Globe,
+  Image as ImageIcon,
   Layers3,
   MessageSquare,
   MessageSquareQuote,
@@ -27,10 +28,12 @@ import {
   Trash2,
   TrendingUp,
   Upload,
+  Wrench,
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { COUNCIL_MODELS, REASONING_EFFORTS, type ReasoningEffort } from "@/lib/models";
+import { COUNCIL_MODELS, DEFAULT_FUSION_PANEL_ID, FUSION_PANELS, IMAGE_MODELS, REASONING_EFFORTS, type ReasoningEffort } from "@/lib/models";
+import { DEFAULT_SKILLS, importSkillFromText, type AgentSkill } from "@/lib/skills";
 import {
   buildHistory,
   deleteThread as deleteThreadFromList,
@@ -38,6 +41,7 @@ import {
   makeThreadTitle,
   newId,
   saveThreads,
+  type StoredGeneratedImage,
   type StoredModelTurn,
   type StoredThread,
   type StoredTurn,
@@ -47,6 +51,19 @@ type Phase = "entry" | "thinking" | "results";
 type ModelRunState = "queued" | "thinking" | "complete";
 type ResultTab = "answer" | "debate" | "sources" | "steps";
 type RunPhase = "drafting" | "debating" | "synthesizing" | "done";
+type SettingsTab = "connectors" | "skills" | "research" | "images";
+
+type ConnectorSettings = {
+  github: boolean;
+};
+
+type FusionJudgeReport = {
+  panelVerdict: string;
+  consensus: Array<{ finding: string; models: string[]; evidence: string }>;
+  contradictions: Array<{ topic: string; positions: Record<string, string>; judgment: string }>;
+  uniqueInsights: Array<{ model: string; insight: string; whyItMatters: string }>;
+  coverageGaps: string[];
+};
 
 type RunModel = {
   id: string;
@@ -78,14 +95,18 @@ type UploadedAttachment = {
 };
 
 type CouncilStreamEvent =
-  | { type: "run_started"; prompt: string; selectedModels: string[] }
+  | { type: "run_started"; prompt: string; selectedModels: string[]; fusionPanelId?: string }
   | { type: "phase"; phase: RunPhase }
   | { type: "model_step"; modelId: string; label: string; step: string; steps: number; status: "thinking"; phase: RunPhase }
   | { type: "model_complete"; modelId: string; label: string; content: string; steps: number; phase: "drafting" }
   | { type: "model_debate_complete"; modelId: string; label: string; critique: string; revisedAnswer?: string; steps: number }
   | { type: "model_error"; modelId: string; label: string; error: string; steps: number; phase: RunPhase }
   | { type: "synthesis_started"; step: string }
+  | { type: "fusion_judge_complete"; report: FusionJudgeReport }
   | { type: "synthesis_complete"; content: string }
+  | { type: "image_started"; model: string; prompt: string }
+  | { type: "image_complete"; model: string; prompt: string; images: string[] }
+  | { type: "image_error"; error: string }
   | { type: "followups_complete"; questions: string[] }
   | { type: "run_complete" }
   | { type: "error"; error: string };
@@ -119,20 +140,26 @@ const MENU_OPTIONS: Array<{
   { icon: Layers3, label: "Model council", active: true, note: "Compare answers from multiple models" },
 ];
 
-const INITIAL_MODELS: RunModel[] = COUNCIL_MODELS.map((model, index) => ({
+const DEFAULT_FUSION_PANEL = FUSION_PANELS.find((panel) => panel.id === DEFAULT_FUSION_PANEL_ID) ?? FUSION_PANELS[0];
+const DEFAULT_MODEL_IDS = new Set(DEFAULT_FUSION_PANEL?.modelIds ?? COUNCIL_MODELS.filter((model) => model.defaultSelected).map((model) => model.id));
+
+const INITIAL_MODELS: RunModel[] = COUNCIL_MODELS.map((model) => ({
   id: model.id,
   label: model.label,
   maker: model.maker,
   badge: model.shortName.slice(0, 1),
   accent: model.accent,
   logoUrl: model.logoUrl,
-  selected: index < 3,
+  selected: DEFAULT_MODEL_IDS.has(model.id),
   reasoningEffort: model.defaultReasoningEffort,
   steps: 0,
   status: "queued",
   debateStatus: "queued",
   activityLog: [],
 }));
+
+const SKILLS_STORAGE_KEY = "council:agent-skills:v1";
+const CONNECTORS_STORAGE_KEY = "council:connectors:v1";
 
 const agreeRows = [
   {
@@ -233,12 +260,23 @@ export default function Home() {
   const [councilEnabled, setCouncilEnabled] = useState(true);
   const [webGrounding, setWebGrounding] = useState(false);
   const [activeModal, setActiveModal] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("connectors");
   const [runModelIds, setRunModelIds] = useState<string[]>([]);
+  const [selectedFusionPanelId, setSelectedFusionPanelId] = useState(DEFAULT_FUSION_PANEL_ID);
+  const [runFusionPanelId, setRunFusionPanelId] = useState<string | null>(DEFAULT_FUSION_PANEL_ID);
+  const [fusionJudge, setFusionJudge] = useState<FusionJudgeReport | null>(null);
   const [synthesis, setSynthesis] = useState("");
   const [followUps, setFollowUps] = useState<string[]>([]);
+  const [generatedImages, setGeneratedImages] = useState<StoredGeneratedImage[]>([]);
+  const [imageStatus, setImageStatus] = useState("");
   const [synthesisActivity, setSynthesisActivity] = useState("");
   const [streamError, setStreamError] = useState("");
   const [attachments, setAttachments] = useState<UploadedAttachment[]>([]);
+  const [agentSkills, setAgentSkills] = useState<AgentSkill[]>(DEFAULT_SKILLS);
+  const [connectors, setConnectors] = useState<ConnectorSettings>({ github: true });
+  const [imageGenerationEnabled, setImageGenerationEnabled] = useState(false);
+  const [selectedImageModel, setSelectedImageModel] = useState(IMAGE_MODELS[0]?.id ?? "openai/gpt-image-1.5");
   const [resultTab, setResultTab] = useState<ResultTab>("answer");
   const [runPhase, setRunPhase] = useState<RunPhase>("drafting");
 
@@ -247,7 +285,14 @@ export default function Home() {
   const [hydrated, setHydrated] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
-  const liveStateRef = useRef({ models: INITIAL_MODELS, synthesis: "", followUps: [] as string[], question: "" });
+  const liveStateRef = useRef({
+    models: INITIAL_MODELS,
+    synthesis: "",
+    followUps: [] as string[],
+    generatedImages: [] as StoredGeneratedImage[],
+    fusionJudge: null as FusionJudgeReport | null,
+    question: "",
+  });
   const activeThread = useMemo(
     () => threads.find((thread) => thread.id === activeThreadId) ?? null,
     [threads, activeThreadId],
@@ -264,6 +309,8 @@ export default function Home() {
   // Load on mount
   useEffect(() => {
     setThreads(loadThreads());
+    setAgentSkills(loadAgentSkills());
+    setConnectors(loadConnectorSettings());
     setHydrated(true);
   }, []);
 
@@ -277,8 +324,20 @@ export default function Home() {
     liveStateRef.current.models = models;
     liveStateRef.current.synthesis = synthesis;
     liveStateRef.current.followUps = followUps;
+    liveStateRef.current.generatedImages = generatedImages;
+    liveStateRef.current.fusionJudge = fusionJudge;
     liveStateRef.current.question = query;
-  }, [models, synthesis, followUps, query]);
+  }, [models, synthesis, followUps, generatedImages, fusionJudge, query]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    saveAgentSkills(agentSkills);
+  }, [agentSkills, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    saveConnectorSettings(connectors);
+  }, [connectors, hydrated]);
 
   const selectedModels = useMemo(() => models.filter((model) => model.selected), [models]);
   const activeModels = useMemo(() => {
@@ -291,6 +350,7 @@ export default function Home() {
       if (event.key === "Escape") {
         setMenuOpen(false);
         setSelectorOpen(false);
+        setSettingsOpen(false);
         setActiveModal(null);
       }
     }
@@ -299,6 +359,7 @@ export default function Home() {
   }, []);
 
   function toggleModel(id: string) {
+    setSelectedFusionPanelId("custom");
     setModels((current) => {
       // Search mode: radio behavior — exactly one selected, can't deselect the active one.
       if (!councilEnabled) {
@@ -313,6 +374,7 @@ export default function Home() {
   }
 
   function cycleReasoningEffort(id: string) {
+    setSelectedFusionPanelId("custom");
     setModels((current) =>
       current.map((model) => {
         if (model.id !== id) return model;
@@ -324,13 +386,23 @@ export default function Home() {
   }
 
   function selectTopThree() {
+    applyFusionPanel(DEFAULT_FUSION_PANEL_ID);
+  }
+
+  function applyFusionPanel(panelId: string) {
+    const panel = FUSION_PANELS.find((item) => item.id === panelId);
+    if (!panel) return;
+    const panelIds = new Set(panel.modelIds);
+    setCouncilEnabled(true);
+    setSelectedFusionPanelId(panelId);
     setModels((current) =>
-      current.map((model, index) => ({ ...model, selected: index < 3 })),
+      current.map((model) => ({ ...model, selected: panelIds.has(model.id) })),
     );
   }
 
   function enterSearchMode() {
     setCouncilEnabled(false);
+    setSelectedFusionPanelId("custom");
     setModels((current) => {
       const firstSelectedIdx = current.findIndex((m) => m.selected);
       const keepIdx = firstSelectedIdx >= 0 ? firstSelectedIdx : 0;
@@ -361,11 +433,15 @@ export default function Home() {
     setPhase("entry");
     setSynthesis("");
     setFollowUps([]);
+    setGeneratedImages([]);
+    setFusionJudge(null);
+    setImageStatus("");
     setSynthesisActivity("");
     setStreamError("");
     setRunModelIds([]);
     setAttachments([]);
     setResultTab("answer");
+    setRunFusionPanelId(selectedFusionPanelId === "custom" ? null : selectedFusionPanelId);
     window.history.replaceState(null, "", "/");
   }
 
@@ -383,8 +459,13 @@ export default function Home() {
     hydrateModelsFromTurn(lastTurn);
     setQuery(lastTurn.question);
     setSynthesis(lastTurn.synthesis);
+    setFusionJudge(lastTurn.fusionJudge ?? null);
     setFollowUps(lastTurn.followUps ?? []);
+    setGeneratedImages(lastTurn.generatedImages ?? []);
+    setImageStatus("");
     setRunModelIds(lastTurn.models.map((m) => m.id));
+    setRunFusionPanelId(lastTurn.fusionPanelId ?? null);
+    setSelectedFusionPanelId(lastTurn.fusionPanelId ?? "custom");
     setRunPhase("done");
     setPhase("results");
     setResultTab("answer");
@@ -404,7 +485,7 @@ export default function Home() {
       current.map((base) => {
         const stored = turn.models.find((m) => m.id === base.id);
         if (!stored) {
-          return { ...base, status: "queued", debateStatus: "queued", response: undefined, critique: undefined, revisedAnswer: undefined, error: undefined, steps: 0, activityLog: [] };
+          return { ...base, selected: false, status: "queued", debateStatus: "queued", response: undefined, critique: undefined, revisedAnswer: undefined, error: undefined, steps: 0, activityLog: [] };
         }
         return {
           ...base,
@@ -452,6 +533,10 @@ export default function Home() {
           ...last,
           synthesis: liveStateRef.current.synthesis || last.synthesis,
           followUps: liveStateRef.current.followUps.length ? liveStateRef.current.followUps : last.followUps,
+          generatedImages: liveStateRef.current.generatedImages.length
+            ? liveStateRef.current.generatedImages
+            : last.generatedImages,
+          fusionJudge: liveStateRef.current.fusionJudge ?? last.fusionJudge,
           models: snapshotModelsForTurn(last.models.map((m) => m.id)),
           status,
         };
@@ -477,6 +562,7 @@ export default function Home() {
   async function runCouncil(overrideQuery?: string) {
     const nextQuery = (overrideQuery ?? query).trim() || DEFAULT_QUERY;
     const nextRunModelIds = selectedModels.map((model) => model.id);
+    const nextFusionPanelId = councilEnabled && selectedFusionPanelId !== "custom" ? selectedFusionPanelId : null;
     if (!nextRunModelIds.length) return;
 
     // Cancel anything in flight.
@@ -492,6 +578,9 @@ export default function Home() {
       question: nextQuery,
       synthesis: "",
       followUps: [],
+      generatedImages: [],
+      fusionJudge: null,
+      fusionPanelId: nextFusionPanelId,
       models: nextRunModelIds.map((id) => {
         const base = INITIAL_MODELS.find((m) => m.id === id)!;
         return { id: base.id, label: base.label, maker: base.maker, badge: base.badge, accent: base.accent, logoUrl: base.logoUrl, steps: 0, activityLog: [] };
@@ -533,10 +622,14 @@ export default function Home() {
     setRunModelIds(nextRunModelIds);
     setSynthesis("");
     setFollowUps([]);
+    setGeneratedImages([]);
+    setFusionJudge(null);
+    setImageStatus("");
     setSynthesisActivity("");
     setStreamError("");
     setResultTab("answer");
     setRunPhase("drafting");
+    setRunFusionPanelId(nextFusionPanelId);
     setModels((current) =>
       current.map((model) => ({
         ...model,
@@ -559,9 +652,16 @@ export default function Home() {
         body: JSON.stringify({
           prompt: nextQuery,
           selectedModels: nextRunModelIds,
+          fusionPanelId: nextFusionPanelId ?? undefined,
           attachments: attachments.map(({ id: _id, ...attachment }) => attachment),
           history,
           webGrounding,
+          agentSkills,
+          connectors,
+          imageSettings: {
+            enabled: imageGenerationEnabled,
+            model: selectedImageModel,
+          },
           reasoningEffortByModel: Object.fromEntries(
             liveStateRef.current.models
               .filter((m) => nextRunModelIds.includes(m.id))
@@ -660,10 +760,40 @@ export default function Home() {
     }
 
     if (event.type === "synthesis_started") { setSynthesisActivity(event.step); return; }
+    if (event.type === "fusion_judge_complete") {
+      setFusionJudge(event.report);
+      liveStateRef.current.fusionJudge = event.report;
+      setSynthesisActivity("Fusion judge report complete");
+      return;
+    }
     if (event.type === "synthesis_complete") {
       setSynthesis(event.content);
       liveStateRef.current.synthesis = event.content;
       setSynthesisActivity("Synthesis complete");
+      return;
+    }
+    if (event.type === "image_started") {
+      setImageStatus(`Generating image with ${event.model}`);
+      setSynthesisActivity(`Generating image with ${event.model}`);
+      return;
+    }
+    if (event.type === "image_complete") {
+      const images = event.images.map((url) => ({
+        id: newId("image"),
+        model: event.model,
+        prompt: event.prompt,
+        url,
+        createdAt: Date.now(),
+      }));
+      setGeneratedImages(images);
+      liveStateRef.current.generatedImages = images;
+      setImageStatus("Image generation complete");
+      setSynthesisActivity("Image generation complete");
+      return;
+    }
+    if (event.type === "image_error") {
+      setImageStatus(`Image generation failed: ${event.error}`);
+      setSynthesisActivity(`Image generation failed: ${event.error}`);
       return;
     }
     if (event.type === "followups_complete") {
@@ -682,6 +812,10 @@ export default function Home() {
         onNewThread={startNewThread}
         onSelectThread={selectThread}
         onDeleteThread={removeThread}
+        onOpenSettings={() => {
+          setSettingsTab("connectors");
+          setSettingsOpen(true);
+        }}
       />
 
       <div className="perplexityMain">
@@ -717,11 +851,19 @@ export default function Home() {
               selectorOpen={selectorOpen}
               setSelectorOpen={setSelectorOpen}
               selectedCount={selectedModels.length}
+              selectedFusionPanelId={selectedFusionPanelId}
+              applyFusionPanel={applyFusionPanel}
               models={models}
               toggleModel={toggleModel}
               cycleReasoningEffort={cycleReasoningEffort}
               selectTopThree={selectTopThree}
               attachments={attachments}
+              agentSkills={agentSkills}
+              imageGenerationEnabled={imageGenerationEnabled}
+              onOpenSettings={() => {
+                setSettingsTab("connectors");
+                setSettingsOpen(true);
+              }}
               onFilesSelected={async (files) => {
                 const uploads = await readUploads(files);
                 setAttachments((current) => [...current, ...uploads].slice(0, 8));
@@ -809,7 +951,11 @@ export default function Home() {
                     models={activeModels}
                     query={query}
                     synthesis={synthesis}
+                    fusionJudge={fusionJudge}
+                    fusionPanelId={runFusionPanelId}
                     followUps={followUps}
+                    generatedImages={generatedImages}
+                    imageStatus={imageStatus}
                     onOpenModal={setActiveModal}
                     onRunFollowup={(value) => runCouncil(value)}
                   />
@@ -843,6 +989,24 @@ export default function Home() {
             onClose={() => setActiveModal(null)}
           />
         ) : null}
+
+        {settingsOpen ? (
+          <SettingsDrawer
+            tab={settingsTab}
+            setTab={setSettingsTab}
+            connectors={connectors}
+            setConnectors={setConnectors}
+            skills={agentSkills}
+            setSkills={setAgentSkills}
+            webGrounding={webGrounding}
+            setWebGrounding={setWebGrounding}
+            imageGenerationEnabled={imageGenerationEnabled}
+            setImageGenerationEnabled={setImageGenerationEnabled}
+            selectedImageModel={selectedImageModel}
+            setSelectedImageModel={setSelectedImageModel}
+            onClose={() => setSettingsOpen(false)}
+          />
+        ) : null}
       </div>
     </main>
   );
@@ -853,13 +1017,14 @@ export default function Home() {
    ========================================================= */
 
 function Sidebar({
-  threads, activeThreadId, onNewThread, onSelectThread, onDeleteThread,
+  threads, activeThreadId, onNewThread, onSelectThread, onDeleteThread, onOpenSettings,
 }: {
   threads: StoredThread[];
   activeThreadId: string | null;
   onNewThread: () => void;
   onSelectThread: (id: string) => void;
   onDeleteThread: (id: string) => void;
+  onOpenSettings: () => void;
 }) {
   const sorted = [...threads].sort((a, b) => b.updatedAt - a.updatedAt);
   return (
@@ -918,6 +1083,10 @@ function Sidebar({
       </div>
 
       <div className="sidebarFoot">
+        <button className="sidebarSettings" type="button" onClick={onOpenSettings}>
+          <Wrench size={15} />
+          <span>Settings</span>
+        </button>
         <button className="sidebarUser" type="button">
           <div className="avatar">S</div>
           <div className="userMeta">
@@ -1061,8 +1230,11 @@ function CouncilComposer({
   query, setQuery, councilEnabled, setCouncilEnabled, enterSearchMode, enterCouncilMode,
   webGrounding, toggleWebGrounding,
   menuOpen, setMenuOpen,
-  selectorOpen, setSelectorOpen, selectedCount, models, toggleModel, cycleReasoningEffort,
-  selectTopThree, attachments, onFilesSelected, onRemoveAttachment, runCouncil,
+  selectorOpen, setSelectorOpen,
+  selectedCount, selectedFusionPanelId, applyFusionPanel, models, toggleModel, cycleReasoningEffort,
+  selectTopThree, attachments, agentSkills,
+  imageGenerationEnabled, onOpenSettings,
+  onFilesSelected, onRemoveAttachment, runCouncil,
 }: {
   query: string;
   setQuery: (value: string) => void;
@@ -1077,11 +1249,16 @@ function CouncilComposer({
   selectorOpen: boolean;
   setSelectorOpen: (value: boolean) => void;
   selectedCount: number;
+  selectedFusionPanelId: string;
+  applyFusionPanel: (id: string) => void;
   models: RunModel[];
   toggleModel: (id: string) => void;
   cycleReasoningEffort: (id: string) => void;
   selectTopThree: () => void;
   attachments: UploadedAttachment[];
+  agentSkills: AgentSkill[];
+  imageGenerationEnabled: boolean;
+  onOpenSettings: () => void;
   onFilesSelected: (files: FileList) => void | Promise<void>;
   onRemoveAttachment: (id: string) => void;
   runCouncil: () => void;
@@ -1206,6 +1383,17 @@ function CouncilComposer({
             >
               <Globe size={14} /> Web
             </button>
+
+            <div className="settingsWrap">
+              <button
+                type="button"
+                className={agentSkills.some((skill) => skill.enabled) || imageGenerationEnabled ? "modeTab active" : "modeTab"}
+                onClick={onOpenSettings}
+                title="Open connector, skill, research, and image settings"
+              >
+                <Wrench size={14} /> Settings
+              </button>
+            </div>
           </div>
 
           <div className="composerRight">
@@ -1221,6 +1409,8 @@ function CouncilComposer({
                 <ModelSelector
                   models={models}
                   selectedCount={selectedCount}
+                  selectedFusionPanelId={selectedFusionPanelId}
+                  applyFusionPanel={applyFusionPanel}
                   toggleModel={toggleModel}
                   cycleReasoningEffort={cycleReasoningEffort}
                   selectTopThree={selectTopThree}
@@ -1252,10 +1442,12 @@ function CouncilComposer({
    ========================================================= */
 
 function ModelSelector({
-  models, selectedCount, toggleModel, cycleReasoningEffort, selectTopThree, councilEnabled,
+  models, selectedCount, selectedFusionPanelId, applyFusionPanel, toggleModel, cycleReasoningEffort, selectTopThree, councilEnabled,
 }: {
   models: RunModel[];
   selectedCount: number;
+  selectedFusionPanelId: string;
+  applyFusionPanel: (id: string) => void;
   toggleModel: (id: string) => void;
   cycleReasoningEffort: (id: string) => void;
   selectTopThree: () => void;
@@ -1278,6 +1470,24 @@ function ModelSelector({
           </button>
         ) : null}
       </div>
+      {councilEnabled ? (
+        <div className="fusionPanelList" aria-label="Fusion panel presets">
+          {FUSION_PANELS.map((panel) => (
+            <button
+              key={panel.id}
+              type="button"
+              className={selectedFusionPanelId === panel.id ? "fusionPanel active" : "fusionPanel"}
+              onClick={() => applyFusionPanel(panel.id)}
+            >
+              <span>
+                <strong>{panel.shortName}</strong>
+                {panel.featured ? <em>Fusion</em> : null}
+              </span>
+              <small>{panel.scoreLabel} · {panel.costLabel}</small>
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="modelRows">
         {models.map((model) => (
           <div className="modelRow" key={model.id}>
@@ -1313,6 +1523,248 @@ function ModelSelector({
           : "Search runs against the selected model only."}
       </p>
     </aside>
+  );
+}
+
+function SettingsDrawer({
+  tab,
+  setTab,
+  connectors,
+  setConnectors,
+  skills,
+  setSkills,
+  webGrounding,
+  setWebGrounding,
+  imageGenerationEnabled,
+  setImageGenerationEnabled,
+  selectedImageModel,
+  setSelectedImageModel,
+  onClose,
+}: {
+  tab: SettingsTab;
+  setTab: (tab: SettingsTab) => void;
+  connectors: ConnectorSettings;
+  setConnectors: React.Dispatch<React.SetStateAction<ConnectorSettings>>;
+  skills: AgentSkill[];
+  setSkills: React.Dispatch<React.SetStateAction<AgentSkill[]>>;
+  webGrounding: boolean;
+  setWebGrounding: (value: boolean) => void;
+  imageGenerationEnabled: boolean;
+  setImageGenerationEnabled: (value: boolean) => void;
+  selectedImageModel: string;
+  setSelectedImageModel: (value: string) => void;
+  onClose: () => void;
+}) {
+  const [draftName, setDraftName] = useState("");
+  const [draftDescription, setDraftDescription] = useState("");
+  const [draftBody, setDraftBody] = useState("");
+  const [importText, setImportText] = useState("");
+
+  function addSkill() {
+    const body = draftBody.trim();
+    const name = draftName.trim();
+    if (!name || !body) return;
+    setSkills((current) => [
+      ...current,
+      {
+        id: newId("skill"),
+        name,
+        description: draftDescription.trim(),
+        body,
+        enabled: true,
+        createdAt: Date.now(),
+      },
+    ]);
+    setDraftName("");
+    setDraftDescription("");
+    setDraftBody("");
+  }
+
+  function importSkill() {
+    const parsed = importSkillFromText(importText);
+    if (!parsed.body.trim()) return;
+    setSkills((current) => [
+      ...current,
+      {
+        id: newId("skill"),
+        name: parsed.name,
+        description: parsed.description,
+        body: parsed.body,
+        enabled: true,
+        createdAt: Date.now(),
+      },
+    ]);
+    setImportText("");
+  }
+
+  return (
+    <div className="settingsBackdrop" role="presentation" onClick={onClose}>
+      <aside className="settingsDrawer" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+        <header className="settingsDrawerHeader">
+          <div>
+            <span>Workspace</span>
+            <h2>Settings</h2>
+          </div>
+          <button className="closeButton" type="button" onClick={onClose} aria-label="Close settings">
+            <X size={18} />
+          </button>
+        </header>
+
+      <div className="settingsTabs" role="tablist">
+        <button className={tab === "connectors" ? "active" : ""} type="button" onClick={() => setTab("connectors")}>
+          <Globe size={13} /> Connectors
+        </button>
+        <button className={tab === "skills" ? "active" : ""} type="button" onClick={() => setTab("skills")}>
+          <Wrench size={13} /> Skills
+        </button>
+        <button className={tab === "research" ? "active" : ""} type="button" onClick={() => setTab("research")}>
+          <Search size={13} /> Research
+        </button>
+        <button className={tab === "images" ? "active" : ""} type="button" onClick={() => setTab("images")}>
+          <ImageIcon size={13} /> Images
+        </button>
+      </div>
+
+      {tab === "connectors" ? (
+        <div className="settingsPane">
+          <div className="settingsHeader">
+            <strong>Connectors</strong>
+            <span>{connectors.github ? "1 enabled" : "0 enabled"}</span>
+          </div>
+          <div className="connectorList">
+            <article className="connectorRow">
+              <div className="connectorIcon"><Globe size={16} /></div>
+              <div>
+                <strong>GitHub</strong>
+                <span>Search repositories, inspect files, and list issues or pull requests during agent runs.</span>
+              </div>
+              <button
+                className={connectors.github ? "switch on" : "switch"}
+                type="button"
+                onClick={() => setConnectors((current) => ({ ...current, github: !current.github }))}
+                aria-label="Toggle GitHub connector"
+              >
+                <span />
+              </button>
+            </article>
+          </div>
+          <div className="settingsNote">
+            GitHub works against public repos without setup. Add `GITHUB_TOKEN` on the server for private repos and higher API limits.
+          </div>
+          <div className="settingsNote">
+            ChatGPT and Claude both put connectors in Settings, require per-user third-party authentication, and let chats selectively use connected sources. This app mirrors that with workspace-level connector toggles and per-run tool use.
+          </div>
+        </div>
+      ) : tab === "skills" ? (
+        <div className="settingsPane">
+          <div className="settingsHeader">
+            <strong>Agent skills</strong>
+            <span>{skills.filter((skill) => skill.enabled).length} active</span>
+          </div>
+          <div className="skillList">
+            {skills.map((skill) => (
+              <div className="skillRow" key={skill.id}>
+                <button
+                  className={skill.enabled ? "switch on" : "switch"}
+                  type="button"
+                  onClick={() =>
+                    setSkills((current) =>
+                      current.map((item) => item.id === skill.id ? { ...item, enabled: !item.enabled } : item),
+                    )
+                  }
+                  aria-label={`Toggle ${skill.name}`}
+                >
+                  <span />
+                </button>
+                <div>
+                  <strong>{skill.name}</strong>
+                  <span>{skill.description || "Imported run instruction"}</span>
+                </div>
+                <button
+                  className="deleteSkill"
+                  type="button"
+                  onClick={() => setSkills((current) => current.filter((item) => item.id !== skill.id))}
+                  aria-label={`Delete ${skill.name}`}
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="skillEditor">
+            <input value={draftName} onChange={(event) => setDraftName(event.target.value)} placeholder="New skill name" />
+            <input value={draftDescription} onChange={(event) => setDraftDescription(event.target.value)} placeholder="When should this skill apply?" />
+            <textarea value={draftBody} onChange={(event) => setDraftBody(event.target.value)} placeholder="Write the skill instructions..." rows={4} />
+            <button type="button" onClick={addSkill} disabled={!draftName.trim() || !draftBody.trim()}>
+              Create skill
+            </button>
+          </div>
+
+          <div className="skillEditor">
+            <textarea value={importText} onChange={(event) => setImportText(event.target.value)} placeholder="Paste a SKILL.md or JSON skill to import..." rows={4} />
+            <button type="button" onClick={importSkill} disabled={!importText.trim()}>
+              Import skill
+            </button>
+          </div>
+        </div>
+      ) : tab === "research" ? (
+        <div className="settingsPane">
+          <div className="settingsHeader">
+            <strong>Research behavior</strong>
+            <span>{webGrounding ? "web on" : "web off"}</span>
+          </div>
+          <label className="imageToggle">
+            <input
+              type="checkbox"
+              checked={webGrounding}
+              onChange={(event) => setWebGrounding(event.target.checked)}
+            />
+            Use OpenRouter web grounding in chat
+          </label>
+          <div className="researchPatternList">
+            <article>
+              <strong>ChatGPT-style apps/connectors</strong>
+              <span>Connectors can be used in chat for file search, in deep research for multi-source cited reports, and in some cases via synced/indexed data. Users can enable them from Settings and select sources from the composer.</span>
+            </article>
+            <article>
+              <strong>Claude-style integrations</strong>
+              <span>Claude exposes integrations under Settings &gt; Connectors, with workspace/admin enablement for teams and per-user authentication. Web search is also a connector-style setting users can toggle.</span>
+            </article>
+            <article>
+              <strong>Model Council behavior</strong>
+              <span>When Web is on, drafting models receive OpenRouter web results. When connectors are enabled, the agent loop may call connector tools during draft, debate, or synthesis.</span>
+            </article>
+          </div>
+        </div>
+      ) : (
+        <div className="settingsPane">
+          <label className="imageToggle">
+            <input
+              type="checkbox"
+              checked={imageGenerationEnabled}
+              onChange={(event) => setImageGenerationEnabled(event.target.checked)}
+            />
+            Generate image after the answer
+          </label>
+          <div className="imageModelList">
+            {IMAGE_MODELS.map((model) => (
+              <button
+                key={model.id}
+                type="button"
+                className={selectedImageModel === model.id ? "imageModelRow active" : "imageModelRow"}
+                onClick={() => setSelectedImageModel(model.id)}
+              >
+                <strong>{model.label}</strong>
+                <span>{model.maker} · {model.id}</span>
+                <p>{model.description}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      </aside>
+    </div>
   );
 }
 
@@ -1535,16 +1987,21 @@ function SourcesView({ models }: { models: RunModel[] }) {
    ========================================================= */
 
 function ResultsDashboard({
-  models, query, synthesis, followUps, onOpenModal, onRunFollowup,
+  models, query, synthesis, fusionJudge, fusionPanelId, followUps, generatedImages, imageStatus, onOpenModal, onRunFollowup,
 }: {
   models: RunModel[];
   query: string;
   synthesis: string;
+  fusionJudge: FusionJudgeReport | null;
+  fusionPanelId: string | null;
   followUps: string[];
+  generatedImages: StoredGeneratedImage[];
+  imageStatus: string;
   onOpenModal: (id: string) => void;
   onRunFollowup: (query: string) => void;
 }) {
   const useDemoTables = query.trim() === DEFAULT_QUERY;
+  const activePanel = FUSION_PANELS.find((panel) => panel.id === fusionPanelId);
 
   return (
     <div className="resultsDashboard">
@@ -1568,11 +2025,34 @@ function ResultsDashboard({
 
         <div className="summaryFoot">
           <span>Prepared using {models.map((model) => model.label).join(", ")}</span>
-          <b>{useDemoTables ? `${DEMO_SOURCES.length} sources` : "Live OpenRouter run"}</b>
+          <b>{activePanel ? `${activePanel.shortName} fusion` : useDemoTables ? `${DEMO_SOURCES.length} sources` : "Custom panel"}</b>
         </div>
       </section>
 
-      {useDemoTables ? (
+      {generatedImages.length || imageStatus ? (
+        <section className="resultSection">
+          <h3>Generated image</h3>
+          {generatedImages.length ? (
+            <div className="generatedImageGrid">
+              {generatedImages.map((image) => (
+                <figure className="generatedImageCard" key={image.id}>
+                  <img src={image.url} alt="Generated image" />
+                  <figcaption>
+                    <strong>{image.model}</strong>
+                    <span>{compactQuestion(image.prompt)}</span>
+                  </figcaption>
+                </figure>
+              ))}
+            </div>
+          ) : (
+            <p className="imageStatus">{imageStatus}</p>
+          )}
+        </section>
+      ) : null}
+
+      {fusionJudge ? (
+        <FusionReportSections report={fusionJudge} models={models} />
+      ) : useDemoTables ? (
         <>
           <section className="resultSection">
             <h3>Where models agree</h3>
@@ -1691,6 +2171,140 @@ function ResultsDashboard({
   );
 }
 
+function FusionReportSections({ report, models }: { report: FusionJudgeReport; models: RunModel[] }) {
+  return (
+    <>
+      <section className="fusionVerdict">
+        <div>
+          <span>Fusion judge</span>
+          <h3>Panel verdict</h3>
+        </div>
+        <p>{report.panelVerdict}</p>
+      </section>
+
+      {report.consensus.length ? (
+        <section className="resultSection">
+          <h3>Where models agree</h3>
+          <div className="tableShell">
+            <table>
+              <thead>
+                <tr>
+                  <th>Finding</th>
+                  {models.map((model) => (
+                    <th className="modelColumn" key={model.id}>
+                      <ModelBadge model={model} small />
+                    </th>
+                  ))}
+                  <th>Evidence</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.consensus.map((row) => (
+                  <tr key={row.finding}>
+                    <td>{row.finding}</td>
+                    {models.map((model) => (
+                      <td className="checkCell" key={model.id}>
+                        {reportNamesModel(row.models, model) ? <Check size={16} /> : <span className="dash">-</span>}
+                      </td>
+                    ))}
+                    <td>{row.evidence}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
+
+      {report.contradictions.length ? (
+        <section className="resultSection">
+          <h3>Where models disagree</h3>
+          <div className="tableShell">
+            <table>
+              <thead>
+                <tr>
+                  <th>Topic</th>
+                  {models.map((model) => (
+                    <th key={model.id} className="modelColumn">
+                      <ModelBadge model={model} small />
+                    </th>
+                  ))}
+                  <th>Judge read</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.contradictions.map((row) => (
+                  <tr key={row.topic}>
+                    <td><strong>{row.topic}</strong></td>
+                    {models.map((model) => (
+                      <td key={model.id}>{positionForModel(row.positions, model) || "-"}</td>
+                    ))}
+                    <td>{row.judgment}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
+
+      {report.uniqueInsights.length ? (
+        <section className="resultSection">
+          <h3>Unique discoveries</h3>
+          <div className="uniqueGrid">
+            {report.uniqueInsights.map((row) => {
+              const model = models.find((item) => reportNamesModel([row.model], item)) ?? models[0];
+              return (
+                <article className="uniqueCard" key={`${row.model}-${row.insight}`}>
+                  {model ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <ModelBadge model={model} small />
+                      <span style={{ fontSize: 12, fontWeight: 650, color: "var(--ink)" }}>{model.label}</span>
+                    </div>
+                  ) : null}
+                  <strong>{row.insight}</strong>
+                  <p>{row.whyItMatters}</p>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
+      {report.coverageGaps.length ? (
+        <section className="resultSection">
+          <h3>Coverage gaps</h3>
+          <div className="coverageGapList">
+            {report.coverageGaps.map((gap) => (
+              <span key={gap}>{gap}</span>
+            ))}
+          </div>
+        </section>
+      ) : null}
+    </>
+  );
+}
+
+function reportNamesModel(names: string[], model: RunModel) {
+  const normalized = names.map(normalizeName).filter(Boolean);
+  return normalized.some((name) =>
+    name === normalizeName(model.label)
+    || name === normalizeName(model.id)
+    || name === normalizeName(model.maker)
+    || name.includes(normalizeName(model.badge))
+    || normalizeName(model.label).includes(name),
+  );
+}
+
+function positionForModel(positions: Record<string, string>, model: RunModel) {
+  const match = Object.entries(positions).find(([name]) => reportNamesModel([name], model));
+  return match?.[1];
+}
+
+function normalizeName(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9.]+/g, " ").trim();
+}
+
 /* =========================================================
    Modal
    ========================================================= */
@@ -1772,6 +2386,52 @@ function currentHeadline(models: RunModel[]) {
   const active = models.find((model) => model.status === "thinking") ?? models[0];
   if (!active) return "Preparing council…";
   return latestActivity(active);
+}
+
+function loadAgentSkills(): AgentSkill[] {
+  if (typeof window === "undefined") return DEFAULT_SKILLS;
+  try {
+    const raw = window.localStorage.getItem(SKILLS_STORAGE_KEY);
+    if (!raw) return DEFAULT_SKILLS;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return DEFAULT_SKILLS;
+    const custom = parsed.filter((skill): skill is AgentSkill =>
+      typeof skill?.id === "string" && typeof skill.name === "string" && typeof skill.body === "string",
+    );
+    return custom.length ? custom : DEFAULT_SKILLS;
+  } catch {
+    return DEFAULT_SKILLS;
+  }
+}
+
+function saveAgentSkills(skills: AgentSkill[]) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SKILLS_STORAGE_KEY, JSON.stringify(skills.slice(0, 50)));
+  } catch {
+    /* localStorage may be full or disabled */
+  }
+}
+
+function loadConnectorSettings(): ConnectorSettings {
+  if (typeof window === "undefined") return { github: true };
+  try {
+    const raw = window.localStorage.getItem(CONNECTORS_STORAGE_KEY);
+    if (!raw) return { github: true };
+    const parsed = JSON.parse(raw) as Partial<ConnectorSettings>;
+    return { github: parsed.github !== false };
+  } catch {
+    return { github: true };
+  }
+}
+
+function saveConnectorSettings(settings: ConnectorSettings) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(CONNECTORS_STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    /* localStorage may be full or disabled */
+  }
 }
 
 function compactQuestion(content: string) {

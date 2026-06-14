@@ -18,9 +18,26 @@ export type StoredTurn = {
   question: string;
   synthesis: string;
   followUps?: string[];
+  generatedImages?: StoredGeneratedImage[];
+  fusionJudge?: {
+    panelVerdict: string;
+    consensus: Array<{ finding: string; models: string[]; evidence: string }>;
+    contradictions: Array<{ topic: string; positions: Record<string, string>; judgment: string }>;
+    uniqueInsights: Array<{ model: string; insight: string; whyItMatters: string }>;
+    coverageGaps: string[];
+  } | null;
+  fusionPanelId?: string | null;
   models: StoredModelTurn[];
   createdAt: number;
   status: "complete" | "stopped" | "errored";
+};
+
+export type StoredGeneratedImage = {
+  id: string;
+  model: string;
+  prompt: string;
+  url: string;
+  createdAt: number;
 };
 
 export type StoredThread = {

@@ -6,8 +6,28 @@ export type OpenRouterMessageContent =
     >;
 
 type OpenRouterMessage = {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   content: OpenRouterMessageContent;
+  tool_call_id?: string;
+  tool_calls?: OpenRouterToolCall[];
+};
+
+export type OpenRouterTool = {
+  type: "function";
+  function: {
+    name: string;
+    description?: string;
+    parameters: Record<string, unknown>;
+  };
+};
+
+export type OpenRouterToolCall = {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments?: string;
+  };
 };
 
 type ChatCompletionOptions = {
@@ -20,11 +40,28 @@ type ChatCompletionOptions = {
   signal?: AbortSignal;
   web?: boolean;
   webMaxResults?: number;
+  tools?: OpenRouterTool[];
+  toolChoice?: "auto" | "none";
+};
+
+type AgentCompletionOptions = ChatCompletionOptions & {
+  maxSteps?: number;
+  executeTool: (toolCall: OpenRouterToolCall, signal?: AbortSignal) => Promise<{ name: string; content: string }>;
+  onToolCall?: (toolCall: OpenRouterToolCall, result: { name: string; content: string }) => void;
+};
+
+type ImageGenerationOptions = {
+  model: string;
+  prompt: string;
+  apiKey: string;
+  signal?: AbortSignal;
 };
 
 type OpenRouterChoice = {
   message?: {
     content?: string | Array<{ type?: string; text?: string }>;
+    tool_calls?: OpenRouterToolCall[];
+    images?: Array<{ type?: string; image_url?: { url?: string }; imageUrl?: { url?: string } }>;
   };
   finish_reason?: string;
 };
@@ -62,6 +99,8 @@ export async function createChatCompletion({
   signal,
   web = false,
   webMaxResults = 5,
+  tools,
+  toolChoice,
 }: ChatCompletionOptions) {
   const body: Record<string, unknown> = {
     model,
@@ -74,6 +113,10 @@ export async function createChatCompletion({
   };
   if (web) {
     body.plugins = [{ id: "web", max_results: webMaxResults }];
+  }
+  if (tools?.length) {
+    body.tools = tools;
+    body.tool_choice = toolChoice ?? "auto";
   }
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -96,15 +139,130 @@ export async function createChatCompletion({
   }
 
   const content = normalizeContent(payload.choices?.[0]?.message?.content);
+  const toolCalls = payload.choices?.[0]?.message?.tool_calls ?? [];
+  if (toolCalls.length) {
+    return {
+      content,
+      toolCalls,
+      model: payload.model ?? model,
+      finishReason: payload.choices?.[0]?.finish_reason ?? "tool_calls",
+      usage: payload.usage,
+    };
+  }
   if (!content) {
     throw new OpenRouterError("OpenRouter returned an empty response.", response.status);
   }
 
   return {
     content,
+    toolCalls,
     model: payload.model ?? model,
     finishReason: payload.choices?.[0]?.finish_reason ?? "unknown",
     usage: payload.usage,
+  };
+}
+
+export async function createAgentCompletion({
+  maxSteps = 4,
+  executeTool,
+  onToolCall,
+  ...options
+}: AgentCompletionOptions) {
+  const messages = [...options.messages];
+  let totalUsage: OpenRouterResponse["usage"] | undefined;
+  let lastContent = "";
+  let model = options.model;
+
+  for (let step = 0; step < maxSteps; step += 1) {
+    const completion = await createChatCompletion({ ...options, messages });
+    model = completion.model;
+    totalUsage = addUsage(totalUsage, completion.usage);
+    lastContent = completion.content || lastContent;
+
+    if (!completion.toolCalls?.length) {
+      return { ...completion, content: completion.content || lastContent, usage: totalUsage };
+    }
+
+    messages.push({
+      role: "assistant",
+      content: completion.content || "",
+      tool_calls: completion.toolCalls,
+    });
+
+    for (const toolCall of completion.toolCalls) {
+      const result = await executeTool(toolCall, options.signal);
+      onToolCall?.(toolCall, result);
+      messages.push({
+        role: "tool",
+        tool_call_id: toolCall.id,
+        content: result.content.slice(0, 60000),
+      });
+    }
+  }
+
+  const final = await createChatCompletion({ ...options, messages, toolChoice: "none" });
+  return {
+    ...final,
+    content: final.content || lastContent,
+    model,
+    usage: addUsage(totalUsage, final.usage),
+  };
+}
+
+export async function createImageGeneration({
+  model,
+  prompt,
+  apiKey,
+  signal,
+}: ImageGenerationOptions) {
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    signal,
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": process.env.OPENROUTER_SITE_URL ?? "http://localhost:3000",
+      "X-Title": process.env.OPENROUTER_APP_NAME ?? "Open Model Council",
+    },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: "user", content: prompt }],
+      modalities: ["image", "text"],
+      stream: false,
+    }),
+  });
+
+  const payload = (await response.json().catch(() => ({}))) as OpenRouterResponse;
+  if (!response.ok) {
+    throw new OpenRouterError(
+      payload.error?.message ?? `OpenRouter image request failed with ${response.status}`,
+      response.status,
+    );
+  }
+
+  const message = payload.choices?.[0]?.message;
+  const images = (message?.images ?? [])
+    .map((image) => image.image_url?.url ?? image.imageUrl?.url)
+    .filter((url): url is string => Boolean(url));
+  if (!images.length) {
+    throw new OpenRouterError("OpenRouter returned no generated image.", response.status);
+  }
+
+  return {
+    model: payload.model ?? model,
+    content: normalizeContent(message?.content),
+    images,
+    usage: payload.usage,
+  };
+}
+
+function addUsage(left: OpenRouterResponse["usage"], right: OpenRouterResponse["usage"]) {
+  if (!left) return right;
+  if (!right) return left;
+  return {
+    prompt_tokens: (left.prompt_tokens ?? 0) + (right.prompt_tokens ?? 0),
+    completion_tokens: (left.completion_tokens ?? 0) + (right.completion_tokens ?? 0),
+    total_tokens: (left.total_tokens ?? 0) + (right.total_tokens ?? 0),
   };
 }
 

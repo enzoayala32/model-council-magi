@@ -1,16 +1,22 @@
-import { COUNCIL_MODELS, getCouncilModel, isReasoningEffort, type ReasoningEffort } from "@/lib/models";
-import { OpenRouterMessageContent, createChatCompletion } from "@/lib/openrouter";
+import { AGENT_TOOLS, executeAgentTool } from "@/lib/agent-tools";
+import { COUNCIL_MODELS, IMAGE_MODELS, getCouncilModel, getFusionPanel, getImageModel, isReasoningEffort, type ReasoningEffort } from "@/lib/models";
+import { OpenRouterMessageContent, createAgentCompletion, createChatCompletion, createImageGeneration } from "@/lib/openrouter";
+import { renderSkillsForPrompt, type AgentSkill } from "@/lib/skills";
 
 export const maxDuration = 300;
 
 type StreamRequest = {
   prompt?: string;
   selectedModels?: string[];
+  fusionPanelId?: string;
   apiKey?: string;
   attachments?: UploadedAttachment[];
   history?: ConversationTurn[];
   webGrounding?: boolean;
   reasoningEffortByModel?: Record<string, string>;
+  agentSkills?: AgentSkill[];
+  imageSettings?: ImageSettings;
+  connectors?: ConnectorSettings;
 };
 
 type ConversationTurn = {
@@ -29,15 +35,36 @@ type UploadedAttachment = {
 
 type Phase = "drafting" | "debating" | "synthesizing" | "done";
 
+type FusionJudgeReport = {
+  panelVerdict: string;
+  consensus: Array<{ finding: string; models: string[]; evidence: string }>;
+  contradictions: Array<{ topic: string; positions: Record<string, string>; judgment: string }>;
+  uniqueInsights: Array<{ model: string; insight: string; whyItMatters: string }>;
+  coverageGaps: string[];
+};
+
+type ImageSettings = {
+  enabled?: boolean;
+  model?: string;
+};
+
+type ConnectorSettings = {
+  github?: boolean;
+};
+
 type StreamEvent =
-  | { type: "run_started"; prompt: string; selectedModels: string[] }
+  | { type: "run_started"; prompt: string; selectedModels: string[]; fusionPanelId?: string }
   | { type: "phase"; phase: Phase }
   | { type: "model_step"; modelId: string; label: string; step: string; steps: number; status: "thinking"; phase: Phase }
   | { type: "model_complete"; modelId: string; label: string; content: string; steps: number; phase: "drafting"; usage?: unknown }
   | { type: "model_debate_complete"; modelId: string; label: string; critique: string; revisedAnswer?: string; steps: number; usage?: unknown }
   | { type: "model_error"; modelId: string; label: string; error: string; steps: number; phase: Phase }
   | { type: "synthesis_started"; step: string }
+  | { type: "fusion_judge_complete"; report: FusionJudgeReport; usage?: unknown }
   | { type: "synthesis_complete"; content: string; usage?: unknown }
+  | { type: "image_started"; model: string; prompt: string }
+  | { type: "image_complete"; model: string; prompt: string; images: string[]; usage?: unknown }
+  | { type: "image_error"; error: string }
   | { type: "followups_complete"; questions: string[]; usage?: unknown }
   | { type: "run_complete" }
   | { type: "error"; error: string };
@@ -61,6 +88,7 @@ const TARGET_DRAFT_TOKENS = 9000;
 const TARGET_DEBATE_TOKENS = 6000;
 const TARGET_SYNTHESIS_TOKENS = 12000;
 const FOLLOWUP_MODEL = "deepseek/deepseek-v4-pro";
+const FUSION_JUDGE_MODEL = "deepseek/deepseek-v4-pro";
 
 export async function POST(request: Request) {
   const encoder = new TextEncoder();
@@ -78,11 +106,15 @@ export async function POST(request: Request) {
         const body = (await request.json()) as StreamRequest;
         const prompt = body.prompt?.trim();
         const apiKey = body.apiKey?.trim() || process.env.OPENROUTER_API_KEY;
-        const selectedModels = normalizeSelection(body.selectedModels);
+        const fusionPanelId = typeof body.fusionPanelId === "string" ? body.fusionPanelId : undefined;
+        const selectedModels = normalizeSelection(body.selectedModels, fusionPanelId);
         const attachments = normalizeAttachments(body.attachments);
         const history = normalizeHistory(body.history);
         const webGrounding = Boolean(body.webGrounding);
         const reasoningEffortByModel = normalizeReasoningEfforts(body.reasoningEffortByModel);
+        const skillPrompt = renderSkillsForPrompt(normalizeAgentSkills(body.agentSkills));
+        const imageSettings = normalizeImageSettings(body.imageSettings);
+        const agentTools = normalizeConnectorSettings(body.connectors).github ? AGENT_TOOLS : [];
 
         if (!prompt) {
           send({ type: "error", error: "Enter a prompt for the council." });
@@ -99,7 +131,7 @@ export async function POST(request: Request) {
           return;
         }
 
-        send({ type: "run_started", prompt, selectedModels });
+        send({ type: "run_started", prompt, selectedModels, fusionPanelId });
 
         // ---------- Round 1 — independent drafts ----------
         if (isAborted()) return;
@@ -117,6 +149,8 @@ export async function POST(request: Request) {
               offset: index,
               signal,
               webGrounding,
+              skillPrompt,
+              agentTools,
               reasoningEffort: effortFor(modelId, reasoningEffortByModel),
             }),
           ),
@@ -146,38 +180,87 @@ export async function POST(request: Request) {
                 send,
                 offset: index,
                 signal,
+                skillPrompt,
+                agentTools,
                 reasoningEffort: effortFor(self.modelId, reasoningEffortByModel),
               }),
             ),
           );
         }
 
-        // ---------- Synthesis ----------
+        // ---------- Fusion judge ----------
         if (isAborted()) return;
         send({ type: "phase", phase: "synthesizing" });
-        send({ type: "synthesis_started", step: "Reconciling drafts and debate critiques into a single in-depth answer" });
+        send({ type: "synthesis_started", step: "Judge model extracting consensus, contradictions, unique insights, and gaps" });
 
-        const synthesis = await createChatCompletion({
-          model: process.env.SYNTHESIS_MODEL ?? "openai/gpt-5.4",
+        const fusionJudge = await createFusionJudgeReport({
+          prompt,
+          drafts: successfulDrafts,
+          debates: debateResults,
+          apiKey,
+          signal,
+        });
+
+        if (isAborted()) return;
+        send({ type: "fusion_judge_complete", report: fusionJudge.report, usage: fusionJudge.usage });
+
+        // ---------- Synthesis ----------
+        send({ type: "synthesis_started", step: "Grounding the final answer in the judge report and council transcripts" });
+
+        const synthesis = await createAgentCompletion({
+          model: process.env.SYNTHESIS_MODEL ?? "openai/gpt-5.5",
           apiKey,
           maxTokens: TARGET_SYNTHESIS_TOKENS,
           temperature: 0.18,
           reasoningEffort: "high",
           signal,
+          tools: agentTools,
+          executeTool: (toolCall, toolSignal) => executeAgentTool(toolCall, toolSignal),
+          onToolCall: (toolCall) => {
+            send({
+              type: "synthesis_started",
+              step: `Using ${toolCall.function.name.replace(/_/g, " ")} before final synthesis`,
+            });
+          },
           messages: [
             {
               role: "system",
-              content: SYNTHESIZER_SYSTEM_PROMPT,
+              content: [SYNTHESIZER_SYSTEM_PROMPT, skillPrompt].filter(Boolean).join("\n\n"),
             },
             {
               role: "user",
-              content: buildSynthesisPrompt(prompt, successfulDrafts, debateResults, history),
+              content: buildSynthesisPrompt(prompt, successfulDrafts, debateResults, history, fusionJudge.report),
             },
           ],
         });
 
         if (isAborted()) return;
         send({ type: "synthesis_complete", content: synthesis.content, usage: synthesis.usage });
+
+        if (imageSettings.enabled) {
+          const imageModel = imageSettings.model;
+          const imagePrompt = buildImagePrompt(prompt, synthesis.content);
+          try {
+            send({ type: "image_started", model: imageModel, prompt: imagePrompt });
+            const generated = await createImageGeneration({
+              model: imageModel,
+              prompt: imagePrompt,
+              apiKey,
+              signal,
+            });
+            if (isAborted()) return;
+            send({
+              type: "image_complete",
+              model: generated.model,
+              prompt: imagePrompt,
+              images: generated.images,
+              usage: generated.usage,
+            });
+          } catch (error) {
+            if (isAborted()) return;
+            send({ type: "image_error", error: error instanceof Error ? error.message : "Image generation failed." });
+          }
+        }
 
         try {
           const followUps = await createChatCompletion({
@@ -238,6 +321,8 @@ async function runDraft({
   offset,
   signal,
   webGrounding,
+  skillPrompt,
+  agentTools,
   reasoningEffort,
 }: {
   modelId: string;
@@ -249,6 +334,8 @@ async function runDraft({
   offset: number;
   signal: AbortSignal;
   webGrounding: boolean;
+  skillPrompt: string;
+  agentTools: typeof AGENT_TOOLS;
   reasoningEffort: ReasoningEffort;
 }) {
   const model = getCouncilModel(modelId);
@@ -303,7 +390,7 @@ async function runDraft({
       phase: "drafting",
     });
 
-    const completion = await createChatCompletion({
+    const completion = await createAgentCompletion({
       model: modelId,
       apiKey,
       maxTokens: TARGET_DRAFT_TOKENS,
@@ -311,7 +398,21 @@ async function runDraft({
       reasoningEffort,
       signal,
       web: webGrounding,
-      messages: buildDraftMessages(prompt, attachments, history, webGrounding, model?.supportsImages ?? true),
+      tools: agentTools,
+      executeTool: (toolCall, toolSignal) => executeAgentTool(toolCall, toolSignal),
+      onToolCall: (toolCall) => {
+        steps += 1;
+        send({
+          type: "model_step",
+          modelId,
+          label,
+          step: `Using ${toolCall.function.name.replace(/_/g, " ")} tool`,
+          steps,
+          status: "thinking",
+          phase: "drafting",
+        });
+      },
+      messages: buildDraftMessages(prompt, attachments, history, webGrounding, model?.supportsImages ?? true, skillPrompt),
     });
 
     send({
@@ -345,6 +446,8 @@ async function runDebate({
   send,
   offset,
   signal,
+  skillPrompt,
+  agentTools,
   reasoningEffort,
 }: {
   self: { modelId: string; label: string; content: string };
@@ -355,6 +458,8 @@ async function runDebate({
   send: (event: StreamEvent) => void;
   offset: number;
   signal: AbortSignal;
+  skillPrompt: string;
+  agentTools: typeof AGENT_TOOLS;
   reasoningEffort: ReasoningEffort;
 }) {
   const model = getCouncilModel(self.modelId);
@@ -379,15 +484,29 @@ async function runDebate({
       phase: "debating",
     });
 
-    const completion = await createChatCompletion({
+    const completion = await createAgentCompletion({
       model: self.modelId,
       apiKey,
       maxTokens: TARGET_DEBATE_TOKENS,
       temperature: 0.3,
       reasoningEffort,
       signal,
+      tools: agentTools,
+      executeTool: (toolCall, toolSignal) => executeAgentTool(toolCall, toolSignal),
+      onToolCall: (toolCall) => {
+        steps += 1;
+        send({
+          type: "model_step",
+          modelId: self.modelId,
+          label: self.label,
+          step: `Checking ${toolCall.function.name.replace(/_/g, " ")} during debate`,
+          steps,
+          status: "thinking",
+          phase: "debating",
+        });
+      },
       messages: [
-        { role: "system", content: DEBATE_SYSTEM_PROMPT },
+        { role: "system", content: [DEBATE_SYSTEM_PROMPT, skillPrompt].filter(Boolean).join("\n\n") },
         {
           role: "user",
           content: [
@@ -490,6 +609,7 @@ const DEBATE_SYSTEM_PROMPT = [
 
 const SYNTHESIZER_SYSTEM_PROMPT = [
   "You are the final synthesizer of a Model Council. You will receive the user's original question, each council member's independent draft, and (when present) each member's debate response that critiqued the others and revised their position.",
+  "You may also receive a Fusion judge report that extracts consensus points, contradictions, partial coverage, unique insights, and coverage gaps. Treat it as the structural map for synthesis, while still checking the raw drafts.",
   "",
   "Your job is to produce a single rigorous, in-depth, user-ready answer. This is the artifact the user actually reads. Do not write a meta-summary of the council process — write the answer.",
   "",
@@ -521,11 +641,190 @@ const SYNTHESIZER_SYSTEM_PROMPT = [
   "• Do not reveal hidden chain-of-thought. Provide concise, auditable reasoning summaries only.",
 ].join("\n");
 
+const FUSION_JUDGE_SYSTEM_PROMPT = [
+  "You are the judge model in a Fusion-style compound model pipeline.",
+  "You receive independent model drafts and optional debate revisions. Extract the answer structure that a synthesizer should trust.",
+  "",
+  "Return JSON only. No markdown, no commentary.",
+  "Schema:",
+  "{",
+  '  "panelVerdict": "one sentence on what the panel most strongly supports",',
+  '  "consensus": [{"finding": "shared finding", "models": ["model labels"], "evidence": "why this is supported"}],',
+  '  "contradictions": [{"topic": "disagreement topic", "positions": {"model label": "position"}, "judgment": "how to reconcile or who is stronger"}],',
+  '  "uniqueInsights": [{"model": "model label", "insight": "distinct useful point", "whyItMatters": "why it changes the answer"}],',
+  '  "coverageGaps": ["important missing or uncertain issue"]',
+  "}",
+  "",
+  "Keep entries concise and concrete. Do not invent sources. If there is no real disagreement, return a short empty contradictions array.",
+  "Do not reveal hidden chain-of-thought. Provide only auditable summaries.",
+].join("\n");
+
+async function createFusionJudgeReport({
+  prompt,
+  drafts,
+  debates,
+  apiKey,
+  signal,
+}: {
+  prompt: string;
+  drafts: Array<{ modelId: string; label: string; content: string }>;
+  debates: Array<{ ok: boolean; label: string; critique?: string; revisedAnswer?: string }>;
+  apiKey: string;
+  signal: AbortSignal;
+}): Promise<{ report: FusionJudgeReport; usage?: unknown }> {
+  try {
+    const completion = await createChatCompletion({
+      model: process.env.FUSION_JUDGE_MODEL ?? FUSION_JUDGE_MODEL,
+      apiKey,
+      maxTokens: 3600,
+      temperature: 0.08,
+      reasoningEffort: "medium",
+      signal,
+      messages: [
+        { role: "system", content: FUSION_JUDGE_SYSTEM_PROMPT },
+        { role: "user", content: buildFusionJudgePrompt(prompt, drafts, debates) },
+      ],
+    });
+
+    return {
+      report: normalizeFusionJudgeReport(parseFusionJudgeJson(completion.content), drafts),
+      usage: completion.usage,
+    };
+  } catch {
+    return { report: fallbackFusionJudgeReport(drafts, debates) };
+  }
+}
+
+function buildFusionJudgePrompt(
+  prompt: string,
+  drafts: Array<{ label: string; content: string }>,
+  debates: Array<{ ok: boolean; label: string; critique?: string; revisedAnswer?: string }>,
+) {
+  const sections = [`# User question\n${prompt}`, "", "# Independent drafts"];
+  for (const draft of drafts) {
+    sections.push(`## ${draft.label}\n${compactForHistory(draft.content, 5000)}`);
+  }
+
+  const validDebates = debates.filter((debate) => debate.ok && (debate.critique || debate.revisedAnswer));
+  if (validDebates.length) {
+    sections.push("", "# Debate outputs");
+    for (const debate of validDebates) {
+      sections.push(
+        [
+          `## ${debate.label}`,
+          debate.critique ? `### Critique\n${compactForHistory(debate.critique, 2200)}` : "",
+          debate.revisedAnswer ? `### Revised answer\n${compactForHistory(debate.revisedAnswer, 2200)}` : "",
+        ].filter(Boolean).join("\n\n"),
+      );
+    }
+  }
+
+  return sections.join("\n\n");
+}
+
+function parseFusionJudgeJson(content: string): unknown {
+  const trimmed = content.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim() ?? trimmed;
+  try {
+    return JSON.parse(fenced);
+  } catch {
+    const start = fenced.indexOf("{");
+    const end = fenced.lastIndexOf("}");
+    if (start < 0 || end <= start) return {};
+    try {
+      return JSON.parse(fenced.slice(start, end + 1));
+    } catch {
+      return {};
+    }
+  }
+}
+
+function normalizeFusionJudgeReport(input: unknown, drafts: Array<{ label: string; content: string }>): FusionJudgeReport {
+  if (!input || typeof input !== "object") return fallbackFusionJudgeReport(drafts, []);
+  const value = input as Partial<FusionJudgeReport>;
+  const labels = new Set(drafts.map((draft) => draft.label));
+
+  return {
+    panelVerdict: typeof value.panelVerdict === "string" && value.panelVerdict.trim()
+      ? value.panelVerdict.trim().slice(0, 600)
+      : "The panel produced enough overlapping signal for a synthesized answer, with model-specific caveats.",
+    consensus: Array.isArray(value.consensus)
+      ? value.consensus.slice(0, 6).map((item) => ({
+          finding: typeof item?.finding === "string" ? item.finding.slice(0, 700) : "Shared finding",
+          models: Array.isArray(item?.models)
+            ? item.models.filter((model): model is string => typeof model === "string" && (!labels.size || labels.has(model))).slice(0, 8)
+            : [],
+          evidence: typeof item?.evidence === "string" ? item.evidence.slice(0, 700) : "Supported by multiple council drafts.",
+        })).filter((item) => item.finding.trim())
+      : [],
+    contradictions: Array.isArray(value.contradictions)
+      ? value.contradictions.slice(0, 5).map((item) => ({
+          topic: typeof item?.topic === "string" ? item.topic.slice(0, 240) : "Disagreement",
+          positions: item?.positions && typeof item.positions === "object"
+            ? Object.fromEntries(
+                Object.entries(item.positions)
+                  .filter(([model, position]) => typeof position === "string" && (!labels.size || labels.has(model)))
+                  .slice(0, 8)
+                  .map(([model, position]) => [model, position.slice(0, 500)]),
+              )
+            : {},
+          judgment: typeof item?.judgment === "string" ? item.judgment.slice(0, 700) : "The synthesizer should reconcile this point explicitly.",
+        })).filter((item) => item.topic.trim())
+      : [],
+    uniqueInsights: Array.isArray(value.uniqueInsights)
+      ? value.uniqueInsights.slice(0, 8).map((item) => ({
+          model: typeof item?.model === "string" ? item.model.slice(0, 180) : "Council model",
+          insight: typeof item?.insight === "string" ? item.insight.slice(0, 700) : "Distinct contribution",
+          whyItMatters: typeof item?.whyItMatters === "string" ? item.whyItMatters.slice(0, 700) : "It adds coverage beyond the consensus.",
+        })).filter((item) => item.insight.trim())
+      : [],
+    coverageGaps: Array.isArray(value.coverageGaps)
+      ? value.coverageGaps.filter((gap): gap is string => typeof gap === "string").map((gap) => gap.slice(0, 400)).slice(0, 6)
+      : [],
+  };
+}
+
+function fallbackFusionJudgeReport(
+  drafts: Array<{ label: string; content: string }>,
+  debates: Array<{ ok: boolean; label: string; critique?: string; revisedAnswer?: string }>,
+): FusionJudgeReport {
+  const labels = drafts.map((draft) => draft.label);
+  const debated = debates.filter((debate) => debate.ok && (debate.critique || debate.revisedAnswer)).map((debate) => debate.label);
+  return {
+    panelVerdict: labels.length > 1
+      ? `The panel should synthesize ${labels.join(", ")} and give extra weight to claims that survived debate.`
+      : "The selected model produced a solo answer; no cross-model consensus was available.",
+    consensus: [
+      {
+        finding: "Use overlapping claims across the independent drafts as the highest-confidence signal.",
+        models: labels,
+        evidence: "The fallback judge could not parse a structured report, so the synthesizer must rely on the raw transcripts.",
+      },
+    ],
+    contradictions: debated.length
+      ? [
+          {
+            topic: "Debate revisions",
+            positions: Object.fromEntries(debated.map((label) => [label, "Submitted critique or revised answer."])),
+            judgment: "Prioritize revisions that identify concrete errors, missing evidence, or stronger framing.",
+          },
+        ]
+      : [],
+    uniqueInsights: drafts.slice(0, 4).map((draft) => ({
+      model: draft.label,
+      insight: compactForHistory(draft.content.replace(/\s+/g, " "), 220),
+      whyItMatters: "This model's draft may contain non-overlapping context for the final synthesis.",
+    })),
+    coverageGaps: ["Verify any time-sensitive or source-dependent claims before treating them as final."],
+  };
+}
+
 function buildSynthesisPrompt(
   prompt: string,
   drafts: Array<{ label: string; content: string }>,
   debates: Array<{ ok: boolean; label: string; critique?: string; revisedAnswer?: string }>,
   history: ConversationTurn[],
+  judgeReport?: FusionJudgeReport,
 ) {
   const sections: string[] = [];
   const historyBlock = renderHistoryBlock(history);
@@ -545,6 +844,15 @@ function buildSynthesisPrompt(
       if (debate.revisedAnswer) block.push(`### Revised answer\n${debate.revisedAnswer}`);
       sections.push(block.join("\n\n"));
     }
+  }
+
+  if (judgeReport) {
+    sections.push(
+      "",
+      "# Fusion judge report",
+      "Use this structured judge report as the map for the final answer. Do not copy it mechanically; resolve it into a natural user-facing synthesis.",
+      JSON.stringify(judgeReport, null, 2),
+    );
   }
 
   sections.push(
@@ -639,12 +947,16 @@ function buildDraftMessages(
   history: ConversationTurn[],
   webGrounding = false,
   supportsImages = true,
+  skillPrompt = "",
 ) {
   let systemPrompt = history.length
     ? `${COUNCIL_MEMBER_SYSTEM_PROMPT}\n\nThis is a follow-up question inside an existing thread. The user's earlier questions and the council's prior answers are provided. Stay strictly on-topic to the current question, treat prior answers as established context, and do not re-derive earlier conclusions unless the user is challenging them.`
     : COUNCIL_MEMBER_SYSTEM_PROMPT;
   if (webGrounding) {
     systemPrompt = `${systemPrompt}\n\nWeb grounding is enabled. Live web search results will be injected before your response. Treat them as authoritative for time-sensitive facts. When you use a search result, cite it inline as a markdown link to the source URL. Prefer recent, primary sources. If results conflict, say which you trust and why.`;
+  }
+  if (skillPrompt) {
+    systemPrompt = `${systemPrompt}\n\n${skillPrompt}`;
   }
 
   const userText = history.length
@@ -670,6 +982,26 @@ function normalizeHistory(history: ConversationTurn[] | undefined): Conversation
       typeof turn?.question === "string" && typeof turn?.synthesis === "string" && turn.question.trim().length > 0,
     )
     .slice(-6);
+}
+
+function normalizeAgentSkills(skills: AgentSkill[] | undefined): AgentSkill[] {
+  if (!Array.isArray(skills)) return [];
+  return skills
+    .filter((skill): skill is AgentSkill =>
+      Boolean(skill)
+      && typeof skill.id === "string"
+      && typeof skill.name === "string"
+      && typeof skill.body === "string",
+    )
+    .map((skill) => ({
+      id: skill.id.slice(0, 120),
+      name: skill.name.slice(0, 120),
+      description: (skill.description ?? "").slice(0, 500),
+      body: skill.body.slice(0, 12000),
+      enabled: Boolean(skill.enabled),
+      createdAt: typeof skill.createdAt === "number" ? skill.createdAt : Date.now(),
+    }))
+    .slice(0, 12);
 }
 
 function splitDebateOutput(content: string) {
@@ -700,20 +1032,52 @@ function effortFor(modelId: string, overrides: Record<string, ReasoningEffort>):
   return getCouncilModel(modelId)?.defaultReasoningEffort ?? "medium";
 }
 
-function normalizeSelection(selectedModels: string[] | undefined) {
+function normalizeSelection(selectedModels: string[] | undefined, fusionPanelId?: string) {
   const knownIds = new Set(COUNCIL_MODELS.map((model) => model.id));
+  const panelModels = fusionPanelId ? getFusionPanel(fusionPanelId)?.modelIds : undefined;
   const requested = (selectedModels ?? [])
     .filter((id): id is string => typeof id === "string")
     .filter((id) => knownIds.has(id));
 
   const fallback = COUNCIL_MODELS.filter((model) => model.defaultSelected).map((model) => model.id);
-  return Array.from(new Set(requested.length ? requested : fallback)).slice(0, 7);
+  return Array.from(new Set(panelModels?.length ? panelModels : requested.length ? requested : fallback)).slice(0, 7);
 }
 
 function normalizeAttachments(attachments: UploadedAttachment[] | undefined) {
   return (attachments ?? [])
     .filter((attachment) => attachment.name && attachment.type && typeof attachment.size === "number")
     .slice(0, 8);
+}
+
+function normalizeImageSettings(settings: ImageSettings | undefined): Required<ImageSettings> {
+  const fallback = IMAGE_MODELS[0]?.id ?? "openai/gpt-image-1.5";
+  const model = typeof settings?.model === "string" && getImageModel(settings.model)
+    ? settings.model
+    : fallback;
+  return {
+    enabled: Boolean(settings?.enabled),
+    model,
+  };
+}
+
+function normalizeConnectorSettings(settings: ConnectorSettings | undefined): Required<ConnectorSettings> {
+  return {
+    github: settings?.github !== false,
+  };
+}
+
+function buildImagePrompt(prompt: string, synthesis: string) {
+  return [
+    "Create a polished image that directly satisfies the user's image request or visualizes the answer.",
+    "",
+    "# User prompt",
+    prompt,
+    "",
+    "# Context from the final answer",
+    compactForHistory(synthesis, 1800),
+    "",
+    "If the user did not ask for a visual asset, create one useful conceptual image that supports the answer. Avoid text-heavy layouts unless requested.",
+  ].join("\n");
 }
 
 function delay(ms: number) {

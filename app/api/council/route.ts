@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { COUNCIL_MODELS, getCouncilModel } from "@/lib/models";
+import { COUNCIL_MODELS, getCouncilModel, getFusionPanel } from "@/lib/models";
 import { OpenRouterError, createChatCompletion } from "@/lib/openrouter";
 
 export const maxDuration = 120;
@@ -7,6 +7,7 @@ export const maxDuration = 120;
 type CouncilRequest = {
   prompt?: string;
   selectedModels?: string[];
+  fusionPanelId?: string;
   apiKey?: string;
   mode?: "balanced" | "critical" | "creative";
 };
@@ -36,7 +37,7 @@ export async function POST(request: Request) {
     const body = (await request.json()) as CouncilRequest;
     const prompt = body.prompt?.trim();
     const apiKey = body.apiKey?.trim() || process.env.OPENROUTER_API_KEY;
-    const selectedModels = normalizeSelection(body.selectedModels);
+    const selectedModels = normalizeSelection(body.selectedModels, body.fusionPanelId);
     const mode = body.mode ?? "balanced";
 
     if (!prompt) {
@@ -78,14 +79,15 @@ export async function POST(request: Request) {
   }
 }
 
-function normalizeSelection(selectedModels: string[] | undefined) {
+function normalizeSelection(selectedModels: string[] | undefined, fusionPanelId?: string) {
   const knownIds = new Set(COUNCIL_MODELS.map((model) => model.id));
+  const panelModels = typeof fusionPanelId === "string" ? getFusionPanel(fusionPanelId)?.modelIds : undefined;
   const requested = (selectedModels ?? [])
     .filter((id): id is string => typeof id === "string")
     .filter((id) => knownIds.has(id));
 
   const fallback = COUNCIL_MODELS.filter((model) => model.defaultSelected).map((model) => model.id);
-  const normalized = requested.length > 0 ? requested : fallback;
+  const normalized = panelModels?.length ? panelModels : requested.length > 0 ? requested : fallback;
 
   return Array.from(new Set(normalized)).slice(0, 4);
 }
@@ -156,7 +158,7 @@ async function synthesizeCouncil(
     .map((result) => `## ${result.label} (${result.id})\n${result.content}`)
     .join("\n\n---\n\n");
 
-  const synthesisModel = process.env.SYNTHESIS_MODEL ?? "openai/gpt-5.4";
+  const synthesisModel = process.env.SYNTHESIS_MODEL ?? "openai/gpt-5.5";
   const completion = await createChatCompletion({
     model: synthesisModel,
     apiKey,
