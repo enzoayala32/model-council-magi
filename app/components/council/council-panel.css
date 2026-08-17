@@ -1,0 +1,379 @@
+/* =========================================================
+   Council Panel — MAGI-style deliberation instrument.
+   Dark chassis + red grid, three blue model nodes converging on a
+   central focal point via red connectors, framed by two header
+   readouts and a footer stats strip. Colors/geometry match the
+   supplied reference exactly; every value shown is driven by real
+   council state passed down as props — nothing here is
+   decorative-only. Independent of the app's light/dark theme; this
+   is the one element allowed to look like an instrument.
+   ========================================================= */
+
+.magiPanel {
+  --magi-bg: #090909;
+  --magi-bg-elev: #121212;
+  --magi-grid: rgba(179, 20, 20, 0.08);
+  --magi-red: #d12323;
+  --magi-red-dim: #b31414;
+  --magi-red-soft: rgba(209, 35, 35, 0.14);
+  --magi-blue: #0075ff;
+  --magi-blue-glow: rgba(0, 117, 255, 0.5);
+  --magi-ink: #050d1a;
+  --magi-text-dim: rgba(209, 35, 35, 0.55);
+
+  position: relative;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto 24px;
+  font-family: "Courier New", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+  color: var(--magi-red);
+}
+
+/* ---- Metallic outer frame with inner lighting ---- */
+
+.magiFrame {
+  position: relative;
+  background: linear-gradient(180deg, var(--magi-bg-elev), var(--magi-bg) 60%);
+  border: 2px solid var(--magi-red-dim);
+  outline: 1px solid var(--magi-red-dim);
+  outline-offset: 4px;
+  border-radius: 6px;
+  padding: 20px 22px 16px;
+  overflow: hidden;
+  box-shadow:
+    0 0 24px rgba(0, 0, 0, 0.8),
+    inset 0 0 22px rgba(0, 0, 0, 0.85),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.magiGrid {
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(var(--magi-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--magi-grid) 1px, transparent 1px);
+  background-size: 20px 20px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ---- Header row: metadata (left) + framed status title (right) ---- */
+
+.magiHeaderRow {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 6px;
+}
+
+.magiHeaderLeft {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.magiHeaderLeftRow {
+  display: flex;
+  gap: 4px;
+}
+
+.magiHeaderLeftCode {
+  font-size: 15px;
+  letter-spacing: 0.1em;
+  margin-bottom: 4px;
+}
+
+.magiHeaderLeftLabel { color: var(--magi-red); }
+.magiHeaderLeftSep { color: var(--magi-text-dim); }
+.magiHeaderLeftValue { color: var(--magi-red); }
+
+.magiHeaderRight {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.magiHeaderRightTitle {
+  font-size: 17px;
+  letter-spacing: 0.16em;
+  border-bottom: 2px solid var(--magi-red);
+  padding-bottom: 2px;
+  margin-bottom: 4px;
+  color: var(--magi-red);
+  text-transform: uppercase;
+}
+
+.magiHeaderRightLine {
+  color: var(--magi-text-dim);
+  text-transform: uppercase;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Triangle layout: NodeTop / NodeLeft / NodeRight + connectors ----
+   Every node is placed with an inline left/top percentage (see
+   CouncilPanel's TRIANGLE_LAYOUT) and centered on that point via
+   translate(-50%, -50%) — the exact same technique the connectors use
+   for their endpoints, so a line can never land short of its node. */
+
+.magiTriangle {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: 600px;
+  aspect-ratio: 12 / 11;
+  margin: 14px auto 6px;
+}
+
+.magiConnectors {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.magiConnectorLine {
+  stroke: var(--magi-red);
+  stroke-width: 4;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.85;
+  transition: stroke 300ms ease, opacity 300ms ease;
+}
+
+/* ---- Node blocks: solid blue panels, dark bold text, clipped corners ---- */
+
+.magiNode {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  text-align: center;
+  background-color: var(--magi-blue);
+  color: var(--magi-ink);
+  font-family: Arial, Helvetica, sans-serif;
+  box-shadow: 0 0 10px rgba(0, 117, 255, 0.4);
+  transition: background-color 300ms ease, box-shadow 300ms ease, opacity 300ms ease;
+}
+
+.magiNodeLabel {
+  font-weight: 900;
+  font-size: 16px;
+  letter-spacing: 0.02em;
+  line-height: 1.15;
+}
+
+.magiNodeState {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(5, 13, 26, 0.65);
+}
+
+.magiNode-top,
+.magiNode-left,
+.magiNode-right {
+  position: absolute;
+  z-index: 2;
+  transform: translate(-50%, -50%);
+}
+
+.magiNode-top {
+  width: 170px;
+  height: 150px;
+  clip-path: polygon(0 0, 100% 0, 100% 80%, 50% 100%, 0 80%);
+  padding-bottom: 18px;
+}
+
+.magiNode-left {
+  width: 190px;
+  height: 130px;
+  clip-path: polygon(0 0, 75% 0, 100% 30%, 100% 100%, 0 100%);
+}
+
+.magiNode-right {
+  width: 190px;
+  height: 130px;
+  clip-path: polygon(25% 0, 100% 0, 100% 100%, 0 100%, 0 30%);
+}
+
+/* ---- Radial star layout: 4-5 nodes evenly spaced around the center ---- */
+
+.magiRadial {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: 380px;
+  aspect-ratio: 1 / 1;
+  margin: 18px auto 10px;
+}
+
+.magiNode-radial {
+  position: absolute;
+  width: 104px;
+  height: 88px;
+  transform: translate(-50%, -50%);
+  background: transparent;
+  box-shadow: none;
+}
+
+/* The colored, clipped shape — rotated per node (inline style) so its
+   tip faces the center. Kept separate from the label so rotating the
+   shape never rotates the text. */
+.magiNodeShape {
+  position: absolute;
+  inset: 0;
+  background-color: var(--magi-blue);
+  clip-path: polygon(50% 0%, 100% 35%, 100% 100%, 0% 100%, 0% 35%);
+  box-shadow: 0 0 10px rgba(0, 117, 255, 0.4);
+  transition: background-color 300ms ease, box-shadow 300ms ease, opacity 300ms ease;
+}
+
+.magiNodeContent {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  text-align: center;
+  padding: 0 8px;
+  color: var(--magi-ink);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.magiNode-radial.debating .magiNodeShape { background-color: var(--magi-red); box-shadow: 0 0 14px rgba(209, 35, 35, 0.55); }
+.magiNode-radial.debating .magiNodeState { color: rgba(5, 13, 26, 0.7); }
+
+.magiNode-radial.complete .magiNodeShape { opacity: 0.95; box-shadow: 0 0 10px rgba(0, 117, 255, 0.3); }
+
+.magiNode-radial.error .magiNodeShape { background-color: var(--magi-red); box-shadow: 0 0 16px rgba(209, 35, 35, 0.65); }
+
+/* Overrides so waiting/thinking dim or pulse only the shape, keeping the label always legible */
+.magiNode-radial.waiting { opacity: 1; }
+.magiNode-radial.waiting .magiNodeShape { opacity: 0.4; box-shadow: none; }
+.magiNode-radial.thinking { animation: none; }
+.magiNode-radial.thinking .magiNodeShape { animation: magiNodePulse 1.4s ease-in-out infinite; }
+
+/* Fallback for model counts other than three (triangle) or four-five (radial) */
+
+.magiNodeRowFlex {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin: 16px auto 4px;
+}
+
+.magiNode-flex {
+  width: 150px;
+  height: 92px;
+  clip-path: polygon(10px 0, 100% 0, 100% 100%, 0 100%, 0 10px);
+}
+
+/* ---- Node states — driven by real per-model status ---- */
+
+.magiNode.waiting {
+  opacity: 0.4;
+  box-shadow: none;
+}
+
+.magiNode.thinking {
+  animation: magiNodePulse 1.4s ease-in-out infinite;
+}
+
+.magiNode.debating {
+  background-color: var(--magi-red);
+  box-shadow: 0 0 14px rgba(209, 35, 35, 0.55);
+}
+.magiNode.debating .magiNodeState { color: rgba(5, 13, 26, 0.7); }
+
+.magiNode.complete {
+  opacity: 0.95;
+  box-shadow: 0 0 10px rgba(0, 117, 255, 0.3);
+}
+
+.magiNode.error {
+  background-color: var(--magi-red);
+  box-shadow: 0 0 16px rgba(209, 35, 35, 0.65);
+  animation: magiErrorPulse 1.6s ease-in-out infinite;
+}
+
+/* ---- Footer readout strip ---- */
+
+.magiReadout {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  justify-content: center;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--magi-red-dim);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.magiReadoutItem {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.magiReadoutSep { color: var(--magi-text-dim); }
+.magiReadoutValue { font-weight: 700; color: var(--magi-red); }
+.magiReadoutLabel { color: var(--magi-text-dim); }
+
+/* ---- Keyframes ---- */
+
+@keyframes magiNodePulse {
+  0%, 100% { box-shadow: 0 0 10px rgba(0, 117, 255, 0.4); }
+  50% { box-shadow: 0 0 22px rgba(0, 117, 255, 0.8); }
+}
+
+@keyframes magiErrorPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .magiNode.thinking,
+  .magiNode.error,
+  .magiNode-radial.thinking .magiNodeShape {
+    animation: none !important;
+  }
+}
+
+@media (max-width: 720px) {
+  .magiFrame { padding: 16px 14px 12px; outline-offset: 2px; }
+  .magiHeaderRightLine { max-width: 150px; }
+  .magiNode-top { width: 120px; height: 110px; }
+  .magiNode-left, .magiNode-right { width: 130px; height: 100px; }
+  .magiNodeLabel { font-size: 12px; }
+  .magiRadial { max-width: 260px; }
+  .magiNode-radial { width: 74px; height: 64px; }
+  .magiNode-radial .magiNodeLabel { font-size: 9.5px; }
+  .magiNode-radial .magiNodeState { font-size: 7px; }
+}
