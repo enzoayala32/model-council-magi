@@ -144,13 +144,6 @@ export async function createChatCompletion({
           `${model} timed out after ${Math.round(timeoutMs / 1000)}s (free-tier models can be overloaded — try again or pick a lighter model).`,
         );
       }
-      // A raw network failure (DNS blip, connection reset, "fetch failed")
-      // throws here as a plain TypeError, not an OpenRouterError — it was
-      // previously silent (no log) and got ZERO retries, unlike a 429. Seen
-      // live: both OpenRouter and the NVIDIA fallback hit this in the same
-      // ~1s window on one run, which points to a local network hiccup at
-      // that instant rather than both providers being down simultaneously.
-      console.error(`[openrouter] network error calling ${model}:`, error instanceof Error ? error.message : error);
       throw error;
     } finally {
       clearTimeout(timeoutId);
@@ -182,16 +175,12 @@ export async function createChatCompletion({
   // how long to wait (retry_after_seconds), use that; some providers omit it
   // (seen with Poolside/Laguna) — in that case still retry with a sane
   // default wait, since 429 itself is inherently transient/recoverable.
-  // Also retry on raw network failures (fetch throwing, not an HTTP error) —
-  // these are often even more transient than a 429 (a DNS blip, a dropped
-  // connection) but previously got zero retries at all.
   // Kept modest on purpose: this function can be called TWICE in a row (see
   // the empty-content retry below), and each attempt is itself bounded by
   // the per-call timeout — stacking too many retries here compounds into
   // multi-minute worst cases. A live run hit 14+ minutes on a single
   // saturated model before this was tightened.
   const DEFAULT_RATE_LIMIT_WAIT_MS = 15000;
-  const NETWORK_ERROR_WAIT_MS = 4000;
   async function attemptWithRateLimitRetry(attemptMaxTokens: number, attemptEffort: typeof reasoningEffort, maxAttempts: number) {
     let lastError: unknown;
     for (let retry = 0; retry < maxAttempts; retry += 1) {
@@ -199,15 +188,14 @@ export async function createChatCompletion({
         return await attempt(attemptMaxTokens, attemptEffort);
       } catch (error) {
         lastError = error;
-        const isRateLimit = error instanceof OpenRouterError && error.status === 429;
-        const isNetworkError = !(error instanceof OpenRouterError) && error instanceof Error;
-        if ((!isRateLimit && !isNetworkError) || retry === maxAttempts - 1) throw error;
-        const retrySeconds = isRateLimit ? (error as OpenRouterError).retryAfterSeconds : undefined;
-        const waitMs = isRateLimit
-          ? Math.min(typeof retrySeconds === "number" ? retrySeconds * 1000 + 500 : DEFAULT_RATE_LIMIT_WAIT_MS, 30000)
-          : NETWORK_ERROR_WAIT_MS;
-        const reason = isRateLimit ? "rate-limited (429)" : "hit a network error";
-        console.log(`[openrouter] ${model} ${reason} — retrying in ${Math.round(waitMs / 1000)}s (attempt ${retry + 2}/${maxAttempts})`);
+        // 429 = rate limited, 503 = provider overloaded ("try again later") —
+        // both are explicitly transient per each provider's own error text,
+        // unlike a 4xx auth/validation error which retrying can't fix.
+        const isRetryable = error instanceof OpenRouterError && (error.status === 429 || error.status === 503);
+        if (!isRetryable || retry === maxAttempts - 1) throw error;
+        const retrySeconds = (error as OpenRouterError).retryAfterSeconds;
+        const waitMs = Math.min(typeof retrySeconds === "number" ? retrySeconds * 1000 + 500 : DEFAULT_RATE_LIMIT_WAIT_MS, 30000);
+        console.log(`[openrouter] ${model} ${(error as OpenRouterError).status}-retryable — retrying in ${Math.round(waitMs / 1000)}s (attempt ${retry + 2}/${maxAttempts})`);
         await new Promise((resolve) => setTimeout(resolve, waitMs));
       }
     }

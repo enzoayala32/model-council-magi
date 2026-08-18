@@ -15,8 +15,11 @@ export type CouncilModel = {
    * (the default for every model above). "nvidia" = called directly against
    * NVIDIA NIM (build.nvidia.com) using NVIDIA_API_KEY — requires that env
    * var to be set, and `id` must be NVIDIA's own native model ID (NOT an
-   * OpenRouter-style "provider/model:free" string). */
-  provider?: "openrouter" | "nvidia";
+   * OpenRouter-style "provider/model:free" string). "google" = called
+   * directly against Google AI Studio's Gemini API using GEMINI_API_KEY —
+   * requires that env var to be set, and `id` must be Google's own native
+   * model ID (e.g. "gemini-3.7-flash", not an OpenRouter-style string). */
+  provider?: "openrouter" | "nvidia" | "google";
 };
 
 export type FusionPanel = {
@@ -169,6 +172,55 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     defaultReasoningEffort: "high",
     supportsImages: false,
     provider: "nvidia",
+  },
+  // ---- Google AI Studio native models (not on OpenRouter) ----
+  // Called directly via generativelanguage.googleapis.com (Google's own
+  // documented OpenAI-compatibility endpoint) — needs GEMINI_API_KEY set in
+  // .env, otherwise selecting these will fail with a clear
+  // "GEMINI_API_KEY is not configured" error. Not defaultSelected since the
+  // key is opt-in and BYOK (bring-your-own — this is Google's own paid API,
+  // billed to whoever's key is configured, though it does include a
+  // rate-limited free tier). Model IDs verified against ai.google.dev in
+  // August 2026 — Google's lineup moves fast; if a call 404s, check
+  // ai.google.dev/gemini-api/docs/models for the current slug.
+  {
+    id: "gemini-3.7-flash",
+    label: "Gemini 3.7 Flash",
+    shortName: "Gemini Flash",
+    maker: "Google AI Studio",
+    accent: "#4285f4",
+    logoUrl: "",
+    description: "Google's newest GA workhorse (Aug 2026) — strong coding/agentic performance, 1M token context, tunable thinking levels. Called directly with your own Gemini API key, not through OpenRouter.",
+    defaultSelected: false,
+    defaultReasoningEffort: "medium",
+    supportsImages: false,
+    provider: "google",
+  },
+  {
+    id: "gemini-3.1-pro-preview",
+    label: "Gemini 3.1 Pro",
+    shortName: "Gemini Pro",
+    maker: "Google AI Studio",
+    accent: "#1a73e8",
+    logoUrl: "",
+    description: "Google's flagship reasoning model — 2M token context, the deepest thinking in the Gemini 3 line. Confirmed live: this model has ZERO free-tier quota on Google AI Studio (limit: 0) — it requires a Google Cloud project with billing enabled, unlike Flash/Flash-Lite below. Called directly with your own Gemini API key.",
+    defaultSelected: false,
+    defaultReasoningEffort: "high",
+    supportsImages: false,
+    provider: "google",
+  },
+  {
+    id: "gemini-2.5-flash-lite",
+    label: "Gemini 2.5 Flash-Lite",
+    shortName: "Gemini Lite",
+    maker: "Google AI Studio",
+    accent: "#8ab4f8",
+    logoUrl: "",
+    description: "Google's cheapest, fastest Gemini model and historically the most generous free-tier daily quota — a good budget pick for quick council rounds. Called directly with your own Gemini API key.",
+    defaultSelected: false,
+    defaultReasoningEffort: "low",
+    supportsImages: false,
+    provider: "google",
   },
 ];
 

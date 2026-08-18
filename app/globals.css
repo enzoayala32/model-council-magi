@@ -2714,3 +2714,210 @@ tbody tr:hover { background: var(--bg-soft); }
   padding-top: 8px;
 }
 
+
+/* =========================================================
+   File agent — model picker + pending file-change proposals
+   ========================================================= */
+
+.fileAgentPicker {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-elev);
+}
+.fileAgentPicker label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.fileAgentPicker select {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm, 6px);
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.fileProposalsPanel {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-elev);
+}
+
+.fileProposalsHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+}
+.fileProposalsHeader strong { font-size: 13.5px; }
+.fileProposalsHeader span {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.fileProposalCard {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg);
+}
+.fileProposalCard.status-applied { border-color: var(--success); }
+.fileProposalCard.status-error { border-color: var(--danger); }
+
+.fileProposalCard header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.fileProposalKind {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent-deep);
+  background: var(--accent-softer);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.fileProposalPath {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  color: var(--ink);
+}
+.fileProposalStatus {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.diffView {
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm, 6px);
+  background: var(--bg-soft);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.diffLine { padding: 0 10px; white-space: pre-wrap; word-break: break-word; }
+.diffLine.diff-add { background: rgba(26, 163, 122, 0.12); color: var(--success); }
+.diffLine.diff-del { background: rgba(214, 84, 61, 0.12); color: var(--danger); }
+.diffLine.diff-meta { color: var(--muted); font-weight: 600; }
+.diffLine.diff-context { color: var(--ink-soft); }
+
+.fileProposalActions { display: flex; gap: 8px; }
+.applyButton, .rejectButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: var(--r-sm, 6px);
+  font-size: 12.5px;
+  font-weight: 600;
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+.applyButton { background: var(--success); color: #fff; border-color: var(--success); }
+.applyButton:hover { opacity: 0.9; }
+.rejectButton { background: var(--bg-elev); color: var(--ink-soft); }
+.rejectButton:hover { background: var(--bg-soft); }
+
+/* =========================================================
+   Multi-round debate — round summary chips + final vote section
+   ========================================================= */
+
+.debateRoundsSummary {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.debateRoundChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--bg-elev);
+  font-size: 11.5px;
+}
+.debateRoundChipLabel { font-weight: 700; color: var(--ink-soft); }
+.debateRoundChipScore { color: var(--muted); }
+.debateRoundChipConverged { color: var(--success); font-weight: 700; }
+
+.voteSection {
+  margin-top: 6px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-elev);
+  display: grid;
+  gap: 10px;
+}
+.voteSection h4 { margin: 0; font-size: 13.5px; color: var(--ink); }
+
+.voteList { display: grid; gap: 6px; }
+.voteRow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+.voteFrom { font-weight: 700; color: var(--ink); }
+.voteArrow { color: var(--muted); }
+.voteFor { font-weight: 700; color: var(--accent-deep); }
+.voteRationale { color: var(--muted); flex-basis: 100%; font-size: 12px; }
+
+.voteTally {
+  display: grid;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+.voteTallyBar {
+  display: grid;
+  grid-template-columns: 100px 1fr 24px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.voteTallyBar span:first-child { color: var(--ink-soft); font-weight: 600; }
+.voteTallyBar.winner span:first-child { color: var(--accent-deep); }
+.voteTallyBarTrack {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg-soft);
+  overflow: hidden;
+}
+.voteTallyBarFill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent-deep);
+}
+.voteTallyBar.winner .voteTallyBarFill { background: var(--success); }
+.voteWinnerNote {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}

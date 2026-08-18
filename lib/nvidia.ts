@@ -209,7 +209,6 @@ export async function createNvidiaChatCompletion({
       if (timeoutController.signal.aborted && !signal?.aborted) {
         throw new OpenRouterError(`NVIDIA NIM (${model}) timed out after ${Math.round(timeoutMs / 1000)}s.`);
       }
-      console.error(`[nvidia] network error calling ${model}:`, error instanceof Error ? error.message : error);
       throw error;
     } finally {
       clearTimeout(timeoutId);
@@ -268,14 +267,10 @@ export async function createNvidiaChatCompletion({
   }
 
   // NVIDIA's free tier is rate-limited (documented: 40 req/min per model) —
-  // a burst of council calls can trip this. Retry a 429 with backoff instead
-  // of failing the model's turn outright, mirroring lib/openrouter.ts. Also
-  // retry raw network failures (fetch throwing, not an HTTP error) — seen
-  // live hitting both OpenRouter and this NVIDIA fallback in the same
-  // instant, pointing to a transient local network hiccup rather than the
-  // provider being down.
+  // a burst of council calls can trip this. Retry a 429 (rate limited) or
+  // 503 (provider overloaded — transient) with backoff instead of failing
+  // the model's turn outright, mirroring lib/openrouter.ts.
   const DEFAULT_RATE_LIMIT_WAIT_MS = 15000;
-  const NETWORK_ERROR_WAIT_MS = 4000;
   const MAX_ATTEMPTS = 3;
   let lastError: unknown;
   for (let retry = 0; retry < MAX_ATTEMPTS; retry += 1) {
@@ -283,17 +278,13 @@ export async function createNvidiaChatCompletion({
       return await attempt();
     } catch (error) {
       lastError = error;
-      const isRateLimit = error instanceof OpenRouterError && error.status === 429;
-      const isNetworkError = !(error instanceof OpenRouterError) && error instanceof Error;
-      if ((!isRateLimit && !isNetworkError) || retry === MAX_ATTEMPTS - 1) throw error;
-      const waitMs = isRateLimit
-        ? Math.min(
-            typeof (error as OpenRouterError).retryAfterSeconds === "number" ? (error as OpenRouterError).retryAfterSeconds! * 1000 + 500 : DEFAULT_RATE_LIMIT_WAIT_MS,
-            30000,
-          )
-        : NETWORK_ERROR_WAIT_MS;
-      const reason = isRateLimit ? "rate-limited (429)" : "hit a network error";
-      console.log(`[nvidia] ${model} ${reason} — retrying in ${Math.round(waitMs / 1000)}s (attempt ${retry + 2}/${MAX_ATTEMPTS})`);
+      const isRetryable = error instanceof OpenRouterError && (error.status === 429 || error.status === 503);
+      if (!isRetryable || retry === MAX_ATTEMPTS - 1) throw error;
+      const waitMs = Math.min(
+        typeof (error as OpenRouterError).retryAfterSeconds === "number" ? (error as OpenRouterError).retryAfterSeconds! * 1000 + 500 : DEFAULT_RATE_LIMIT_WAIT_MS,
+        30000,
+      );
+      console.log(`[nvidia] ${model} ${(error as OpenRouterError).status}-retryable — retrying in ${Math.round(waitMs / 1000)}s (attempt ${retry + 2}/${MAX_ATTEMPTS})`);
       await new Promise((resolve) => setTimeout(resolve, waitMs));
     }
   }

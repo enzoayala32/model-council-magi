@@ -13,7 +13,9 @@ import {
   Copy,
   Download,
   FileText,
+  FolderCog,
   Gavel,
+  Trophy,
   Globe,
   Image as ImageIcon,
   Layers3,
@@ -58,6 +60,17 @@ type SettingsTab = "connectors" | "skills" | "research" | "images";
 
 type ConnectorSettings = {
   github: boolean;
+  filesystem: boolean;
+};
+
+type FileProposalState = {
+  id: string;
+  modelId: string;
+  kind: "write" | "edit";
+  path: string;
+  diff: string;
+  status: "pending" | "applying" | "applied" | "rejected" | "error";
+  error?: string;
 };
 
 type FusionJudgeReport = {
@@ -84,33 +97,58 @@ type RunModel = {
   response?: string;
   critique?: string;
   revisedAnswer?: string;
+  debateRound?: number;
+  debateMaxRounds?: number;
   error?: string;
 };
+
+type DebateRoundInfo = { round: number; maxRounds: number; participantCount: number; convergence: number; converged: boolean };
+type VoteCastInfo = { modelId: string; label: string; votedForModelId: string | null; votedForLabel: string | null; rationale: string };
+type VoteTallyInfo = { tally: Array<{ modelId: string; label: string; votes: number }>; winnerModelId: string | null; winnerLabel: string | null; totalVotes: number };
 
 type UploadedAttachment = {
   id: string;
   name: string;
   type: string;
   size: number;
-  kind: "image" | "text" | "file";
+  kind: "image" | "text" | "pdf" | "docx" | "file";
   dataUrl?: string;
   text?: string;
 };
+
+type TokenUsage = { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
 
 type CouncilStreamEvent =
   | { type: "run_started"; prompt: string; selectedModels: string[]; fusionPanelId?: string }
   | { type: "phase"; phase: RunPhase }
   | { type: "model_step"; modelId: string; label: string; step: string; steps: number; status: "thinking"; phase: RunPhase }
-  | { type: "model_complete"; modelId: string; label: string; content: string; steps: number; phase: "drafting" }
-  | { type: "model_debate_complete"; modelId: string; label: string; critique: string; revisedAnswer?: string; steps: number }
+  | { type: "model_complete"; modelId: string; label: string; content: string; steps: number; phase: "drafting"; usage?: TokenUsage }
+  | { type: "model_debate_complete"; modelId: string; label: string; critique: string; revisedAnswer?: string; steps: number; usage?: TokenUsage; round: number; maxRounds: number }
   | { type: "model_error"; modelId: string; label: string; error: string; steps: number; phase: RunPhase }
   | { type: "synthesis_started"; step: string }
-  | { type: "fusion_judge_complete"; report: FusionJudgeReport }
-  | { type: "synthesis_complete"; content: string }
+  | { type: "fusion_judge_complete"; report: FusionJudgeReport; usage?: TokenUsage }
+  | { type: "synthesis_complete"; content: string; usage?: TokenUsage }
   | { type: "image_started"; model: string; prompt: string }
-  | { type: "image_complete"; model: string; prompt: string; images: string[] }
+  | { type: "image_complete"; model: string; prompt: string; images: string[]; usage?: TokenUsage }
   | { type: "image_error"; error: string }
-  | { type: "followups_complete"; questions: string[] }
+  | { type: "followups_complete"; questions: string[]; usage?: TokenUsage }
+  | { type: "file_proposal"; modelId: string; proposal: { id: string; kind: "write" | "edit"; path: string; diff: string } }
+  | {
+      type: "debate_round_complete";
+      round: number;
+      maxRounds: number;
+      participantCount: number;
+      convergence: number;
+      converged: boolean;
+    }
+  | { type: "vote_cast"; modelId: string; label: string; votedForModelId: string | null; votedForLabel: string | null; rationale: string; usage?: TokenUsage }
+  | {
+      type: "vote_tally_complete";
+      tally: Array<{ modelId: string; label: string; votes: number }>;
+      winnerModelId: string | null;
+      winnerLabel: string | null;
+      totalVotes: number;
+    }
   | { type: "run_complete" }
   | { type: "error"; error: string };
 
@@ -277,7 +315,14 @@ export default function Home() {
   const [streamError, setStreamError] = useState("");
   const [attachments, setAttachments] = useState<UploadedAttachment[]>([]);
   const [agentSkills, setAgentSkills] = useState<AgentSkill[]>(DEFAULT_SKILLS);
-  const [connectors, setConnectors] = useState<ConnectorSettings>({ github: true });
+  const [connectors, setConnectors] = useState<ConnectorSettings>({ github: true, filesystem: false });
+  const [fileAgentModelId, setFileAgentModelId] = useState<string>("");
+  const [fileProposals, setFileProposals] = useState<FileProposalState[]>([]);
+  const [tokenUsage, setTokenUsage] = useState<TokenUsage>({});
+  const [maxDebateRounds, setMaxDebateRounds] = useState(3);
+  const [debateRounds, setDebateRounds] = useState<DebateRoundInfo[]>([]);
+  const [votes, setVotes] = useState<VoteCastInfo[]>([]);
+  const [voteTally, setVoteTally] = useState<VoteTallyInfo | null>(null);
   const [imageGenerationEnabled, setImageGenerationEnabled] = useState(false);
   const [selectedImageModel, setSelectedImageModel] = useState(IMAGE_MODELS[0]?.id ?? "openai/gpt-image-1.5");
   const [resultTab, setResultTab] = useState<ResultTab>("answer");
@@ -645,6 +690,11 @@ export default function Home() {
     setRunPhase("drafting");
     runStartRef.current = Date.now();
     setElapsedMs(0);
+    setFileProposals([]);
+    setTokenUsage({});
+    setDebateRounds([]);
+    setVotes([]);
+    setVoteTally(null);
     setRunFusionPanelId(nextFusionPanelId);
     setModels((current) =>
       current.map((model) => ({
@@ -674,6 +724,8 @@ export default function Home() {
           webGrounding,
           agentSkills,
           connectors,
+          fileAgentModelId: connectors.filesystem ? fileAgentModelId || undefined : undefined,
+          maxDebateRounds,
           imageSettings: {
             enabled: imageGenerationEnabled,
             model: selectedImageModel,
@@ -707,6 +759,46 @@ export default function Home() {
     }
   }
 
+  async function applyFileProposal(id: string) {
+    setFileProposals((current) => current.map((p) => (p.id === id ? { ...p, status: "applying" } : p)));
+    try {
+      const response = await fetch("/api/council/apply-file-change", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ proposalId: id, action: "apply" }),
+      });
+      const data: { ok: boolean; error?: string } = await response.json();
+      if (!data.ok) throw new Error(data.error || "No se pudo aplicar el cambio.");
+      setFileProposals((current) => current.map((p) => (p.id === id ? { ...p, status: "applied" } : p)));
+    } catch (error) {
+      setFileProposals((current) =>
+        current.map((p) => (p.id === id ? { ...p, status: "error", error: error instanceof Error ? error.message : "Error desconocido" } : p)),
+      );
+    }
+  }
+
+  async function rejectFileProposal(id: string) {
+    setFileProposals((current) => current.map((p) => (p.id === id ? { ...p, status: "rejected" } : p)));
+    try {
+      await fetch("/api/council/apply-file-change", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ proposalId: id, action: "reject" }),
+      });
+    } catch {
+      // Best-effort — the proposal will just expire server-side (30 min TTL) if this fails.
+    }
+  }
+
+  function addUsage(next: TokenUsage | undefined) {
+    if (!next) return;
+    setTokenUsage((current) => ({
+      prompt_tokens: (current.prompt_tokens ?? 0) + (next.prompt_tokens ?? 0),
+      completion_tokens: (current.completion_tokens ?? 0) + (next.completion_tokens ?? 0),
+      total_tokens: (current.total_tokens ?? 0) + (next.total_tokens ?? (next.prompt_tokens ?? 0) + (next.completion_tokens ?? 0)),
+    }));
+  }
+
   function handleStreamEvent(event: CouncilStreamEvent) {
     if (event.type === "error") { setStreamError(event.error); return; }
 
@@ -729,6 +821,7 @@ export default function Home() {
     }
 
     if (event.type === "model_complete") {
+      addUsage(event.usage);
       setModels((current) =>
         current.map((model) =>
           model.id === event.modelId
@@ -740,6 +833,7 @@ export default function Home() {
     }
 
     if (event.type === "model_debate_complete") {
+      addUsage(event.usage);
       setModels((current) =>
         current.map((model) =>
           model.id === event.modelId
@@ -749,11 +843,32 @@ export default function Home() {
                 steps: event.steps,
                 critique: event.critique,
                 revisedAnswer: event.revisedAnswer,
-                activityLog: appendUnique(model.activityLog, "Debate completo — crítica enviada"),
+                debateRound: event.round,
+                debateMaxRounds: event.maxRounds,
+                activityLog: appendUnique(model.activityLog, `Ronda ${event.round}/${event.maxRounds} completa — crítica enviada`),
               }
             : model,
         ),
       );
+      return;
+    }
+    if (event.type === "debate_round_complete") {
+      setDebateRounds((current) => [
+        ...current,
+        { round: event.round, maxRounds: event.maxRounds, participantCount: event.participantCount, convergence: event.convergence, converged: event.converged },
+      ]);
+      return;
+    }
+    if (event.type === "vote_cast") {
+      addUsage(event.usage);
+      setVotes((current) => [
+        ...current,
+        { modelId: event.modelId, label: event.label, votedForModelId: event.votedForModelId, votedForLabel: event.votedForLabel, rationale: event.rationale },
+      ]);
+      return;
+    }
+    if (event.type === "vote_tally_complete") {
+      setVoteTally({ tally: event.tally, winnerModelId: event.winnerModelId, winnerLabel: event.winnerLabel, totalVotes: event.totalVotes });
       return;
     }
 
@@ -777,12 +892,14 @@ export default function Home() {
 
     if (event.type === "synthesis_started") { setSynthesisActivity(event.step); return; }
     if (event.type === "fusion_judge_complete") {
+      addUsage(event.usage);
       setFusionJudge(event.report);
       liveStateRef.current.fusionJudge = event.report;
       setSynthesisActivity("Fusion judge report complete");
       return;
     }
     if (event.type === "synthesis_complete") {
+      addUsage(event.usage);
       setSynthesis(event.content);
       liveStateRef.current.synthesis = event.content;
       setSynthesisActivity("Synthesis complete");
@@ -794,6 +911,7 @@ export default function Home() {
       return;
     }
     if (event.type === "image_complete") {
+      addUsage(event.usage);
       const images = event.images.map((url) => ({
         id: newId("image"),
         model: event.model,
@@ -813,8 +931,16 @@ export default function Home() {
       return;
     }
     if (event.type === "followups_complete") {
+      addUsage(event.usage);
       setFollowUps(event.questions);
       liveStateRef.current.followUps = event.questions;
+      return;
+    }
+    if (event.type === "file_proposal") {
+      setFileProposals((current) => [
+        ...current,
+        { id: event.proposal.id, modelId: event.modelId, kind: event.proposal.kind, path: event.proposal.path, diff: event.proposal.diff, status: "pending" },
+      ]);
       return;
     }
     if (event.type === "run_complete") { setPhase("results"); setRunPhase("done"); }
@@ -950,6 +1076,11 @@ export default function Home() {
                 elapsedMs={elapsedMs}
                 onOpenModelResponse={setActiveModal}
                 onStop={stopGeneration}
+                fileProposals={fileProposals}
+                onApplyProposal={applyFileProposal}
+                onRejectProposal={rejectFileProposal}
+                tokenUsage={tokenUsage}
+                debateRounds={debateRounds}
               />
             ) : (
               <>
@@ -962,6 +1093,7 @@ export default function Home() {
                     { label: "MODELOS", value: String(activeModels.length) },
                     { label: "DEBATIERON", value: String(activeModels.filter((m) => m.critique).length) },
                     { label: "TRANSCURRIDO", value: formatElapsed(elapsedMs) },
+                    { label: "TOKENS", value: formatTokens(tokenUsage.total_tokens) },
                   ]}
                   nodes={activeModels.map((model) => ({
                     id: model.id,
@@ -1013,9 +1145,10 @@ export default function Home() {
                     imageStatus={imageStatus}
                     onOpenModal={setActiveModal}
                     onRunFollowup={(value) => runCouncil(value)}
+                    tokenUsage={tokenUsage}
                   />
                 ) : resultTab === "debate" ? (
-                  <DebateView models={activeModels} />
+                  <DebateView models={activeModels} debateRounds={debateRounds} votes={votes} voteTally={voteTally} />
                 ) : resultTab === "sources" ? (
                   <SourcesView models={activeModels} />
                 ) : (
@@ -1027,6 +1160,11 @@ export default function Home() {
                     elapsedMs={elapsedMs}
                     onOpenModelResponse={setActiveModal}
                     onStop={stopGeneration}
+                    fileProposals={fileProposals}
+                    onApplyProposal={applyFileProposal}
+                    onRejectProposal={rejectFileProposal}
+                    tokenUsage={tokenUsage}
+                    debateRounds={debateRounds}
                   />
                 )}
 
@@ -1052,10 +1190,15 @@ export default function Home() {
             setTab={setSettingsTab}
             connectors={connectors}
             setConnectors={setConnectors}
+            fileAgentModelId={fileAgentModelId}
+            setFileAgentModelId={setFileAgentModelId}
+            fileAgentCandidates={selectedModels}
             skills={agentSkills}
             setSkills={setAgentSkills}
             webGrounding={webGrounding}
             setWebGrounding={setWebGrounding}
+            maxDebateRounds={maxDebateRounds}
+            setMaxDebateRounds={setMaxDebateRounds}
             imageGenerationEnabled={imageGenerationEnabled}
             setImageGenerationEnabled={setImageGenerationEnabled}
             selectedImageModel={selectedImageModel}
@@ -1286,6 +1429,14 @@ function formatElapsed(ms: number) {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
+/** Compact token count for the MAGI panel readout — "842", "12.4K", "1.2M". */
+function formatTokens(value: number | undefined) {
+  const n = value ?? 0;
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}K`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
 /** Display-only translation — the underlying value ("low"/"medium"/"high")
  * must stay in English since it's sent as-is to the OpenRouter/NVIDIA APIs. */
 function effortLabelEs(effort: ReasoningEffort): string {
@@ -1431,7 +1582,7 @@ function CouncilComposer({
                 className="hiddenFileInput"
                 type="file"
                 multiple
-                accept="image/*,.txt,.md,.csv,.json,.ts,.tsx,.js,.jsx,.css,.html,.xml,.yaml,.yml,.pdf"
+                accept="image/*,.txt,.md,.csv,.json,.ts,.tsx,.js,.jsx,.css,.html,.xml,.yaml,.yml,.pdf,.docx"
                 onChange={(event) => {
                   if (event.target.files) void onFilesSelected(event.target.files);
                   event.currentTarget.value = "";
@@ -1613,10 +1764,15 @@ function SettingsDrawer({
   setTab,
   connectors,
   setConnectors,
+  fileAgentModelId,
+  setFileAgentModelId,
+  fileAgentCandidates,
   skills,
   setSkills,
   webGrounding,
   setWebGrounding,
+  maxDebateRounds,
+  setMaxDebateRounds,
   imageGenerationEnabled,
   setImageGenerationEnabled,
   selectedImageModel,
@@ -1627,10 +1783,15 @@ function SettingsDrawer({
   setTab: (tab: SettingsTab) => void;
   connectors: ConnectorSettings;
   setConnectors: React.Dispatch<React.SetStateAction<ConnectorSettings>>;
+  fileAgentModelId: string;
+  setFileAgentModelId: (id: string) => void;
+  fileAgentCandidates: Array<{ id: string; label: string }>;
   skills: AgentSkill[];
   setSkills: React.Dispatch<React.SetStateAction<AgentSkill[]>>;
   webGrounding: boolean;
   setWebGrounding: (value: boolean) => void;
+  maxDebateRounds: number;
+  setMaxDebateRounds: (value: number) => void;
   imageGenerationEnabled: boolean;
   setImageGenerationEnabled: (value: boolean) => void;
   selectedImageModel: string;
@@ -1711,7 +1872,7 @@ function SettingsDrawer({
         <div className="settingsPane">
           <div className="settingsHeader">
             <strong>Conectores</strong>
-            <span>{connectors.github ? "1 activado" : "0 activados"}</span>
+            <span>{[connectors.github, connectors.filesystem].filter(Boolean).length} activados</span>
           </div>
           <div className="connectorList">
             <article className="connectorRow">
@@ -1729,9 +1890,51 @@ function SettingsDrawer({
                 <span />
               </button>
             </article>
+            <article className="connectorRow">
+              <div className="connectorIcon"><FolderCog size={16} /></div>
+              <div>
+                <strong>Sistema de archivos (local)</strong>
+                <span>
+                  Le da a un modelo del panel acceso de lectura y escritura a los archivos del proyecto en esta PC. Las lecturas
+                  (listar carpetas, leer archivos) corren directo; cualquier escritura o edición queda propuesta con un diff y
+                  no se aplica hasta que la confirmés vos.
+                </span>
+              </div>
+              <button
+                className={connectors.filesystem ? "switch on" : "switch"}
+                type="button"
+                onClick={() => setConnectors((current) => ({ ...current, filesystem: !current.filesystem }))}
+                aria-label="Activar/desactivar conector de sistema de archivos"
+              >
+                <span />
+              </button>
+            </article>
+            {connectors.filesystem ? (
+              <div className="fileAgentPicker">
+                <label htmlFor="file-agent-select">Modelo agente de archivos</label>
+                <select
+                  id="file-agent-select"
+                  value={fileAgentModelId}
+                  onChange={(event) => setFileAgentModelId(event.target.value)}
+                >
+                  <option value="">Ninguno seleccionado</option>
+                  {fileAgentCandidates.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="settingsNote" style={{ margin: 0 }}>
+                  Solo este modelo, dentro del panel elegido, va a poder leer y proponer cambios de archivos durante drafting y debate.
+                </span>
+              </div>
+            ) : null}
           </div>
           <div className="settingsNote">
             GitHub funciona con repositorios públicos sin configuración. Agregá `GITHUB_TOKEN` en el servidor para repos privados y límites de API más altos.
+          </div>
+          <div className="settingsNote">
+            El agente de archivos opera dentro de la carpeta del proyecto (o la que definas en `AGENT_FS_ROOT` en el servidor) y nunca puede salir de ahí.
           </div>
           <div className="settingsNote">
             Tanto ChatGPT como Claude ponen los conectores en Ajustes, requieren autenticación de terceros por usuario, y dejan que cada chat use selectivamente las fuentes conectadas. Esta app replica eso con toggles de conectores a nivel de espacio de trabajo y uso de herramientas por corrida.
@@ -1804,6 +2007,25 @@ function SettingsDrawer({
             />
             Usar búsqueda web de OpenRouter en el chat
           </label>
+          <div className="fileAgentPicker">
+            <label htmlFor="max-debate-rounds">Rondas de debate (máximo)</label>
+            <select
+              id="max-debate-rounds"
+              value={maxDebateRounds}
+              onChange={(event) => setMaxDebateRounds(Number(event.target.value))}
+            >
+              {[1, 2, 3, 4, 5].map((n) => (
+                <option key={n} value={n}>
+                  {n} {n === 1 ? "ronda" : "rondas"}
+                </option>
+              ))}
+            </select>
+            <span className="settingsNote" style={{ margin: 0 }}>
+              El consejo debate hasta este máximo, pero corta antes si las respuestas convergen (medido por
+              vocabulario compartido entre los modelos). Al terminar el debate, cada modelo sobreviviente vota por
+              la respuesta más fuerte del panel.
+            </span>
+          </div>
           <div className="researchPatternList">
             <article>
               <strong>Apps/conectores estilo ChatGPT</strong>
@@ -1855,7 +2077,7 @@ function SettingsDrawer({
    ========================================================= */
 
 function ThinkingStage({
-  models, synthesisActivity, streamError, runPhase, elapsedMs, onOpenModelResponse, onStop,
+  models, synthesisActivity, streamError, runPhase, elapsedMs, onOpenModelResponse, onStop, fileProposals, onApplyProposal, onRejectProposal, tokenUsage, debateRounds,
 }: {
   models: RunModel[];
   synthesisActivity: string;
@@ -1864,6 +2086,11 @@ function ThinkingStage({
   elapsedMs: number;
   onOpenModelResponse: (id: string) => void;
   onStop?: () => void;
+  fileProposals: FileProposalState[];
+  onApplyProposal: (id: string) => void;
+  onRejectProposal: (id: string) => void;
+  tokenUsage: TokenUsage;
+  debateRounds: DebateRoundInfo[];
 }) {
   const isStreaming = runPhase !== "done";
   const timelineMessage = streamError
@@ -1908,7 +2135,11 @@ function ThinkingStage({
           { label: "MODELOS", value: String(models.length) },
           { label: "FASE", value: `${Math.min(phaseIndex, 3)}/3` },
           { label: "RESPUESTAS", value: `${completedCount}/${models.length}` },
+          ...(debateRounds.length
+            ? [{ label: "RONDA", value: `${debateRounds[debateRounds.length - 1].round}/${debateRounds[debateRounds.length - 1].maxRounds}` }]
+            : []),
           { label: "TRANSCURRIDO", value: formatElapsed(elapsedMs) },
+          { label: "TOKENS", value: formatTokens(tokenUsage.total_tokens) },
         ]}
         nodes={models.map((model) => ({
           id: model.id,
@@ -1917,6 +2148,10 @@ function ThinkingStage({
           state: nodeStateFor(model, runPhase),
         }))}
       />
+
+      {fileProposals.length ? (
+        <FileProposalsPanel proposals={fileProposals} onApply={onApplyProposal} onReject={onRejectProposal} />
+      ) : null}
 
       <div className="timelineHead">
         <h2 className="timelineTitle">Consenso en sesión</h2>
@@ -1991,6 +2226,74 @@ function ThinkingStage({
   );
 }
 
+function FileProposalsPanel({
+  proposals,
+  onApply,
+  onReject,
+}: {
+  proposals: FileProposalState[];
+  onApply: (id: string) => void;
+  onReject: (id: string) => void;
+}) {
+  return (
+    <div className="fileProposalsPanel">
+      <div className="fileProposalsHeader">
+        <FolderCog size={15} />
+        <strong>Cambios de archivos propuestos</strong>
+        <span>{proposals.filter((p) => p.status === "pending").length} esperando revisión</span>
+      </div>
+      {proposals.map((proposal) => (
+        <article key={proposal.id} className={`fileProposalCard status-${proposal.status}`}>
+          <header>
+            <span className="fileProposalKind">{proposal.kind === "write" ? "Escribir" : "Editar"}</span>
+            <code className="fileProposalPath">{proposal.path}</code>
+            <span className="fileProposalStatus">
+              {proposal.status === "pending" && "Pendiente"}
+              {proposal.status === "applying" && "Aplicando…"}
+              {proposal.status === "applied" && "Aplicado"}
+              {proposal.status === "rejected" && "Descartado"}
+              {proposal.status === "error" && `Error: ${proposal.error}`}
+            </span>
+          </header>
+          <DiffView diff={proposal.diff} />
+          {proposal.status === "pending" ? (
+            <div className="fileProposalActions">
+              <button type="button" className="applyButton" onClick={() => onApply(proposal.id)}>
+                <Check size={13} /> Aplicar
+              </button>
+              <button type="button" className="rejectButton" onClick={() => onReject(proposal.id)}>
+                <X size={13} /> Descartar
+              </button>
+            </div>
+          ) : null}
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function DiffView({ diff }: { diff: string }) {
+  const lines = diff.split("\n");
+  return (
+    <pre className="diffView">
+      {lines.map((line, index) => {
+        const kind = line.startsWith("+++") || line.startsWith("---")
+          ? "meta"
+          : line.startsWith("+")
+            ? "add"
+            : line.startsWith("-")
+              ? "del"
+              : "context";
+        return (
+          <div key={index} className={`diffLine diff-${kind}`}>
+            {line || " "}
+          </div>
+        );
+      })}
+    </pre>
+  );
+}
+
 function PhaseTracker({ runPhase }: { runPhase: RunPhase }) {
   const phases: Array<{ id: Exclude<RunPhase, "done">; label: string; icon: LucideIcon }> = [
     { id: "drafting", label: "Borradores independientes", icon: Sparkles },
@@ -2016,7 +2319,17 @@ function PhaseTracker({ runPhase }: { runPhase: RunPhase }) {
   );
 }
 
-function DebateView({ models }: { models: RunModel[] }) {
+function DebateView({
+  models,
+  debateRounds,
+  votes,
+  voteTally,
+}: {
+  models: RunModel[];
+  debateRounds: DebateRoundInfo[];
+  votes: VoteCastInfo[];
+  voteTally: VoteTallyInfo | null;
+}) {
   const debaters = models.filter((m) => m.critique || m.revisedAnswer);
   if (!debaters.length) {
     return (
@@ -2036,6 +2349,20 @@ function DebateView({ models }: { models: RunModel[] }) {
         After their independent drafts, each model saw the other answers and pushed back, defended,
         or updated its position.
       </p>
+
+      {debateRounds.length ? (
+        <div className="debateRoundsSummary">
+          {debateRounds.map((round) => (
+            <div className="debateRoundChip" key={round.round}>
+              <span className="debateRoundChipLabel">Ronda {round.round}/{round.maxRounds}</span>
+              <span className={round.converged ? "debateRoundChipConverged" : "debateRoundChipScore"}>
+                {round.converged ? "Convergió" : `${Math.round(round.convergence * 100)}% acuerdo`}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       <div className="debateStack">
         {debaters.map((model) => (
           <article className="debateCard" key={model.id}>
@@ -2045,7 +2372,10 @@ function DebateView({ models }: { models: RunModel[] }) {
                 <strong>{model.label}</strong>
               </div>
               <span className="debateBadge">
-                <MessageSquareQuote size={13} /> Debate response
+                <MessageSquareQuote size={13} />
+                {model.debateRound && model.debateMaxRounds
+                  ? `Ronda ${model.debateRound}/${model.debateMaxRounds}`
+                  : "Debate response"}
               </span>
             </header>
 
@@ -2065,6 +2395,49 @@ function DebateView({ models }: { models: RunModel[] }) {
           </article>
         ))}
       </div>
+
+      {votes.length ? (
+        <div className="voteSection">
+          <h4>Votación final del consejo</h4>
+          <p style={{ color: "var(--muted)", margin: "-2px 0 8px", fontSize: 13 }}>
+            Cada modelo sobreviviente votó por la respuesta final más fuerte del panel (podía votarse a sí mismo).
+          </p>
+          <div className="voteList">
+            {votes.map((vote) => (
+              <div className="voteRow" key={vote.modelId}>
+                <span className="voteFrom">{vote.label}</span>
+                <span className="voteArrow">→</span>
+                <span className="voteFor">{vote.votedForLabel ?? "(sin voto válido)"}</span>
+                {vote.rationale ? <span className="voteRationale">{vote.rationale}</span> : null}
+              </div>
+            ))}
+          </div>
+          {voteTally ? (
+            <div className="voteTally">
+              {voteTally.tally
+                .slice()
+                .sort((a, b) => b.votes - a.votes)
+                .map((entry) => (
+                  <div className={entry.modelId === voteTally.winnerModelId ? "voteTallyBar winner" : "voteTallyBar"} key={entry.modelId}>
+                    <span>{entry.label}</span>
+                    <div className="voteTallyBarTrack">
+                      <div
+                        className="voteTallyBarFill"
+                        style={{ width: voteTally.totalVotes ? `${(entry.votes / voteTally.totalVotes) * 100}%` : "0%" }}
+                      />
+                    </div>
+                    <span>{entry.votes}</span>
+                  </div>
+                ))}
+              {voteTally.winnerLabel ? (
+                <p className="voteWinnerNote">
+                  <Trophy size={13} /> El panel favoreció la respuesta de <strong>{voteTally.winnerLabel}</strong>.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2125,20 +2498,25 @@ function buildMarkdownExport({
   fusionJudge,
   models,
   followUps,
+  tokenUsage,
 }: {
   query: string;
   synthesis: string;
   fusionJudge: FusionJudgeReport | null;
   models: RunModel[];
   followUps: string[];
+  tokenUsage?: TokenUsage;
 }) {
   const lines: string[] = [];
   const usedModels = models.filter((model) => model.response || model.error);
   const timestamp = new Date().toISOString();
 
   lines.push(`# Council question`, "", query.trim(), "");
+  const tokenNote = tokenUsage?.total_tokens
+    ? ` — Tokens: ${tokenUsage.total_tokens} (${tokenUsage.prompt_tokens ?? 0} prompt / ${tokenUsage.completion_tokens ?? 0} completion)`
+    : "";
   lines.push(
-    `_Generated by Open Model Council — ${timestamp} — Models: ${usedModels.map((m) => m.label).join(", ") || "none"}_`,
+    `_Generated by Open Model Council — ${timestamp} — Models: ${usedModels.map((m) => m.label).join(", ") || "none"}${tokenNote}_`,
     "",
   );
 
@@ -2320,7 +2698,7 @@ function TribunalView({
 
 
 function ResultsDashboard({
-  models, query, synthesis, fusionJudge, fusionPanelId, followUps, generatedImages, imageStatus, onOpenModal, onRunFollowup,
+  models, query, synthesis, fusionJudge, fusionPanelId, followUps, generatedImages, imageStatus, onOpenModal, onRunFollowup, tokenUsage,
 }: {
   models: RunModel[];
   query: string;
@@ -2332,6 +2710,7 @@ function ResultsDashboard({
   imageStatus: string;
   onOpenModal: (id: string) => void;
   onRunFollowup: (query: string) => void;
+  tokenUsage: TokenUsage;
 }) {
   const useDemoTables = query.trim() === DEFAULT_QUERY;
   const activePanel = FUSION_PANELS.find((panel) => panel.id === fusionPanelId);
@@ -2339,7 +2718,7 @@ function ResultsDashboard({
   const [tribunalMode, setTribunalMode] = useState(false);
 
   async function handleCopyMarkdown() {
-    const markdown = buildMarkdownExport({ query, synthesis, fusionJudge, models, followUps });
+    const markdown = buildMarkdownExport({ query, synthesis, fusionJudge, models, followUps, tokenUsage });
     try {
       await navigator.clipboard.writeText(markdown);
       setCopyState("copied");
@@ -2352,7 +2731,7 @@ function ResultsDashboard({
   }
 
   function handleDownloadMarkdown() {
-    const markdown = buildMarkdownExport({ query, synthesis, fusionJudge, models, followUps });
+    const markdown = buildMarkdownExport({ query, synthesis, fusionJudge, models, followUps, tokenUsage });
     downloadTextFile(`${slugify(query)}.md`, markdown);
   }
 
@@ -2783,14 +3162,14 @@ function saveAgentSkills(skills: AgentSkill[]) {
 }
 
 function loadConnectorSettings(): ConnectorSettings {
-  if (typeof window === "undefined") return { github: true };
+  if (typeof window === "undefined") return { github: true, filesystem: false };
   try {
     const raw = window.localStorage.getItem(CONNECTORS_STORAGE_KEY);
-    if (!raw) return { github: true };
+    if (!raw) return { github: true, filesystem: false };
     const parsed = JSON.parse(raw) as Partial<ConnectorSettings>;
-    return { github: parsed.github !== false };
+    return { github: parsed.github !== false, filesystem: parsed.filesystem === true };
   } catch {
-    return { github: true };
+    return { github: true, filesystem: false };
   }
 }
 
@@ -2856,6 +3235,12 @@ async function readUploads(files: FileList): Promise<UploadedAttachment[]> {
       if (file.type.startsWith("image/")) {
         return { ...base, kind: "image" as const, dataUrl: await readFileAsDataUrl(file) };
       }
+      if (isPdfFile(file)) {
+        return { ...base, kind: "pdf" as const, dataUrl: await readFileAsDataUrl(file) };
+      }
+      if (isDocxFile(file)) {
+        return { ...base, kind: "docx" as const, dataUrl: await readFileAsDataUrl(file) };
+      }
       if (isTextLikeFile(file)) {
         return { ...base, kind: "text" as const, text: await readFileAsText(file) };
       }
@@ -2864,6 +3249,16 @@ async function readUploads(files: FileList): Promise<UploadedAttachment[]> {
   );
 
   return attachments;
+}
+
+function isPdfFile(file: File) {
+  return file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+}
+
+function isDocxFile(file: File) {
+  return (
+    file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || /\.docx$/i.test(file.name)
+  );
 }
 
 function isTextLikeFile(file: File) {

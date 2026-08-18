@@ -1,7 +1,10 @@
 import { AGENT_TOOLS, executeAgentTool } from "@/lib/agent-tools";
+import { bufferFromDataUrl, extractDocxText, extractPdfText } from "@/lib/attachment-extraction";
+import { FS_TOOLS, executeFsTool, isFsTool, type FileProposal } from "@/lib/fs-tools";
 import { COUNCIL_MODELS, IMAGE_MODELS, getCouncilModel, getFusionPanel, getImageModel, isReasoningEffort, type ReasoningEffort } from "@/lib/models";
-import { OpenRouterMessageContent, createAgentCompletion, createChatCompletion, createImageGeneration } from "@/lib/openrouter";
+import { OpenRouterMessageContent, createAgentCompletion, createChatCompletion, createImageGeneration, type OpenRouterTool, type OpenRouterToolCall } from "@/lib/openrouter";
 import { createNvidiaAgentCompletion } from "@/lib/nvidia";
+import { createGoogleAgentCompletion } from "@/lib/google-ai-studio";
 import { renderSkillsForPrompt, type AgentSkill } from "@/lib/skills";
 
 export const maxDuration = 300;
@@ -18,6 +21,10 @@ type StreamRequest = {
   agentSkills?: AgentSkill[];
   imageSettings?: ImageSettings;
   connectors?: ConnectorSettings;
+  /** Which one selected model (if any) gets filesystem tools this run. */
+  fileAgentModelId?: string;
+  /** How many debate rounds to run at most before forcing the vote/synthesis (1-5, default 3). */
+  maxDebateRounds?: number;
 };
 
 type ConversationTurn = {
@@ -29,7 +36,7 @@ type UploadedAttachment = {
   name: string;
   type: string;
   size: number;
-  kind: "image" | "text" | "file";
+  kind: "image" | "text" | "pdf" | "docx" | "file";
   dataUrl?: string;
   text?: string;
 };
@@ -51,6 +58,7 @@ type ImageSettings = {
 
 type ConnectorSettings = {
   github?: boolean;
+  filesystem?: boolean;
 };
 
 type StreamEvent =
@@ -58,7 +66,7 @@ type StreamEvent =
   | { type: "phase"; phase: Phase }
   | { type: "model_step"; modelId: string; label: string; step: string; steps: number; status: "thinking"; phase: Phase }
   | { type: "model_complete"; modelId: string; label: string; content: string; steps: number; phase: "drafting"; usage?: unknown }
-  | { type: "model_debate_complete"; modelId: string; label: string; critique: string; revisedAnswer?: string; steps: number; usage?: unknown }
+  | { type: "model_debate_complete"; modelId: string; label: string; critique: string; revisedAnswer?: string; steps: number; usage?: unknown; round: number; maxRounds: number }
   | { type: "model_error"; modelId: string; label: string; error: string; steps: number; phase: Phase }
   | { type: "synthesis_started"; step: string }
   | { type: "fusion_judge_complete"; report: FusionJudgeReport; usage?: unknown }
@@ -67,6 +75,23 @@ type StreamEvent =
   | { type: "image_complete"; model: string; prompt: string; images: string[]; usage?: unknown }
   | { type: "image_error"; error: string }
   | { type: "followups_complete"; questions: string[]; usage?: unknown }
+  | { type: "file_proposal"; modelId: string; proposal: { id: string; kind: "write" | "edit"; path: string; diff: string } }
+  | {
+      type: "debate_round_complete";
+      round: number;
+      maxRounds: number;
+      participantCount: number;
+      convergence: number;
+      converged: boolean;
+    }
+  | { type: "vote_cast"; modelId: string; label: string; votedForModelId: string | null; votedForLabel: string | null; rationale: string; usage?: unknown }
+  | {
+      type: "vote_tally_complete";
+      tally: Array<{ modelId: string; label: string; votes: number }>;
+      winnerModelId: string | null;
+      winnerLabel: string | null;
+      totalVotes: number;
+    }
   | { type: "run_complete" }
   | { type: "error"; error: string };
 
@@ -121,13 +146,32 @@ export async function POST(request: Request) {
         const apiKey = body.apiKey?.trim() || process.env.OPENROUTER_API_KEY;
         const fusionPanelId = typeof body.fusionPanelId === "string" ? body.fusionPanelId : undefined;
         const selectedModels = normalizeSelection(body.selectedModels, fusionPanelId);
-        const attachments = normalizeAttachments(body.attachments);
+        const attachments = await extractAttachmentText(normalizeAttachments(body.attachments));
         const history = normalizeHistory(body.history);
         const webGrounding = Boolean(body.webGrounding);
         const reasoningEffortByModel = normalizeReasoningEfforts(body.reasoningEffortByModel);
         const skillPrompt = renderSkillsForPrompt(normalizeAgentSkills(body.agentSkills));
         const imageSettings = normalizeImageSettings(body.imageSettings);
-        const agentTools = normalizeConnectorSettings(body.connectors).github ? AGENT_TOOLS : [];
+        const connectorSettings = normalizeConnectorSettings(body.connectors);
+        const agentTools = connectorSettings.github ? AGENT_TOOLS : [];
+        const fsTools = connectorSettings.filesystem ? FS_TOOLS : [];
+        const fileAgentModelId = connectorSettings.filesystem ? body.fileAgentModelId?.trim() : undefined;
+
+        const onFileProposal = (modelId: string, proposal: FileProposal) => {
+          send({
+            type: "file_proposal",
+            modelId,
+            proposal: { id: proposal.id, kind: proposal.kind, path: proposal.relPath, diff: proposal.diff },
+          });
+        };
+
+        /** Tools + a combined executor for one model — only the designated file agent gets fsTools. */
+        function toolingFor(modelId: string) {
+          const tools = modelId === fileAgentModelId ? [...agentTools, ...fsTools] : agentTools;
+          const executeTool = (toolCall: OpenRouterToolCall, toolSignal?: AbortSignal) =>
+            isFsTool(toolCall) ? executeFsTool(toolCall, (proposal) => onFileProposal(modelId, proposal)) : executeAgentTool(toolCall, toolSignal);
+          return { tools, executeTool };
+        }
 
         if (!prompt) {
           send({ type: "error", error: "Enter a prompt for the council." });
@@ -152,8 +196,9 @@ export async function POST(request: Request) {
         send({ type: "phase", phase: "drafting" });
 
         const draftResults = await Promise.all(
-          selectedModels.map((modelId, index) =>
-            runDraft({
+          selectedModels.map((modelId, index) => {
+            const { tools, executeTool } = toolingFor(modelId);
+            return runDraft({
               modelId,
               prompt,
               attachments,
@@ -164,10 +209,11 @@ export async function POST(request: Request) {
               signal,
               webGrounding,
               skillPrompt,
-              agentTools,
+              tools,
+              executeTool,
               reasoningEffort: effortFor(modelId, reasoningEffortByModel),
-            }),
-          ),
+            });
+          }),
         );
         const successfulDrafts = draftResults.filter((result) => result.ok && result.content);
 
@@ -178,28 +224,91 @@ export async function POST(request: Request) {
           return;
         }
 
-        // ---------- Round 2 — debate ----------
+        // ---------- Rounds 2..N — debate, looped until convergence or the round cap ----------
+        const maxDebateRounds = clamp(Math.round(body.maxDebateRounds ?? 3), 1, 5);
         let debateResults: Array<{ ok: boolean; modelId: string; label: string; critique?: string; revisedAnswer?: string }> = [];
+        let roundsRun = 0;
+        let currentAnswers: Array<{ modelId: string; label: string; content: string }> = successfulDrafts;
+
         if (successfulDrafts.length >= 2) {
-          if (isAborted()) return;
-          send({ type: "phase", phase: "debating" });
-          debateResults = await Promise.all(
-            successfulDrafts.map((self, index) =>
-              runDebate({
-                self,
-                others: successfulDrafts.filter((other) => other.modelId !== self.modelId),
-                prompt,
-                history,
-                apiKey,
-                send,
-                offset: index,
-                signal,
-                skillPrompt,
-                agentTools,
-                reasoningEffort: effortFor(self.modelId, reasoningEffortByModel),
+          for (let round = 1; round <= maxDebateRounds; round++) {
+            if (isAborted()) return;
+            send({ type: "phase", phase: "debating" });
+            const roundResults = await Promise.all(
+              currentAnswers.map((self, index) => {
+                const { tools, executeTool } = toolingFor(self.modelId);
+                return runDebate({
+                  self,
+                  others: currentAnswers.filter((other) => other.modelId !== self.modelId),
+                  prompt,
+                  history,
+                  apiKey,
+                  send,
+                  offset: index,
+                  signal,
+                  skillPrompt,
+                  tools,
+                  executeTool,
+                  reasoningEffort: effortFor(self.modelId, reasoningEffortByModel),
+                  round,
+                  maxRounds: maxDebateRounds,
+                });
               }),
-            ),
+            );
+            roundsRun = round;
+            debateResults = roundResults;
+
+            const survivors = roundResults.filter(
+              (result): result is typeof result & { ok: true } => result.ok,
+            );
+
+            currentAnswers = survivors.map((result) => ({
+              modelId: result.modelId,
+              label: result.label,
+              content: result.revisedAnswer || currentAnswers.find((a) => a.modelId === result.modelId)?.content || "",
+            }));
+
+            if (survivors.length < 2) break; // not enough models left standing to keep debating
+
+            const convergence = computeConvergence(survivors.map((r) => r.revisedAnswer || ""));
+            if (isAborted()) return;
+            send({
+              type: "debate_round_complete",
+              round,
+              maxRounds: maxDebateRounds,
+              participantCount: survivors.length,
+              convergence: convergence.score,
+              converged: convergence.converged,
+            });
+            logStep("✓ debate round DONE", { round, participants: survivors.length, convergence: convergence.score, converged: convergence.converged });
+            if (convergence.converged) break;
+          }
+        }
+
+        // ---------- Final vote — each surviving debater picks the strongest answer ----------
+        let voteSummary: string | undefined;
+        if (roundsRun >= 1 && currentAnswers.length >= 2) {
+          if (isAborted()) return;
+          send({ type: "synthesis_started", step: "Council casting final votes on the strongest answer" });
+          const votes = await Promise.all(
+            currentAnswers.map((self) => runVote({ self, candidates: currentAnswers, prompt, apiKey, send, signal })),
           );
+          const { tally, winner, totalVotes } = tallyVotes(votes, currentAnswers);
+          if (isAborted()) return;
+          send({
+            type: "vote_tally_complete",
+            tally,
+            winnerModelId: winner?.modelId ?? null,
+            winnerLabel: winner?.label ?? null,
+            totalVotes,
+          });
+          if (totalVotes > 0) {
+            voteSummary = tally
+              .filter((t) => t.votes > 0)
+              .sort((a, b) => b.votes - a.votes)
+              .map((t) => `${t.label}: ${t.votes} vote${t.votes === 1 ? "" : "s"}${winner?.modelId === t.modelId ? " (most votes)" : ""}`)
+              .join("\n");
+          }
         }
 
         // ---------- Fusion judge ----------
@@ -271,7 +380,7 @@ export async function POST(request: Request) {
               },
               {
                 role: "user",
-                content: buildSynthesisPrompt(promptValue, successfulDrafts, debateResults, history, fusionJudge.report),
+                content: buildSynthesisPrompt(promptValue, successfulDrafts, debateResults, history, fusionJudge.report, voteSummary),
               },
             ],
           });
@@ -397,10 +506,10 @@ export async function POST(request: Request) {
 /**
  * Dispatches to the right provider client based on the council model's
  * `provider` field. Every existing model is implicitly "openrouter" (the
- * field is only set for NVIDIA-native entries like Llama 3.3 / DeepSeek R1
- * in lib/models.ts). Throws a clear, specific error if an NVIDIA-only model
- * is selected but NVIDIA_API_KEY isn't configured, instead of a confusing
- * failure deep inside the NVIDIA client.
+ * field is only set for NVIDIA-native and Google-native entries in
+ * lib/models.ts). Throws a clear, specific error if a provider-locked model
+ * is selected but its API key isn't configured, instead of a confusing
+ * failure deep inside that provider's client.
  */
 function runCouncilCompletion(
   modelId: string,
@@ -419,6 +528,16 @@ function runCouncilCompletion(
     return createNvidiaAgentCompletion({ ...rest, apiKey: nvidiaApiKey });
   }
 
+  if (model?.provider === "google") {
+    const googleApiKey = process.env.GEMINI_API_KEY;
+    if (!googleApiKey) {
+      return Promise.reject(
+        new Error(`${model.label} requires GEMINI_API_KEY to be set in .env (get one free at aistudio.google.com/apikey).`),
+      );
+    }
+    return createGoogleAgentCompletion({ ...rest, apiKey: googleApiKey });
+  }
+
   return createAgentCompletion({ ...rest, apiKey: openRouterApiKey });
 }
 
@@ -433,7 +552,8 @@ async function runDraft({
   signal,
   webGrounding,
   skillPrompt,
-  agentTools,
+  tools,
+  executeTool,
   reasoningEffort,
 }: {
   modelId: string;
@@ -446,7 +566,8 @@ async function runDraft({
   signal: AbortSignal;
   webGrounding: boolean;
   skillPrompt: string;
-  agentTools: typeof AGENT_TOOLS;
+  tools: OpenRouterTool[];
+  executeTool: (toolCall: OpenRouterToolCall, signal?: AbortSignal) => Promise<{ name: string; content: string }>;
   reasoningEffort: ReasoningEffort;
 }) {
   const model = getCouncilModel(modelId);
@@ -511,8 +632,8 @@ async function runDraft({
       reasoningEffort,
       signal,
       web: webGrounding,
-      tools: agentTools,
-      executeTool: (toolCall, toolSignal) => executeAgentTool(toolCall, toolSignal),
+      tools,
+      executeTool,
       onToolCall: (toolCall) => {
         steps += 1;
         send({
@@ -562,8 +683,11 @@ async function runDebate({
   offset,
   signal,
   skillPrompt,
-  agentTools,
+  tools,
+  executeTool,
   reasoningEffort,
+  round,
+  maxRounds,
 }: {
   self: { modelId: string; label: string; content: string };
   others: Array<{ modelId: string; label: string; content: string }>;
@@ -574,8 +698,11 @@ async function runDebate({
   offset: number;
   signal: AbortSignal;
   skillPrompt: string;
-  agentTools: typeof AGENT_TOOLS;
+  tools: OpenRouterTool[];
+  executeTool: (toolCall: OpenRouterToolCall, signal?: AbortSignal) => Promise<{ name: string; content: string }>;
   reasoningEffort: ReasoningEffort;
+  round: number;
+  maxRounds: number;
 }) {
   const model = getCouncilModel(self.modelId);
   void model;
@@ -608,8 +735,8 @@ async function runDebate({
       temperature: 0.3,
       reasoningEffort,
       signal,
-      tools: agentTools,
-      executeTool: (toolCall, toolSignal) => executeAgentTool(toolCall, toolSignal),
+      tools,
+      executeTool,
       onToolCall: (toolCall) => {
         steps += 1;
         send({
@@ -623,17 +750,17 @@ async function runDebate({
         });
       },
       messages: [
-        { role: "system", content: [DEBATE_SYSTEM_PROMPT, skillPrompt].filter(Boolean).join("\n\n") },
+        { role: "system", content: [debateSystemPrompt(round, maxRounds), skillPrompt].filter(Boolean).join("\n\n") },
         {
           role: "user",
           content: [
             renderHistoryBlock(history),
             `# Current user question\n${prompt}`,
             "",
-            `# Your previous draft (you are ${self.label})`,
+            `# Your previous answer (you are ${self.label}, debate round ${round} of ${maxRounds})`,
             self.content,
             "",
-            "# Other council members' drafts (condensed to their core answer, reasoning, and recommendation — critique the argument, evidence/assumptions sections were trimmed for length)",
+            "# Other council members' current answers (condensed to their core answer, reasoning, and recommendation — critique the argument, evidence/assumptions sections were trimmed for length)",
             ...others.map((other) => `## ${other.label}\n${condenseDraftForPeers(other.content)}`),
             "",
             "Now produce your debate response. Use the exact section format from the system instructions.",
@@ -652,6 +779,8 @@ async function runDebate({
       revisedAnswer,
       steps: steps + 6,
       usage: completion.usage,
+      round,
+      maxRounds,
     });
 
     logStep(`✓ debate DONE`, { modelId: self.modelId, ms: Date.now() - debateStartedAt, tokens: completion.usage });
@@ -699,34 +828,42 @@ const COUNCIL_MEMBER_SYSTEM_PROMPT = [
   "Crisp, actionable, prioritized. If a decision is implied, make it.",
   "",
   "Do not reveal hidden chain-of-thought. Provide concise, auditable reasoning summaries only.",
-  "If you have tools available and one fails or returns an error (e.g. an authentication failure, a missing connector, a network error), that is NOT your answer. Note the limitation briefly if relevant, then continue and answer the actual question using your own knowledge. Never let a tool failure become your entire response.",
 ].join("\n");
 
-const DEBATE_SYSTEM_PROMPT = [
-  "You are a member of a Model Council in the debate round. You have already produced an initial draft. Now you can see the other council members' drafts.",
-  "",
-  "Your job:",
-  "• Engage substantively. Identify real disagreements, factual errors, missing considerations, weaker reasoning, or stronger framings in the other answers.",
-  "• Defend your own position where you still believe it is correct, with specific reasons.",
-  "• Update your own position where another member made a stronger case. Intellectual honesty over consistency.",
-  "• Avoid sycophancy. Do not say 'great point' — say what is right or wrong and why.",
-  "• Do not pile on agreement. If you agree, say so once and add what is still missing.",
-  "",
-  "Length: aim for a substantial 600–1,500 word debate response. Concrete > diplomatic.",
-  "",
-  "Required structure (use these exact markdown headings):",
-  "## Critique",
-  "Per-model critique. For each other model, name it as a sub-section (### <model name>) and give 2–5 specific points. Cite their wording when useful.",
-  "## Where I Was Wrong",
-  "Anything in your own draft you now think was incorrect, oversimplified, or missing. Be honest. Say 'nothing to update' only if you genuinely mean it.",
-  "## Where I Stand Firm",
-  "Claims from your draft you still believe, with the strongest reason each, in light of the other answers.",
-  "## Revised Answer",
-  "Your updated final answer to the user's original question, integrating any updates. Aim for at least 400 words. Self-contained — a reader should be able to skip everything above.",
-  "",
-  "Do not reveal hidden chain-of-thought. Provide concise, auditable reasoning summaries only.",
-  "If you have tools available and one fails or returns an error (e.g. an authentication failure, a missing connector, a network error), that is NOT your answer. Note the limitation briefly if relevant, then continue and answer the actual question using your own knowledge. Never let a tool failure become your entire response.",
-].join("\n");
+function debateSystemPrompt(round: number, maxRounds: number): string {
+  const roundNote =
+    round === 1
+      ? "This is the first debate round."
+      : round === maxRounds
+        ? `This is the FINAL debate round (${round} of ${maxRounds}). If the council has substantially converged, say so plainly and stop re-litigating minor phrasing — spend your words on any real disagreement that remains.`
+        : `This is debate round ${round} of ${maxRounds}. If you now agree with the others on a point from a previous round, don't re-argue it — note the agreement briefly and move on to what's still unresolved.`;
+
+  return [
+    "You are a member of a Model Council in the debate round. You have already produced an initial draft. Now you can see the other council members' latest answers.",
+    roundNote,
+    "",
+    "Your job:",
+    "• Engage substantively. Identify real disagreements, factual errors, missing considerations, weaker reasoning, or stronger framings in the other answers.",
+    "• Defend your own position where you still believe it is correct, with specific reasons.",
+    "• Update your own position where another member made a stronger case. Intellectual honesty over consistency.",
+    "• Avoid sycophancy. Do not say 'great point' — say what is right or wrong and why.",
+    "• Do not pile on agreement. If you agree, say so once and add what is still missing.",
+    "",
+    "Length: aim for a substantial 600–1,500 word debate response. Concrete > diplomatic.",
+    "",
+    "Required structure (use these exact markdown headings):",
+    "## Critique",
+    "Per-model critique. For each other model, name it as a sub-section (### <model name>) and give 2–5 specific points. Cite their wording when useful.",
+    "## Where I Was Wrong",
+    "Anything in your own draft you now think was incorrect, oversimplified, or missing. Be honest. Say 'nothing to update' only if you genuinely mean it.",
+    "## Where I Stand Firm",
+    "Claims from your draft you still believe, with the strongest reason each, in light of the other answers.",
+    "## Revised Answer",
+    "Your updated final answer to the user's original question, integrating any updates. Aim for at least 400 words. Self-contained — a reader should be able to skip everything above.",
+    "",
+    "Do not reveal hidden chain-of-thought. Provide concise, auditable reasoning summaries only.",
+  ].join("\n");
+}
 
 const SYNTHESIZER_SYSTEM_PROMPT = [
   "You are the final synthesizer of a Model Council. You will receive the user's original question, each council member's independent draft, and (when present) each member's debate response that critiqued the others and revised their position.",
@@ -946,6 +1083,7 @@ function buildSynthesisPrompt(
   debates: Array<{ ok: boolean; label: string; critique?: string; revisedAnswer?: string }>,
   history: ConversationTurn[],
   judgeReport?: FusionJudgeReport,
+  voteSummary?: string,
 ) {
   const sections: string[] = [];
   const historyBlock = renderHistoryBlock(history);
@@ -974,6 +1112,10 @@ function buildSynthesisPrompt(
       "Use this structured judge report as the map for the final answer. Do not copy it mechanically; resolve it into a natural user-facing synthesis.",
       JSON.stringify(judgeReport, null, 2),
     );
+  }
+
+  if (voteSummary) {
+    sections.push("", "# Council vote", "After debate concluded, each surviving model voted for the strongest final answer (including itself). Use this as one more signal, not a binding rule.", voteSummary);
   }
 
   sections.push(
@@ -1134,6 +1276,199 @@ function splitDebateOutput(content: string) {
   return { critique: match[1].trim(), revisedAnswer: match[2].trim() };
 }
 
+/* =========================================================
+   Convergence detection — lexical heuristic, no extra LLM calls.
+   Deliberately cheap and free: average pairwise Jaccard similarity of
+   each answer's top recurring significant words (see
+   toSignificantWordSet below for why top-words instead of full text).
+   This catches the common case where models genuinely converge (they
+   tend to reuse similar core terminology once they agree, having just
+   read each other's text), not full semantic equivalence — it can
+   miss agreement expressed in very different words. Good enough as a
+   "stop debating, you're already aligned" signal without adding cost
+   or latency per round.
+   ========================================================= */
+
+const CONVERGENCE_THRESHOLD = 0.25;
+const CONVERGENCE_TOP_WORDS = 15;
+
+const CONVERGENCE_STOPWORDS = new Set([
+  "the", "and", "for", "are", "with", "that", "this", "from", "have", "has", "was", "were", "will",
+  "would", "could", "should", "not", "but", "its", "their", "them", "they", "you", "your", "our",
+  "about", "into", "also", "than", "then", "these", "those", "such", "more", "most", "some", "any",
+  "all", "can", "may", "might", "must", "only", "other", "over", "under", "between", "which", "what",
+  "when", "where", "how", "why", "who", "whom", "whose", "been", "being", "because", "however",
+  "therefore", "thus", "hence", "here", "there", "after", "before", "while", "still", "even", "just",
+  "like", "much", "many", "one", "two", "get", "gets", "made", "make", "makes", "instead",
+  "para", "como", "esto", "esta", "estos", "estas", "pero", "porque",
+  "entre", "sobre", "cuando", "donde", "cual", "cuales", "sus", "una", "uno", "los", "las", "del",
+]);
+
+/**
+ * Each answer's set of most-frequently-repeated significant words — not
+ * every unique word in the whole essay. A 600-1500 word debate response
+ * has hundreds of incidental words (examples, transitions, one-off
+ * phrasing) that dilute a plain whole-document Jaccard score to near-zero
+ * even when two answers reach the same conclusion for the same reasons.
+ * Concentrating on each answer's own top ~15 recurring terms — the words
+ * it keeps coming back to — tracks shared *topic and conclusion*
+ * vocabulary far better. Calibrated against hand-written before/after
+ * debate examples: clearly divergent answers score ~0, answers that
+ * agree on substance but differ in phrasing land ~0.25-0.35, near
+ * restatements land ~0.5+.
+ */
+function toSignificantWordSet(text: string): Set<string> {
+  const words =
+    text
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .match(/[a-z0-9]+/g) ?? [];
+  const freq = new Map<string, number>();
+  for (const word of words) {
+    if (word.length <= 2 || CONVERGENCE_STOPWORDS.has(word)) continue;
+    freq.set(word, (freq.get(word) ?? 0) + 1);
+  }
+  return new Set(
+    [...freq.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, CONVERGENCE_TOP_WORDS)
+      .map(([word]) => word),
+  );
+}
+
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (!a.size && !b.size) return 1;
+  let intersection = 0;
+  for (const word of a) if (b.has(word)) intersection++;
+  const union = a.size + b.size - intersection;
+  return union ? intersection / union : 1;
+}
+
+function computeConvergence(answers: string[]): { score: number; converged: boolean } {
+  const usable = answers.filter(Boolean);
+  if (usable.length < 2) return { score: 1, converged: true };
+  const wordSets = usable.map(toSignificantWordSet);
+  let total = 0;
+  let pairs = 0;
+  for (let i = 0; i < wordSets.length; i++) {
+    for (let j = i + 1; j < wordSets.length; j++) {
+      total += jaccardSimilarity(wordSets[i], wordSets[j]);
+      pairs++;
+    }
+  }
+  const score = pairs ? total / pairs : 1;
+  return { score, converged: score >= CONVERGENCE_THRESHOLD };
+}
+
+/* =========================================================
+   Final vote — after debate rounds conclude, each surviving model
+   casts one vote for the strongest final answer (its own allowed).
+   Unlike convergence detection this DOES cost one short LLM call per
+   model — the user explicitly asked for a real vote, not another
+   heuristic.
+   ========================================================= */
+
+const VOTE_SYSTEM_PROMPT = [
+  "You are a member of a Model Council. The debate has concluded. You will see the final answer from every council member, including your own, each labeled with the model's name.",
+  "Vote for the single strongest, most accurate, most complete final answer for the user's question. It is fine to vote for your own if you genuinely still believe it is best — do not vote strategically or out of false modesty.",
+  "Respond in EXACTLY this format and nothing else, no preamble:",
+  "VOTE: <exact model label as shown>",
+  "REASON: <one specific sentence>",
+].join("\n");
+
+function buildVotePrompt(prompt: string, candidates: Array<{ label: string; content: string }>) {
+  const sections = [`# User question\n${prompt}`, "", "# Final answers"];
+  for (const candidate of candidates) {
+    sections.push(`## ${candidate.label}\n${compactForHistory(candidate.content, 3000)}`);
+  }
+  return sections.join("\n\n");
+}
+
+function parseVote(
+  content: string,
+  candidates: Array<{ modelId: string; label: string }>,
+): { votedFor: { modelId: string; label: string } | null; rationale: string } {
+  const voteMatch = content.match(/VOTE:\s*(.+)/i);
+  const reasonMatch = content.match(/REASON:\s*(.+)/i);
+  const rationale = reasonMatch?.[1]?.trim() || "";
+  if (!voteMatch) return { votedFor: null, rationale };
+
+  const raw = voteMatch[1].trim().toLowerCase();
+  const votedFor =
+    candidates.find((c) => c.label.toLowerCase() === raw)
+    ?? candidates.find((c) => raw.includes(c.label.toLowerCase()) || c.label.toLowerCase().includes(raw))
+    ?? null;
+  return { votedFor: votedFor ? { modelId: votedFor.modelId, label: votedFor.label } : null, rationale };
+}
+
+async function runVote({
+  self,
+  candidates,
+  prompt,
+  apiKey,
+  send,
+  signal,
+}: {
+  self: { modelId: string; label: string };
+  candidates: Array<{ modelId: string; label: string; content: string }>;
+  prompt: string;
+  apiKey: string;
+  send: (event: StreamEvent) => void;
+  signal: AbortSignal;
+}): Promise<{ modelId: string; label: string; votedFor: string | null; rationale: string; usage?: unknown }> {
+  try {
+    const completion = await createChatCompletion({
+      model: self.modelId,
+      apiKey,
+      maxTokens: 220,
+      temperature: 0.15,
+      signal,
+      messages: [
+        { role: "system", content: VOTE_SYSTEM_PROMPT },
+        { role: "user", content: buildVotePrompt(prompt, candidates) },
+      ],
+    });
+    const { votedFor, rationale } = parseVote(completion.content, candidates);
+    send({
+      type: "vote_cast",
+      modelId: self.modelId,
+      label: self.label,
+      votedForModelId: votedFor?.modelId ?? null,
+      votedForLabel: votedFor?.label ?? null,
+      rationale: rationale || "(No rationale given)",
+      usage: completion.usage,
+    });
+    return { modelId: self.modelId, label: self.label, votedFor: votedFor?.modelId ?? null, rationale, usage: completion.usage };
+  } catch (error) {
+    const rationale = `Vote failed: ${error instanceof Error ? error.message : "unknown error"}`;
+    send({ type: "vote_cast", modelId: self.modelId, label: self.label, votedForModelId: null, votedForLabel: null, rationale });
+    return { modelId: self.modelId, label: self.label, votedFor: null, rationale };
+  }
+}
+
+function tallyVotes(
+  votes: Array<{ modelId: string; label: string; votedFor: string | null }>,
+  candidates: Array<{ modelId: string; label: string }>,
+) {
+  const counts = new Map<string, number>();
+  for (const vote of votes) {
+    if (!vote.votedFor) continue;
+    counts.set(vote.votedFor, (counts.get(vote.votedFor) ?? 0) + 1);
+  }
+  const tally = candidates.map((c) => ({ modelId: c.modelId, label: c.label, votes: counts.get(c.modelId) ?? 0 }));
+  let winner: { modelId: string; label: string } | null = null;
+  let max = 0;
+  for (const entry of tally) {
+    if (entry.votes > max) {
+      max = entry.votes;
+      winner = { modelId: entry.modelId, label: entry.label };
+    }
+  }
+  const totalVotes = votes.filter((v) => v.votedFor).length;
+  return { tally, winner: max > 0 ? winner : null, totalVotes };
+}
+
 /** Extracts a single markdown "## Heading" section's body from a draft,
  * stopping at the next "## " heading or the end of the string. */
 function extractSection(content: string, heading: string): string | null {
@@ -1219,6 +1554,27 @@ function normalizeAttachments(attachments: UploadedAttachment[] | undefined) {
     .slice(0, 8);
 }
 
+/**
+ * Turns pdf/docx attachments into plain-text ones (kind: "text") by running
+ * the actual extraction, once per attachment regardless of how many council
+ * models end up seeing it. Everything else passes through unchanged.
+ * buildUserContent() already knows how to render a "text" attachment, so no
+ * downstream prompt-building code needs to know pdf/docx ever existed.
+ */
+async function extractAttachmentText(attachments: UploadedAttachment[]): Promise<UploadedAttachment[]> {
+  return Promise.all(
+    attachments.map(async (attachment) => {
+      if (attachment.kind !== "pdf" && attachment.kind !== "docx") return attachment;
+      if (!attachment.dataUrl) {
+        return { ...attachment, kind: "text" as const, text: "(This file was not uploaded correctly — no content received.)" };
+      }
+      const buffer = bufferFromDataUrl(attachment.dataUrl);
+      const text = attachment.kind === "pdf" ? await extractPdfText(buffer) : await extractDocxText(buffer);
+      return { ...attachment, kind: "text" as const, text, dataUrl: undefined };
+    }),
+  );
+}
+
 function normalizeImageSettings(settings: ImageSettings | undefined): Required<ImageSettings> {
   const fallback = IMAGE_MODELS[0]?.id ?? "openai/gpt-image-1.5";
   const model = typeof settings?.model === "string" && getImageModel(settings.model)
@@ -1233,6 +1589,9 @@ function normalizeImageSettings(settings: ImageSettings | undefined): Required<I
 function normalizeConnectorSettings(settings: ConnectorSettings | undefined): Required<ConnectorSettings> {
   return {
     github: settings?.github !== false,
+    // Opt-in (unlike github): this one touches the local filesystem, so it
+    // should never turn on silently just because a field was left undefined.
+    filesystem: settings?.filesystem === true,
   };
 }
 
@@ -1252,6 +1611,11 @@ function buildImagePrompt(prompt: string, synthesis: string) {
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function clamp(value: number, min: number, max: number) {
+  if (Number.isNaN(value)) return min;
+  return Math.min(max, Math.max(min, value));
 }
 
 /** Server-side console logging so a stuck/failed run is traceable in the
