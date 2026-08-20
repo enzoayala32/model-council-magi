@@ -20,6 +20,13 @@ export type CouncilModel = {
    * requires that env var to be set, and `id` must be Google's own native
    * model ID (e.g. "gemini-3.7-flash", not an OpenRouter-style string). */
   provider?: "openrouter" | "nvidia" | "google";
+  /** If this model's draft call fails outright (all internal retries
+   * exhausted), try once more with this model instead before giving up the
+   * seat entirely. The seat keeps its original identity in the UI — this is
+   * an invisible engine swap, not a model substitution the user has to
+   * reason about. Only set where there's a real, observed failure mode to
+   * guard against (see the Google entries below). */
+  fallbackModelId?: string;
 };
 
 export type FusionPanel = {
@@ -195,6 +202,37 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     defaultReasoningEffort: "medium",
     supportsImages: false,
     provider: "google",
+    // Observed live: transient 503 "high demand" on this newest model even
+    // after the 429/503 retry loop — 2.5 Flash is a much lower-demand,
+    // well-established fallback that keeps the seat productive.
+    fallbackModelId: "gemini-2.5-flash",
+  },
+  {
+    id: "gemini-3.5-flash",
+    label: "Gemini 3.5 Flash",
+    shortName: "Gemini 3.5",
+    maker: "Google AI Studio",
+    accent: "#669df6",
+    logoUrl: "",
+    description: "Google's prior-gen Flash (GA, May 2026) — still live and solid for sustained agentic/coding work, one step behind 3.7 Flash. Called directly with your own Gemini API key.",
+    defaultSelected: false,
+    defaultReasoningEffort: "medium",
+    supportsImages: false,
+    provider: "google",
+    fallbackModelId: "gemini-2.5-flash",
+  },
+  {
+    id: "gemini-2.5-flash",
+    label: "Gemini 2.5 Flash",
+    shortName: "Gemini 2.5",
+    maker: "Google AI Studio",
+    accent: "#8ab4f8",
+    logoUrl: "",
+    description: "Google's proven prior-generation Flash — cheaper than the Gemini 3 line and a reliable free-tier fallback if 3.x quota is tight. Called directly with your own Gemini API key.",
+    defaultSelected: false,
+    defaultReasoningEffort: "medium",
+    supportsImages: false,
+    provider: "google",
   },
   {
     id: "gemini-3.1-pro-preview",
@@ -208,6 +246,10 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     defaultReasoningEffort: "high",
     supportsImages: false,
     provider: "google",
+    // Observed live: "limit: 0" on the free tier — this model simply can't
+    // run without billing enabled. Falls back to 2.5 Flash instead of
+    // losing the seat outright.
+    fallbackModelId: "gemini-2.5-flash",
   },
   {
     id: "gemini-2.5-flash-lite",

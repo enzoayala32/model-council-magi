@@ -1,6 +1,7 @@
 import { AGENT_TOOLS, executeAgentTool } from "@/lib/agent-tools";
 import { bufferFromDataUrl, extractDocxText, extractPdfText } from "@/lib/attachment-extraction";
-import { FS_TOOLS, executeFsTool, isFsTool, type FileProposal } from "@/lib/fs-tools";
+import { FS_TOOLS, executeFsTool, isFsTool, newProposalGroupId, type FileProposal, type TypeCheckResult } from "@/lib/fs-tools";
+import { recordModelOutcome } from "@/lib/model-health";
 import { COUNCIL_MODELS, IMAGE_MODELS, getCouncilModel, getFusionPanel, getImageModel, isReasoningEffort, type ReasoningEffort } from "@/lib/models";
 import { OpenRouterMessageContent, createAgentCompletion, createChatCompletion, createImageGeneration, type OpenRouterTool, type OpenRouterToolCall } from "@/lib/openrouter";
 import { createNvidiaAgentCompletion } from "@/lib/nvidia";
@@ -25,6 +26,10 @@ type StreamRequest = {
   fileAgentModelId?: string;
   /** How many debate rounds to run at most before forcing the vote/synthesis (1-5, default 3). */
   maxDebateRounds?: number;
+  /** When true AND exactly 3 models are selected, each seat gets a fixed
+   * MAGI analytical persona (Melchior/Balthasar/Casper) injected into its
+   * draft/debate system prompt. No-op for any other model count. */
+  magiMode?: boolean;
 };
 
 type ConversationTurn = {
@@ -63,9 +68,10 @@ type ConnectorSettings = {
 
 type StreamEvent =
   | { type: "run_started"; prompt: string; selectedModels: string[]; fusionPanelId?: string }
+  | { type: "magi_personas_assigned"; personas: Array<{ modelId: string; key: string; name: string; title: string }> }
   | { type: "phase"; phase: Phase }
   | { type: "model_step"; modelId: string; label: string; step: string; steps: number; status: "thinking"; phase: Phase }
-  | { type: "model_complete"; modelId: string; label: string; content: string; steps: number; phase: "drafting"; usage?: unknown }
+  | { type: "model_complete"; modelId: string; label: string; content: string; steps: number; phase: "drafting"; usage?: unknown; viaFallbackFrom?: string }
   | { type: "model_debate_complete"; modelId: string; label: string; critique: string; revisedAnswer?: string; steps: number; usage?: unknown; round: number; maxRounds: number }
   | { type: "model_error"; modelId: string; label: string; error: string; steps: number; phase: Phase }
   | { type: "synthesis_started"; step: string }
@@ -75,7 +81,8 @@ type StreamEvent =
   | { type: "image_complete"; model: string; prompt: string; images: string[]; usage?: unknown }
   | { type: "image_error"; error: string }
   | { type: "followups_complete"; questions: string[]; usage?: unknown }
-  | { type: "file_proposal"; modelId: string; proposal: { id: string; kind: "write" | "edit"; path: string; diff: string } }
+  | { type: "file_proposal"; modelId: string; proposal: { id: string; groupId: string; kind: "write" | "edit"; path: string; diff: string; typeCheck: TypeCheckResult } }
+  | { type: "file_proposal_verified"; proposalId: string; typeCheck: TypeCheckResult }
   | {
       type: "debate_round_complete";
       round: number;
@@ -161,15 +168,24 @@ export async function POST(request: Request) {
           send({
             type: "file_proposal",
             modelId,
-            proposal: { id: proposal.id, kind: proposal.kind, path: proposal.relPath, diff: proposal.diff },
+            proposal: { id: proposal.id, groupId: proposal.groupId, kind: proposal.kind, path: proposal.relPath, diff: proposal.diff, typeCheck: proposal.typeCheck },
           });
         };
+        const onFileProposalVerified = (proposalId: string, typeCheck: FileProposal["typeCheck"]) => {
+          send({ type: "file_proposal_verified", proposalId, typeCheck });
+        };
 
-        /** Tools + a combined executor for one model — only the designated file agent gets fsTools. */
+        /** Tools + a combined executor for one model turn — only the designated
+         * file agent gets fsTools. Every propose_* call made during this one
+         * turn shares a groupId, so multi-file changes can be approved as a
+         * unit instead of file-by-file. */
         function toolingFor(modelId: string) {
+          const groupId = newProposalGroupId();
           const tools = modelId === fileAgentModelId ? [...agentTools, ...fsTools] : agentTools;
           const executeTool = (toolCall: OpenRouterToolCall, toolSignal?: AbortSignal) =>
-            isFsTool(toolCall) ? executeFsTool(toolCall, (proposal) => onFileProposal(modelId, proposal)) : executeAgentTool(toolCall, toolSignal);
+            isFsTool(toolCall)
+              ? executeFsTool(toolCall, { groupId, onProposal: (proposal) => onFileProposal(modelId, proposal), onVerified: onFileProposalVerified })
+              : executeAgentTool(toolCall, toolSignal);
           return { tools, executeTool };
         }
 
@@ -191,6 +207,18 @@ export async function POST(request: Request) {
         send({ type: "run_started", prompt, selectedModels, fusionPanelId });
         logStep("▶▶ RUN START", { promptLength: prompt.length, selectedModels, fusionPanelId, webGrounding });
 
+        const magiPersonas = body.magiMode && selectedModels.length === 3 ? assignMagiPersonas(selectedModels) : {};
+        if (Object.keys(magiPersonas).length) {
+          send({
+            type: "magi_personas_assigned",
+            personas: selectedModels.map((modelId) => {
+              const persona = magiPersonas[modelId];
+              return { modelId, key: persona?.key ?? "", name: persona?.name ?? "", title: persona?.title ?? "" };
+            }),
+          });
+          logStep("◆ MAGI mode", { assignment: Object.fromEntries(selectedModels.map((id) => [id, magiPersonas[id]?.name])) });
+        }
+
         // ---------- Round 1 — independent drafts ----------
         if (isAborted()) return;
         send({ type: "phase", phase: "drafting" });
@@ -209,6 +237,7 @@ export async function POST(request: Request) {
               signal,
               webGrounding,
               skillPrompt,
+              personaPrompt: magiPersonaPrompt(magiPersonas[modelId]),
               tools,
               executeTool,
               reasoningEffort: effortFor(modelId, reasoningEffortByModel),
@@ -225,7 +254,7 @@ export async function POST(request: Request) {
         }
 
         // ---------- Rounds 2..N — debate, looped until convergence or the round cap ----------
-        const maxDebateRounds = clamp(Math.round(body.maxDebateRounds ?? 3), 1, 5);
+        const maxDebateRounds = clamp(Math.round(body.maxDebateRounds ?? 1), 1, 5);
         let debateResults: Array<{ ok: boolean; modelId: string; label: string; critique?: string; revisedAnswer?: string }> = [];
         let roundsRun = 0;
         let currentAnswers: Array<{ modelId: string; label: string; content: string }> = successfulDrafts;
@@ -247,6 +276,7 @@ export async function POST(request: Request) {
                   offset: index,
                   signal,
                   skillPrompt,
+                  personaPrompt: magiPersonaPrompt(magiPersonas[self.modelId]),
                   tools,
                   executeTool,
                   reasoningEffort: effortFor(self.modelId, reasoningEffortByModel),
@@ -552,6 +582,7 @@ async function runDraft({
   signal,
   webGrounding,
   skillPrompt,
+  personaPrompt,
   tools,
   executeTool,
   reasoningEffort,
@@ -566,6 +597,7 @@ async function runDraft({
   signal: AbortSignal;
   webGrounding: boolean;
   skillPrompt: string;
+  personaPrompt: string;
   tools: OpenRouterTool[];
   executeTool: (toolCall: OpenRouterToolCall, signal?: AbortSignal) => Promise<{ name: string; content: string }>;
   reasoningEffort: ReasoningEffort;
@@ -611,7 +643,11 @@ async function runDraft({
 
   const draftStartedAt = Date.now();
   logStep(`→ draft START`, { modelId });
-  try {
+
+  /** Calls the given model id, sharing the outer seat's tools/effort — used
+   * for both the primary model and (on failure) its configured fallback, so
+   * the seat's identity (modelId/label) never changes downstream. */
+  async function attempt(callModelId: string) {
     send({
       type: "model_step",
       modelId,
@@ -624,8 +660,8 @@ async function runDraft({
       phase: "drafting",
     });
 
-    const completion = await runCouncilCompletion(modelId, {
-      model: modelId,
+    return runCouncilCompletion(callModelId, {
+      model: callModelId,
       openRouterApiKey: apiKey,
       maxTokens: TARGET_DRAFT_TOKENS,
       temperature: 0.28,
@@ -646,9 +682,13 @@ async function runDraft({
           phase: "drafting",
         });
       },
-      messages: buildDraftMessages(prompt, attachments, history, webGrounding, model?.supportsImages ?? true, skillPrompt),
+      messages: buildDraftMessages(prompt, attachments, history, webGrounding, model?.supportsImages ?? true, skillPrompt, personaPrompt),
     });
+  }
 
+  try {
+    const completion = await attempt(modelId);
+    recordModelOutcome(modelId, true);
     send({
       type: "model_complete",
       modelId,
@@ -658,12 +698,40 @@ async function runDraft({
       phase: "drafting",
       usage: completion.usage,
     });
-
     logStep(`✓ draft DONE`, { modelId, ms: Date.now() - draftStartedAt, tokens: completion.usage });
     return { ok: true as const, modelId, label, content: completion.content };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Model request failed.";
+    recordModelOutcome(modelId, false, message);
     logStep(`✗ draft FAILED`, { modelId, ms: Date.now() - draftStartedAt, error: message });
+
+    const fallbackModelId = getCouncilModel(modelId)?.fallbackModelId;
+    if (fallbackModelId && fallbackModelId !== modelId) {
+      logStep(`↻ draft FALLBACK`, { modelId, fallbackModelId });
+      try {
+        const fallbackCompletion = await attempt(fallbackModelId);
+        recordModelOutcome(fallbackModelId, true);
+        send({
+          type: "model_complete",
+          modelId,
+          label,
+          content: fallbackCompletion.content,
+          steps: steps + 6,
+          phase: "drafting",
+          usage: fallbackCompletion.usage,
+          viaFallbackFrom: fallbackModelId,
+        });
+        logStep(`✓ draft DONE (via fallback)`, { modelId, fallbackModelId, ms: Date.now() - draftStartedAt, tokens: fallbackCompletion.usage });
+        return { ok: true as const, modelId, label, content: fallbackCompletion.content };
+      } catch (fallbackError) {
+        const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : "Fallback model request failed.";
+        recordModelOutcome(fallbackModelId, false, fallbackMessage);
+        logStep(`✗ draft FALLBACK FAILED`, { modelId, fallbackModelId, error: fallbackMessage });
+        send({ type: "model_error", modelId, label, error: `${message} (fallback also failed: ${fallbackMessage})`, steps: steps + 2, phase: "drafting" });
+        return { ok: false as const, modelId, label, content: "", error: message };
+      }
+    }
+
     send({ type: "model_error", modelId, label, error: message, steps: steps + 2, phase: "drafting" });
     return { ok: false as const, modelId, label, content: "", error: message };
   }
@@ -683,6 +751,7 @@ async function runDebate({
   offset,
   signal,
   skillPrompt,
+  personaPrompt,
   tools,
   executeTool,
   reasoningEffort,
@@ -698,6 +767,7 @@ async function runDebate({
   offset: number;
   signal: AbortSignal;
   skillPrompt: string;
+  personaPrompt: string;
   tools: OpenRouterTool[];
   executeTool: (toolCall: OpenRouterToolCall, signal?: AbortSignal) => Promise<{ name: string; content: string }>;
   reasoningEffort: ReasoningEffort;
@@ -750,7 +820,7 @@ async function runDebate({
         });
       },
       messages: [
-        { role: "system", content: [debateSystemPrompt(round, maxRounds), skillPrompt].filter(Boolean).join("\n\n") },
+        { role: "system", content: [debateSystemPrompt(round, maxRounds, personaPrompt), skillPrompt].filter(Boolean).join("\n\n") },
         {
           role: "user",
           content: [
@@ -770,6 +840,7 @@ async function runDebate({
     });
 
     const { critique, revisedAnswer } = splitDebateOutput(completion.content);
+    recordModelOutcome(self.modelId, true);
 
     send({
       type: "model_debate_complete",
@@ -787,6 +858,7 @@ async function runDebate({
     return { ok: true as const, modelId: self.modelId, label: self.label, critique, revisedAnswer };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Debate request failed.";
+    recordModelOutcome(self.modelId, false, message);
     logStep(`✗ debate FAILED`, { modelId: self.modelId, ms: Date.now() - debateStartedAt, error: message });
     send({ type: "model_error", modelId: self.modelId, label: self.label, error: message, steps: steps + 2, phase: "debating" });
     return { ok: false as const, modelId: self.modelId, label: self.label };
@@ -796,6 +868,60 @@ async function runDebate({
 /* =========================================================
    Prompts
    ========================================================= */
+
+/* =========================================================
+   MAGI mode — fixed analytical personas, one per seat, applied only
+   when exactly 3 models are running the council (matching the
+   MAGI-style triangle in the CouncilPanel UI). Named after
+   Evangelion's MAGI system, but expressed as three professional
+   analytical lenses rather than literal character roleplay — each
+   persona is a stance a rigorous reviewer would actually take, not a
+   personality to perform.
+   ========================================================= */
+
+type MagiPersona = { key: "melchior" | "balthasar" | "casper"; name: string; title: string; lens: string };
+
+const MAGI_PERSONAS: MagiPersona[] = [
+  {
+    key: "melchior",
+    name: "Melchior",
+    title: "The Scientist",
+    lens:
+      "Lead with empirical rigor. Prioritize verifiable evidence, quantifiable reasoning, and technical precision over intuition or convention. Be explicit about what is proven, what is inferred, and what is merely assumed — and say so plainly when a claim (yours or another member's) outruns its evidence.",
+  },
+  {
+    key: "balthasar",
+    name: "Balthasar",
+    title: "The Guardian",
+    lens:
+      "Lead with protective, risk-first thinking. Ask who could be harmed, what could go wrong, and what the downside scenarios look like before endorsing an upside. Weigh long-term consequences and second-order effects over short-term convenience. Where the group is being too optimistic, be the one who names the specific risk.",
+  },
+  {
+    key: "casper",
+    name: "Casper",
+    title: "The Advocate",
+    lens:
+      "Lead with human and social context. Prioritize how this actually plays out for the people affected — stakeholder impact, lived experience, communication and framing, practical real-world friction that a purely technical or purely risk-averse view would miss. Where the group is being too abstract, ground it in how it lands for a real person.",
+  },
+];
+
+/** Maps the 3 selected model ids to fixed MAGI personas by seat order — only called when there are exactly 3. */
+function assignMagiPersonas(selectedModels: string[]): Record<string, MagiPersona> {
+  const assignment: Record<string, MagiPersona> = {};
+  selectedModels.forEach((modelId, index) => {
+    if (MAGI_PERSONAS[index]) assignment[modelId] = MAGI_PERSONAS[index];
+  });
+  return assignment;
+}
+
+function magiPersonaPrompt(persona: MagiPersona | undefined): string {
+  if (!persona) return "";
+  return [
+    `# MAGI mode — your assigned analytical persona: ${persona.name}, "${persona.title}"`,
+    persona.lens,
+    "This is an analytical lens on top of your normal expertise, not a character to roleplay — don't narrate being this persona or refer to yourself by this name in the answer body. Just consistently reason from this angle, the same way a real reviewer with this priority would.",
+  ].join("\n");
+}
 
 const COUNCIL_MEMBER_SYSTEM_PROMPT = [
   "You are an independent expert member of a Model Council. Other frontier models will answer the same prompt in parallel; you will then debate them. So produce your strongest, most defensible answer up front.",
@@ -830,7 +956,7 @@ const COUNCIL_MEMBER_SYSTEM_PROMPT = [
   "Do not reveal hidden chain-of-thought. Provide concise, auditable reasoning summaries only.",
 ].join("\n");
 
-function debateSystemPrompt(round: number, maxRounds: number): string {
+function debateSystemPrompt(round: number, maxRounds: number, personaPrompt = ""): string {
   const roundNote =
     round === 1
       ? "This is the first debate round."
@@ -862,6 +988,7 @@ function debateSystemPrompt(round: number, maxRounds: number): string {
     "Your updated final answer to the user's original question, integrating any updates. Aim for at least 400 words. Self-contained — a reader should be able to skip everything above.",
     "",
     "Do not reveal hidden chain-of-thought. Provide concise, auditable reasoning summaries only.",
+    ...(personaPrompt ? ["", personaPrompt] : []),
   ].join("\n");
 }
 
@@ -1211,6 +1338,7 @@ function buildDraftMessages(
   webGrounding = false,
   supportsImages = true,
   skillPrompt = "",
+  personaPrompt = "",
 ) {
   let systemPrompt = history.length
     ? `${COUNCIL_MEMBER_SYSTEM_PROMPT}\n\nThis is a follow-up question inside an existing thread. The user's earlier questions and the council's prior answers are provided. Stay strictly on-topic to the current question, treat prior answers as established context, and do not re-derive earlier conclusions unless the user is challenging them.`
@@ -1220,6 +1348,9 @@ function buildDraftMessages(
   }
   if (skillPrompt) {
     systemPrompt = `${systemPrompt}\n\n${skillPrompt}`;
+  }
+  if (personaPrompt) {
+    systemPrompt = `${systemPrompt}\n\n${personaPrompt}`;
   }
 
   const userText = history.length

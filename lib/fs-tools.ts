@@ -1,6 +1,10 @@
 import { promises as fs } from "fs";
 import path from "path";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import type { OpenRouterTool, OpenRouterToolCall } from "@/lib/llm-shared";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Filesystem tools for the "file agent" — the one council model chosen to
@@ -17,6 +21,12 @@ import type { OpenRouterTool, OpenRouterToolCall } from "@/lib/llm-shared";
  *    proposal id — nothing is written until the user approves it from the UI
  *    (POST /api/council/apply-file-change), which is the only place fs.writeFile
  *    is called from this module's writes.
+ *  - Every proposal made during one model turn shares a `groupId`, so the UI
+ *    can offer "apply all" / "discard all" for a multi-file change instead of
+ *    forcing the user to approve N independent, possibly-incomplete edits.
+ *  - .ts/.tsx proposals get an async, best-effort `tsc --noEmit` check
+ *    (see verifyTypeScript below) so the diff shown to the user already says
+ *    whether it compiles, before they decide to apply it.
  */
 
 // Defaults to the project's own folder so a fresh clone is safe out of the
@@ -26,17 +36,22 @@ export const AGENT_FS_ROOT = path.resolve(process.env.AGENT_FS_ROOT || /* turbop
 const MAX_READ_BYTES = 200_000; // ~200KB — plenty for source files, keeps context sane
 const MAX_LIST_ENTRIES = 400;
 const PROPOSAL_TTL_MS = 30 * 60_000; // 30 min — stale proposals just expire, no cleanup job needed
+const TSC_TIMEOUT_MS = 90_000;
 
 type ToolResult = { name: string; content: string };
 
+export type TypeCheckResult = { status: "skipped" | "checking" | "ok" | "error"; errors?: string[] };
+
 export type FileProposal = {
   id: string;
+  groupId: string;
   kind: "write" | "edit";
   relPath: string;
   absPath: string;
   diff: string;
   nextContent: string;
   createdAt: number;
+  typeCheck: TypeCheckResult;
 };
 
 // In-memory only — fine for a single-user local dev server. Proposals don't
@@ -117,7 +132,7 @@ export const FS_TOOLS: OpenRouterTool[] = [
     function: {
       name: "propose_write_file",
       description:
-        "Propose creating a new file or replacing a whole file's content. Does NOT write to disk — it stages a diff for the user to review and approve in the UI. Use this for a new file or a full rewrite; for a small change to an existing file, prefer propose_edit_file.",
+        "Propose creating a new file or replacing a whole file's content. Does NOT write to disk — it stages a diff for the user to review and approve in the UI. Use this for a new file or a full rewrite; for a small change to an existing file, prefer propose_edit_file. If you touch several related files in the same turn, they'll be grouped together for the user to approve as one unit.",
       parameters: {
         type: "object",
         properties: {
@@ -133,7 +148,7 @@ export const FS_TOOLS: OpenRouterTool[] = [
     function: {
       name: "propose_edit_file",
       description:
-        "Propose a find-and-replace edit in an existing file. `find` must match the current file content exactly once. Does NOT write to disk — it stages a diff for the user to review and approve in the UI.",
+        "Propose a find-and-replace edit in an existing file. `find` must match the current file content exactly once. Does NOT write to disk — it stages a diff for the user to review and approve in the UI. If you touch several related files in the same turn, they'll be grouped together for the user to approve as one unit.",
       parameters: {
         type: "object",
         properties: {
@@ -147,18 +162,23 @@ export const FS_TOOLS: OpenRouterTool[] = [
   },
 ];
 
-export async function executeFsTool(
-  toolCall: OpenRouterToolCall,
-  onProposal?: (proposal: FileProposal) => void,
-): Promise<ToolResult> {
+export interface FsToolContext {
+  /** Shared across every proposal made within one model turn — lets the UI offer "apply all". */
+  groupId: string;
+  onProposal?: (proposal: FileProposal) => void;
+  /** Fired asynchronously once a .ts/.tsx proposal's background type-check finishes. */
+  onVerified?: (proposalId: string, result: TypeCheckResult) => void;
+}
+
+export async function executeFsTool(toolCall: OpenRouterToolCall, context: FsToolContext): Promise<ToolResult> {
   const name = toolCall.function.name;
   const args = parseArgs(toolCall.function.arguments);
 
   try {
     if (name === "list_directory") return { name, content: await listDirectory(args) };
     if (name === "read_file") return { name, content: await readFileTool(args) };
-    if (name === "propose_write_file") return { name, content: await proposeWriteFile(args, onProposal) };
-    if (name === "propose_edit_file") return { name, content: await proposeEditFile(args, onProposal) };
+    if (name === "propose_write_file") return { name, content: await proposeWriteFile(args, context) };
+    if (name === "propose_edit_file") return { name, content: await proposeEditFile(args, context) };
     return { name, content: `Unknown filesystem tool: ${name}` };
   } catch (error) {
     return { name, content: `Filesystem tool failed: ${error instanceof Error ? error.message : "Unknown error"}` };
@@ -168,6 +188,11 @@ export async function executeFsTool(
 /** True if `toolCall` is one this module can handle — lets the caller route between tool sets by name. */
 export function isFsTool(toolCall: OpenRouterToolCall): boolean {
   return FS_TOOLS.some((tool) => tool.function.name === toolCall.function.name);
+}
+
+/** One groupId per model turn — call this once when a model's turn starts, pass the same value into every executeFsTool call made during that turn. */
+export function newProposalGroupId(): string {
+  return `grp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function parseArgs(raw: string | undefined): Record<string, unknown> {
@@ -208,7 +233,11 @@ async function readFileTool(args: Record<string, unknown>): Promise<string> {
   return truncated ? `${text}\n\n… truncated (${buffer.byteLength} bytes total, showing first ${MAX_READ_BYTES})` : text;
 }
 
-async function proposeWriteFile(args: Record<string, unknown>, onProposal?: (proposal: FileProposal) => void): Promise<string> {
+function isTypeScriptFile(relPath: string): boolean {
+  return /\.(ts|tsx)$/i.test(relPath);
+}
+
+async function proposeWriteFile(args: Record<string, unknown>, context: FsToolContext): Promise<string> {
   const rawPath = requireString(args.path, "path");
   const content = requireString(args.content, "content");
   const { relPath, absPath } = resolveSafePath(rawPath);
@@ -216,22 +245,14 @@ async function proposeWriteFile(args: Record<string, unknown>, onProposal?: (pro
   const previous = await readIfExists(absPath);
   const diff = buildDiff(previous ?? "", content, relPath, previous === null);
 
-  const proposal: FileProposal = {
-    id: newProposalId(),
-    kind: "write",
-    relPath,
-    absPath,
-    diff,
-    nextContent: content,
-    createdAt: Date.now(),
-  };
-  pendingProposals.set(proposal.id, proposal);
-  onProposal?.(proposal);
+  const proposal = stageProposal({ kind: "write", relPath, absPath, diff, nextContent: content, groupId: context.groupId });
+  context.onProposal?.(proposal);
+  queueTypeCheckIfNeeded(proposal, context.onVerified);
 
-  return `Proposed ${previous === null ? "creating" : "rewriting"} "${relPath}" (proposal ${proposal.id}). Waiting for the user to approve or discard it in the UI — nothing was written to disk.\n\n${diff}`;
+  return `Proposed ${previous === null ? "creating" : "rewriting"} "${relPath}" (proposal ${proposal.id}, group ${proposal.groupId}). Waiting for the user to approve or discard it in the UI — nothing was written to disk.\n\n${diff}`;
 }
 
-async function proposeEditFile(args: Record<string, unknown>, onProposal?: (proposal: FileProposal) => void): Promise<string> {
+async function proposeEditFile(args: Record<string, unknown>, context: FsToolContext): Promise<string> {
   const rawPath = requireString(args.path, "path");
   const find = requireString(args.find, "find");
   const replace = typeof args.replace === "string" ? args.replace : "";
@@ -247,19 +268,27 @@ async function proposeEditFile(args: Record<string, unknown>, onProposal?: (prop
   const nextContent = previous.replace(find, replace);
   const diff = buildDiff(previous, nextContent, relPath, false);
 
+  const proposal = stageProposal({ kind: "edit", relPath, absPath, diff, nextContent, groupId: context.groupId });
+  context.onProposal?.(proposal);
+  queueTypeCheckIfNeeded(proposal, context.onVerified);
+
+  return `Proposed an edit to "${relPath}" (proposal ${proposal.id}, group ${proposal.groupId}). Waiting for the user to approve or discard it in the UI — nothing was written to disk.\n\n${diff}`;
+}
+
+function stageProposal(input: { kind: "write" | "edit"; relPath: string; absPath: string; diff: string; nextContent: string; groupId: string }): FileProposal {
   const proposal: FileProposal = {
     id: newProposalId(),
-    kind: "edit",
-    relPath,
-    absPath,
-    diff,
-    nextContent,
+    groupId: input.groupId,
+    kind: input.kind,
+    relPath: input.relPath,
+    absPath: input.absPath,
+    diff: input.diff,
+    nextContent: input.nextContent,
     createdAt: Date.now(),
+    typeCheck: { status: isTypeScriptFile(input.relPath) ? "checking" : "skipped" },
   };
   pendingProposals.set(proposal.id, proposal);
-  onProposal?.(proposal);
-
-  return `Proposed an edit to "${relPath}" (proposal ${proposal.id}). Waiting for the user to approve or discard it in the UI — nothing was written to disk.\n\n${diff}`;
+  return proposal;
 }
 
 async function readIfExists(absPath: string): Promise<string | null> {
@@ -335,4 +364,61 @@ function diffLines(a: string[], b: string[]): DiffOp[] {
   while (i < n) ops.push({ type: "del", line: a[i++] });
   while (j < m) ops.push({ type: "add", line: b[j++] });
   return ops;
+}
+
+/* =========================================================
+   Background type-check — .ts/.tsx proposals only.
+   Runs `tsc --noEmit` against the REAL project with the proposed
+   file's content swapped in temporarily (write → check → restore,
+   original content always put back in a `finally`), so the diff the
+   user reviews already carries a "✓ compiles" / "✗ N errors" verdict
+   instead of finding out only after applying it. This never blocks
+   the tool call's return to the model — verification happens
+   fire-and-forget and reports back via onVerified once it finishes.
+   Checks are serialized (one at a time) so two concurrent proposals
+   can't clobber each other's temporary swap of the real file.
+   ========================================================= */
+
+let verifyQueue: Promise<unknown> = Promise.resolve();
+
+function queueTypeCheckIfNeeded(proposal: FileProposal, onVerified?: (proposalId: string, result: TypeCheckResult) => void) {
+  if (proposal.typeCheck.status !== "checking") return;
+  verifyQueue = verifyQueue
+    .catch(() => {}) // one proposal's failure must never stop the queue for the next one
+    .then(async () => {
+      const result = await verifyTypeScript(proposal.absPath, proposal.nextContent).catch(
+        (error): TypeCheckResult => ({ status: "error", errors: [error instanceof Error ? error.message : "Type check crashed."] }),
+      );
+      const stillPending = pendingProposals.get(proposal.id);
+      if (stillPending) stillPending.typeCheck = result;
+      onVerified?.(proposal.id, result);
+    });
+}
+
+async function verifyTypeScript(absPath: string, nextContent: string): Promise<TypeCheckResult> {
+  const hasTsconfig = await readIfExists(path.join(AGENT_FS_ROOT, "tsconfig.json"));
+  if (hasTsconfig === null) return { status: "skipped" };
+
+  const original = await readIfExists(absPath);
+  const isNewFile = original === null;
+  try {
+    await fs.mkdir(path.dirname(absPath), { recursive: true });
+    await fs.writeFile(absPath, nextContent, "utf8");
+    await execFileAsync("npx", ["tsc", "--noEmit", "-p", "tsconfig.json"], {
+      cwd: AGENT_FS_ROOT,
+      timeout: TSC_TIMEOUT_MS,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    return { status: "ok" };
+  } catch (error) {
+    const stdout = (error as { stdout?: string })?.stdout ?? "";
+    const message = stdout || (error instanceof Error ? error.message : "tsc failed.");
+    const errors = message.split("\n").filter((line) => line.trim()).slice(0, 25);
+    return { status: "error", errors: errors.length ? errors : [message.slice(0, 2000)] };
+  } finally {
+    // Always restore the real file exactly as it was — this check never
+    // leaves a lasting change on disk, success or failure.
+    if (isNewFile) await fs.rm(absPath, { force: true }).catch(() => {});
+    else await fs.writeFile(absPath, original, "utf8").catch(() => {});
+  }
 }

@@ -15,6 +15,8 @@ import {
   FileText,
   FolderCog,
   Gavel,
+  AlertTriangle,
+  Loader2,
   Trophy,
   Globe,
   Image as ImageIcon,
@@ -63,14 +65,18 @@ type ConnectorSettings = {
   filesystem: boolean;
 };
 
+type TypeCheckResult = { status: "skipped" | "checking" | "ok" | "error"; errors?: string[] };
+
 type FileProposalState = {
   id: string;
+  groupId: string;
   modelId: string;
   kind: "write" | "edit";
   path: string;
   diff: string;
   status: "pending" | "applying" | "applied" | "rejected" | "error";
   error?: string;
+  typeCheck: TypeCheckResult;
 };
 
 type FusionJudgeReport = {
@@ -99,12 +105,14 @@ type RunModel = {
   revisedAnswer?: string;
   debateRound?: number;
   debateMaxRounds?: number;
+  viaFallbackFrom?: string;
   error?: string;
 };
 
 type DebateRoundInfo = { round: number; maxRounds: number; participantCount: number; convergence: number; converged: boolean };
 type VoteCastInfo = { modelId: string; label: string; votedForModelId: string | null; votedForLabel: string | null; rationale: string };
 type VoteTallyInfo = { tally: Array<{ modelId: string; label: string; votes: number }>; winnerModelId: string | null; winnerLabel: string | null; totalVotes: number };
+type ModelHealthInfo = { attempts: number; failures: number; lastFailureReason?: string; lastOk: boolean };
 
 type UploadedAttachment = {
   id: string;
@@ -120,9 +128,10 @@ type TokenUsage = { prompt_tokens?: number; completion_tokens?: number; total_to
 
 type CouncilStreamEvent =
   | { type: "run_started"; prompt: string; selectedModels: string[]; fusionPanelId?: string }
+  | { type: "magi_personas_assigned"; personas: Array<{ modelId: string; key: string; name: string; title: string }> }
   | { type: "phase"; phase: RunPhase }
   | { type: "model_step"; modelId: string; label: string; step: string; steps: number; status: "thinking"; phase: RunPhase }
-  | { type: "model_complete"; modelId: string; label: string; content: string; steps: number; phase: "drafting"; usage?: TokenUsage }
+  | { type: "model_complete"; modelId: string; label: string; content: string; steps: number; phase: "drafting"; usage?: TokenUsage; viaFallbackFrom?: string }
   | { type: "model_debate_complete"; modelId: string; label: string; critique: string; revisedAnswer?: string; steps: number; usage?: TokenUsage; round: number; maxRounds: number }
   | { type: "model_error"; modelId: string; label: string; error: string; steps: number; phase: RunPhase }
   | { type: "synthesis_started"; step: string }
@@ -132,7 +141,8 @@ type CouncilStreamEvent =
   | { type: "image_complete"; model: string; prompt: string; images: string[]; usage?: TokenUsage }
   | { type: "image_error"; error: string }
   | { type: "followups_complete"; questions: string[]; usage?: TokenUsage }
-  | { type: "file_proposal"; modelId: string; proposal: { id: string; kind: "write" | "edit"; path: string; diff: string } }
+  | { type: "file_proposal"; modelId: string; proposal: { id: string; groupId: string; kind: "write" | "edit"; path: string; diff: string; typeCheck: TypeCheckResult } }
+  | { type: "file_proposal_verified"; proposalId: string; typeCheck: TypeCheckResult }
   | {
       type: "debate_round_complete";
       round: number;
@@ -319,10 +329,14 @@ export default function Home() {
   const [fileAgentModelId, setFileAgentModelId] = useState<string>("");
   const [fileProposals, setFileProposals] = useState<FileProposalState[]>([]);
   const [tokenUsage, setTokenUsage] = useState<TokenUsage>({});
-  const [maxDebateRounds, setMaxDebateRounds] = useState(3);
+  const [tokenBreakdown, setTokenBreakdown] = useState<Array<{ phase: string; modelId?: string; label?: string; usage: TokenUsage }>>([]);
+  const [maxDebateRounds, setMaxDebateRounds] = useState(1);
+  const [magiMode, setMagiMode] = useState(false);
+  const [magiPersonas, setMagiPersonas] = useState<Record<string, { key: string; name: string; title: string }>>({});
   const [debateRounds, setDebateRounds] = useState<DebateRoundInfo[]>([]);
   const [votes, setVotes] = useState<VoteCastInfo[]>([]);
   const [voteTally, setVoteTally] = useState<VoteTallyInfo | null>(null);
+  const [modelHealth, setModelHealth] = useState<Record<string, ModelHealthInfo>>({});
   const [imageGenerationEnabled, setImageGenerationEnabled] = useState(false);
   const [selectedImageModel, setSelectedImageModel] = useState(IMAGE_MODELS[0]?.id ?? "openai/gpt-image-1.5");
   const [resultTab, setResultTab] = useState<ResultTab>("answer");
@@ -362,7 +376,23 @@ export default function Home() {
     setAgentSkills(loadAgentSkills());
     setConnectors(loadConnectorSettings());
     setHydrated(true);
+    refreshModelHealth();
   }, []);
+
+  function refreshModelHealth() {
+    fetch("/api/council/model-health")
+      .then((res) => res.json())
+      .then((data: { models: Array<ModelHealthInfo & { modelId: string }> }) => {
+        const next: Record<string, ModelHealthInfo> = {};
+        for (const entry of data.models ?? []) {
+          next[entry.modelId] = { attempts: entry.attempts, failures: entry.failures, lastFailureReason: entry.lastFailureReason, lastOk: entry.lastOk };
+        }
+        setModelHealth(next);
+      })
+      .catch(() => {
+        // Best-effort — health badges just won't show if this fails, nothing else depends on it.
+      });
+  }
 
   // Persist on every change after hydration
   useEffect(() => {
@@ -692,7 +722,9 @@ export default function Home() {
     setElapsedMs(0);
     setFileProposals([]);
     setTokenUsage({});
+    setTokenBreakdown([]);
     setDebateRounds([]);
+    setMagiPersonas({});
     setVotes([]);
     setVoteTally(null);
     setRunFusionPanelId(nextFusionPanelId);
@@ -726,6 +758,7 @@ export default function Home() {
           connectors,
           fileAgentModelId: connectors.filesystem ? fileAgentModelId || undefined : undefined,
           maxDebateRounds,
+          magiMode,
           imageSettings: {
             enabled: imageGenerationEnabled,
             model: selectedImageModel,
@@ -790,17 +823,48 @@ export default function Home() {
     }
   }
 
-  function addUsage(next: TokenUsage | undefined) {
+  async function applyFileProposalGroup(groupId: string) {
+    const ids = fileProposals.filter((p) => p.groupId === groupId && p.status === "pending").map((p) => p.id);
+    // Sequential, not parallel — if one file in a related group fails to
+    // apply, stopping avoids leaving a half-applied, inconsistent change on
+    // disk for files that clearly belong together.
+    for (const id of ids) {
+      await applyFileProposal(id);
+    }
+  }
+
+  async function rejectFileProposalGroup(groupId: string) {
+    const ids = fileProposals.filter((p) => p.groupId === groupId && p.status === "pending").map((p) => p.id);
+    await Promise.all(ids.map((id) => rejectFileProposal(id)));
+  }
+
+  function addUsage(next: TokenUsage | undefined, tag?: { phase: string; modelId?: string; label?: string }) {
     if (!next) return;
     setTokenUsage((current) => ({
       prompt_tokens: (current.prompt_tokens ?? 0) + (next.prompt_tokens ?? 0),
       completion_tokens: (current.completion_tokens ?? 0) + (next.completion_tokens ?? 0),
       total_tokens: (current.total_tokens ?? 0) + (next.total_tokens ?? (next.prompt_tokens ?? 0) + (next.completion_tokens ?? 0)),
     }));
+    if (tag) {
+      const normalized: TokenUsage = {
+        prompt_tokens: next.prompt_tokens ?? 0,
+        completion_tokens: next.completion_tokens ?? 0,
+        total_tokens: next.total_tokens ?? (next.prompt_tokens ?? 0) + (next.completion_tokens ?? 0),
+      };
+      setTokenBreakdown((current) => [...current, { ...tag, usage: normalized }]);
+    }
   }
 
   function handleStreamEvent(event: CouncilStreamEvent) {
     if (event.type === "error") { setStreamError(event.error); return; }
+    if (event.type === "magi_personas_assigned") {
+      const next: Record<string, { key: string; name: string; title: string }> = {};
+      for (const p of event.personas) {
+        if (p.key) next[p.modelId] = { key: p.key, name: p.name, title: p.title };
+      }
+      setMagiPersonas(next);
+      return;
+    }
 
     if (event.type === "phase") {
       setRunPhase(event.phase);
@@ -821,11 +885,21 @@ export default function Home() {
     }
 
     if (event.type === "model_complete") {
-      addUsage(event.usage);
+      addUsage(event.usage, { phase: "draft", modelId: event.modelId, label: event.label });
       setModels((current) =>
         current.map((model) =>
           model.id === event.modelId
-            ? { ...model, status: "complete", steps: event.steps, response: event.content, activityLog: appendUnique(model.activityLog, "Completed independent draft") }
+            ? {
+                ...model,
+                status: "complete",
+                steps: event.steps,
+                response: event.content,
+                viaFallbackFrom: event.viaFallbackFrom,
+                activityLog: appendUnique(
+                  model.activityLog,
+                  event.viaFallbackFrom ? `Completado vía fallback (${event.viaFallbackFrom})` : "Completed independent draft",
+                ),
+              }
             : model,
         ),
       );
@@ -833,7 +907,7 @@ export default function Home() {
     }
 
     if (event.type === "model_debate_complete") {
-      addUsage(event.usage);
+      addUsage(event.usage, { phase: `debate (ronda ${event.round})`, modelId: event.modelId, label: event.label });
       setModels((current) =>
         current.map((model) =>
           model.id === event.modelId
@@ -860,7 +934,7 @@ export default function Home() {
       return;
     }
     if (event.type === "vote_cast") {
-      addUsage(event.usage);
+      addUsage(event.usage, { phase: "vote", modelId: event.modelId, label: event.label });
       setVotes((current) => [
         ...current,
         { modelId: event.modelId, label: event.label, votedForModelId: event.votedForModelId, votedForLabel: event.votedForLabel, rationale: event.rationale },
@@ -892,14 +966,14 @@ export default function Home() {
 
     if (event.type === "synthesis_started") { setSynthesisActivity(event.step); return; }
     if (event.type === "fusion_judge_complete") {
-      addUsage(event.usage);
+      addUsage(event.usage, { phase: "judge" });
       setFusionJudge(event.report);
       liveStateRef.current.fusionJudge = event.report;
       setSynthesisActivity("Fusion judge report complete");
       return;
     }
     if (event.type === "synthesis_complete") {
-      addUsage(event.usage);
+      addUsage(event.usage, { phase: "synthesis" });
       setSynthesis(event.content);
       liveStateRef.current.synthesis = event.content;
       setSynthesisActivity("Synthesis complete");
@@ -911,7 +985,7 @@ export default function Home() {
       return;
     }
     if (event.type === "image_complete") {
-      addUsage(event.usage);
+      addUsage(event.usage, { phase: "image", label: event.model });
       const images = event.images.map((url) => ({
         id: newId("image"),
         model: event.model,
@@ -931,7 +1005,7 @@ export default function Home() {
       return;
     }
     if (event.type === "followups_complete") {
-      addUsage(event.usage);
+      addUsage(event.usage, { phase: "followups" });
       setFollowUps(event.questions);
       liveStateRef.current.followUps = event.questions;
       return;
@@ -939,11 +1013,24 @@ export default function Home() {
     if (event.type === "file_proposal") {
       setFileProposals((current) => [
         ...current,
-        { id: event.proposal.id, modelId: event.modelId, kind: event.proposal.kind, path: event.proposal.path, diff: event.proposal.diff, status: "pending" },
+        {
+          id: event.proposal.id,
+          groupId: event.proposal.groupId,
+          modelId: event.modelId,
+          kind: event.proposal.kind,
+          path: event.proposal.path,
+          diff: event.proposal.diff,
+          status: "pending",
+          typeCheck: event.proposal.typeCheck,
+        },
       ]);
       return;
     }
-    if (event.type === "run_complete") { setPhase("results"); setRunPhase("done"); }
+    if (event.type === "file_proposal_verified") {
+      setFileProposals((current) => current.map((p) => (p.id === event.proposalId ? { ...p, typeCheck: event.typeCheck } : p)));
+      return;
+    }
+    if (event.type === "run_complete") { setPhase("results"); setRunPhase("done"); refreshModelHealth(); }
   }
 
   return (
@@ -1033,6 +1120,7 @@ export default function Home() {
               }}
               onRemoveAttachment={(id) => setAttachments((current) => current.filter((attachment) => attachment.id !== id))}
               runCouncil={() => runCouncil()}
+              modelHealth={modelHealth}
             />
 
             <div className="suggestionRow">
@@ -1079,8 +1167,11 @@ export default function Home() {
                 fileProposals={fileProposals}
                 onApplyProposal={applyFileProposal}
                 onRejectProposal={rejectFileProposal}
+                onApplyProposalGroup={applyFileProposalGroup}
+                onRejectProposalGroup={rejectFileProposalGroup}
                 tokenUsage={tokenUsage}
                 debateRounds={debateRounds}
+                magiPersonas={magiPersonas}
               />
             ) : (
               <>
@@ -1146,9 +1237,10 @@ export default function Home() {
                     onOpenModal={setActiveModal}
                     onRunFollowup={(value) => runCouncil(value)}
                     tokenUsage={tokenUsage}
+                    tokenBreakdown={tokenBreakdown}
                   />
                 ) : resultTab === "debate" ? (
-                  <DebateView models={activeModels} debateRounds={debateRounds} votes={votes} voteTally={voteTally} />
+                  <DebateView models={activeModels} debateRounds={debateRounds} votes={votes} voteTally={voteTally} magiPersonas={magiPersonas} />
                 ) : resultTab === "sources" ? (
                   <SourcesView models={activeModels} />
                 ) : (
@@ -1163,8 +1255,11 @@ export default function Home() {
                     fileProposals={fileProposals}
                     onApplyProposal={applyFileProposal}
                     onRejectProposal={rejectFileProposal}
+                    onApplyProposalGroup={applyFileProposalGroup}
+                    onRejectProposalGroup={rejectFileProposalGroup}
                     tokenUsage={tokenUsage}
                     debateRounds={debateRounds}
+                    magiPersonas={magiPersonas}
                   />
                 )}
 
@@ -1199,6 +1294,9 @@ export default function Home() {
             setWebGrounding={setWebGrounding}
             maxDebateRounds={maxDebateRounds}
             setMaxDebateRounds={setMaxDebateRounds}
+            magiMode={magiMode}
+            setMagiMode={setMagiMode}
+            selectedCount={selectedModels.length}
             imageGenerationEnabled={imageGenerationEnabled}
             setImageGenerationEnabled={setImageGenerationEnabled}
             selectedImageModel={selectedImageModel}
@@ -1467,7 +1565,7 @@ function CouncilComposer({
   selectedCount, selectedFusionPanelId, applyFusionPanel, models, toggleModel, cycleReasoningEffort,
   selectTopThree, attachments, agentSkills,
   imageGenerationEnabled, onOpenSettings,
-  onFilesSelected, onRemoveAttachment, runCouncil,
+  onFilesSelected, onRemoveAttachment, runCouncil, modelHealth,
 }: {
   query: string;
   setQuery: (value: string) => void;
@@ -1495,6 +1593,7 @@ function CouncilComposer({
   onFilesSelected: (files: FileList) => void | Promise<void>;
   onRemoveAttachment: (id: string) => void;
   runCouncil: () => void;
+  modelHealth: Record<string, ModelHealthInfo>;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -1648,6 +1747,7 @@ function CouncilComposer({
                   cycleReasoningEffort={cycleReasoningEffort}
                   selectTopThree={selectTopThree}
                   councilEnabled={councilEnabled}
+                  modelHealth={modelHealth}
                 />
               ) : null}
             </div>
@@ -1675,7 +1775,7 @@ function CouncilComposer({
    ========================================================= */
 
 function ModelSelector({
-  models, selectedCount, selectedFusionPanelId, applyFusionPanel, toggleModel, cycleReasoningEffort, selectTopThree, councilEnabled,
+  models, selectedCount, selectedFusionPanelId, applyFusionPanel, toggleModel, cycleReasoningEffort, selectTopThree, councilEnabled, modelHealth,
 }: {
   models: RunModel[];
   selectedCount: number;
@@ -1685,6 +1785,7 @@ function ModelSelector({
   cycleReasoningEffort: (id: string) => void;
   selectTopThree: () => void;
   councilEnabled: boolean;
+  modelHealth: Record<string, ModelHealthInfo>;
 }) {
   return (
     <aside className="modelSelector">
@@ -1722,11 +1823,24 @@ function ModelSelector({
         </div>
       ) : null}
       <div className="modelRows">
-        {models.map((model) => (
+        {models.map((model) => {
+          const health = modelHealth[model.id];
+          const isFlaky = health && health.attempts >= 2 && health.failures / health.attempts >= 0.4;
+          return (
           <div className="modelRow" key={model.id}>
             <ModelBadge model={model} />
             <div className="modelMeta">
-              <strong>{model.label}</strong>
+              <strong>
+                {model.label}
+                {isFlaky ? (
+                  <span
+                    className="modelHealthWarning"
+                    title={`Falló ${health.failures} de ${health.attempts} intentos recientes${health.lastFailureReason ? `: ${health.lastFailureReason}` : ""}`}
+                  >
+                    <AlertTriangle size={12} />
+                  </span>
+                ) : null}
+              </strong>
               <span>{model.maker}</span>
             </div>
             <button
@@ -1748,7 +1862,8 @@ function ModelSelector({
               <span />
             </button>
           </div>
-        ))}
+          );
+        })}
       </div>
       <p className="selectorHint">
         {councilEnabled
@@ -1773,6 +1888,9 @@ function SettingsDrawer({
   setWebGrounding,
   maxDebateRounds,
   setMaxDebateRounds,
+  magiMode,
+  setMagiMode,
+  selectedCount,
   imageGenerationEnabled,
   setImageGenerationEnabled,
   selectedImageModel,
@@ -1792,6 +1910,9 @@ function SettingsDrawer({
   setWebGrounding: (value: boolean) => void;
   maxDebateRounds: number;
   setMaxDebateRounds: (value: number) => void;
+  magiMode: boolean;
+  setMagiMode: (value: boolean) => void;
+  selectedCount: number;
   imageGenerationEnabled: boolean;
   setImageGenerationEnabled: (value: boolean) => void;
   selectedImageModel: string;
@@ -2026,6 +2147,31 @@ function SettingsDrawer({
               la respuesta más fuerte del panel.
             </span>
           </div>
+          <div className="fileAgentPicker">
+            <div className="magiModeHeader">
+              <label htmlFor="magi-mode-toggle">Modo MAGI</label>
+              <button
+                id="magi-mode-toggle"
+                className={magiMode ? "switch on" : "switch"}
+                type="button"
+                onClick={() => setMagiMode(!magiMode)}
+                aria-label="Activar/desactivar Modo MAGI"
+              >
+                <span />
+              </button>
+            </div>
+            <span className="settingsNote" style={{ margin: 0 }}>
+              Asigna a cada modelo una lente analítica fija, inspirada en el sistema MAGI: <strong>Melchior</strong>{" "}
+              (la científica — evidencia y rigor técnico), <strong>Balthasar</strong> (la guardiana — riesgo y
+              consecuencias) y <strong>Casper</strong> (la defensora — impacto humano y contexto social). Requiere
+              exactamente 3 modelos seleccionados
+              {selectedCount !== 3 ? (
+                <> — actualmente tenés <strong>{selectedCount}</strong>, así que no tiene efecto todavía</>
+              ) : (
+                "."
+              )}
+            </span>
+          </div>
           <div className="researchPatternList">
             <article>
               <strong>Apps/conectores estilo ChatGPT</strong>
@@ -2077,7 +2223,7 @@ function SettingsDrawer({
    ========================================================= */
 
 function ThinkingStage({
-  models, synthesisActivity, streamError, runPhase, elapsedMs, onOpenModelResponse, onStop, fileProposals, onApplyProposal, onRejectProposal, tokenUsage, debateRounds,
+  models, synthesisActivity, streamError, runPhase, elapsedMs, onOpenModelResponse, onStop, fileProposals, onApplyProposal, onRejectProposal, onApplyProposalGroup, onRejectProposalGroup, tokenUsage, debateRounds, magiPersonas,
 }: {
   models: RunModel[];
   synthesisActivity: string;
@@ -2089,8 +2235,11 @@ function ThinkingStage({
   fileProposals: FileProposalState[];
   onApplyProposal: (id: string) => void;
   onRejectProposal: (id: string) => void;
+  onApplyProposalGroup: (groupId: string) => void;
+  onRejectProposalGroup: (groupId: string) => void;
   tokenUsage: TokenUsage;
   debateRounds: DebateRoundInfo[];
+  magiPersonas: Record<string, { key: string; name: string; title: string }>;
 }) {
   const isStreaming = runPhase !== "done";
   const timelineMessage = streamError
@@ -2143,14 +2292,20 @@ function ThinkingStage({
         ]}
         nodes={models.map((model) => ({
           id: model.id,
-          label: model.label,
+          label: magiPersonas[model.id]?.name.toUpperCase() ?? model.label,
           badge: model.badge,
           state: nodeStateFor(model, runPhase),
         }))}
       />
 
       {fileProposals.length ? (
-        <FileProposalsPanel proposals={fileProposals} onApply={onApplyProposal} onReject={onRejectProposal} />
+        <FileProposalsPanel
+          proposals={fileProposals}
+          onApply={onApplyProposal}
+          onReject={onRejectProposal}
+          onApplyGroup={onApplyProposalGroup}
+          onRejectGroup={onRejectProposalGroup}
+        />
       ) : null}
 
       <div className="timelineHead">
@@ -2230,11 +2385,22 @@ function FileProposalsPanel({
   proposals,
   onApply,
   onReject,
+  onApplyGroup,
+  onRejectGroup,
 }: {
   proposals: FileProposalState[];
   onApply: (id: string) => void;
   onReject: (id: string) => void;
+  onApplyGroup: (groupId: string) => void;
+  onRejectGroup: (groupId: string) => void;
 }) {
+  const groups = new Map<string, FileProposalState[]>();
+  for (const proposal of proposals) {
+    const list = groups.get(proposal.groupId) ?? [];
+    list.push(proposal);
+    groups.set(proposal.groupId, list);
+  }
+
   return (
     <div className="fileProposalsPanel">
       <div className="fileProposalsHeader">
@@ -2242,33 +2408,83 @@ function FileProposalsPanel({
         <strong>Cambios de archivos propuestos</strong>
         <span>{proposals.filter((p) => p.status === "pending").length} esperando revisión</span>
       </div>
-      {proposals.map((proposal) => (
-        <article key={proposal.id} className={`fileProposalCard status-${proposal.status}`}>
-          <header>
-            <span className="fileProposalKind">{proposal.kind === "write" ? "Escribir" : "Editar"}</span>
-            <code className="fileProposalPath">{proposal.path}</code>
-            <span className="fileProposalStatus">
-              {proposal.status === "pending" && "Pendiente"}
-              {proposal.status === "applying" && "Aplicando…"}
-              {proposal.status === "applied" && "Aplicado"}
-              {proposal.status === "rejected" && "Descartado"}
-              {proposal.status === "error" && `Error: ${proposal.error}`}
-            </span>
-          </header>
-          <DiffView diff={proposal.diff} />
-          {proposal.status === "pending" ? (
-            <div className="fileProposalActions">
-              <button type="button" className="applyButton" onClick={() => onApply(proposal.id)}>
-                <Check size={13} /> Aplicar
-              </button>
-              <button type="button" className="rejectButton" onClick={() => onReject(proposal.id)}>
-                <X size={13} /> Descartar
-              </button>
-            </div>
-          ) : null}
-        </article>
-      ))}
+      {[...groups.entries()].map(([groupId, group]) => {
+        const pendingInGroup = group.filter((p) => p.status === "pending");
+        const isMultiFile = group.length > 1;
+        return (
+          <div className="fileProposalGroup" key={groupId}>
+            {isMultiFile ? (
+              <div className="fileProposalGroupHeader">
+                <span>{group.length} archivos relacionados (mismo turno)</span>
+                {pendingInGroup.length ? (
+                  <div className="fileProposalActions">
+                    <button type="button" className="applyButton" onClick={() => onApplyGroup(groupId)}>
+                      <Check size={13} /> Aplicar todo
+                    </button>
+                    <button type="button" className="rejectButton" onClick={() => onRejectGroup(groupId)}>
+                      <X size={13} /> Descartar todo
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {group.map((proposal) => (
+              <article key={proposal.id} className={`fileProposalCard status-${proposal.status}`}>
+                <header>
+                  <span className="fileProposalKind">{proposal.kind === "write" ? "Escribir" : "Editar"}</span>
+                  <code className="fileProposalPath">{proposal.path}</code>
+                  <TypeCheckBadge typeCheck={proposal.typeCheck} />
+                  <span className="fileProposalStatus">
+                    {proposal.status === "pending" && "Pendiente"}
+                    {proposal.status === "applying" && "Aplicando…"}
+                    {proposal.status === "applied" && "Aplicado"}
+                    {proposal.status === "rejected" && "Descartado"}
+                    {proposal.status === "error" && `Error: ${proposal.error}`}
+                  </span>
+                </header>
+                <DiffView diff={proposal.diff} />
+                {proposal.typeCheck.status === "error" && proposal.typeCheck.errors?.length ? (
+                  <pre className="typeCheckErrors">{proposal.typeCheck.errors.join("\n")}</pre>
+                ) : null}
+                {proposal.status === "pending" ? (
+                  <div className="fileProposalActions">
+                    <button type="button" className="applyButton" onClick={() => onApply(proposal.id)}>
+                      <Check size={13} /> Aplicar
+                    </button>
+                    <button type="button" className="rejectButton" onClick={() => onReject(proposal.id)}>
+                      <X size={13} /> Descartar
+                    </button>
+                  </div>
+                ) : null}
+              </article>
+            ))}
+          </div>
+        );
+      })}
     </div>
+  );
+}
+
+function TypeCheckBadge({ typeCheck }: { typeCheck: TypeCheckResult }) {
+  if (typeCheck.status === "skipped") return null;
+  if (typeCheck.status === "checking") {
+    return (
+      <span className="typeCheckBadge checking" title="Verificando tipos con tsc…">
+        <Loader2 size={11} className="spin" /> Verificando
+      </span>
+    );
+  }
+  if (typeCheck.status === "ok") {
+    return (
+      <span className="typeCheckBadge ok" title="tsc --noEmit no encontró errores">
+        <Check size={11} /> Compila
+      </span>
+    );
+  }
+  return (
+    <span className="typeCheckBadge error" title={typeCheck.errors?.join("\n") || "tsc encontró errores"}>
+      <AlertTriangle size={11} /> {typeCheck.errors?.length ?? 0} error{(typeCheck.errors?.length ?? 0) === 1 ? "" : "es"}
+    </span>
   );
 }
 
@@ -2324,11 +2540,13 @@ function DebateView({
   debateRounds,
   votes,
   voteTally,
+  magiPersonas,
 }: {
   models: RunModel[];
   debateRounds: DebateRoundInfo[];
   votes: VoteCastInfo[];
   voteTally: VoteTallyInfo | null;
+  magiPersonas: Record<string, { key: string; name: string; title: string }>;
 }) {
   const debaters = models.filter((m) => m.critique || m.revisedAnswer);
   if (!debaters.length) {
@@ -2370,6 +2588,11 @@ function DebateView({
               <div className="modelPill">
                 <ModelBadge model={model} small />
                 <strong>{model.label}</strong>
+                {magiPersonas[model.id] ? (
+                  <span className="magiPersonaBadge" title={magiPersonas[model.id].title}>
+                    {magiPersonas[model.id].name}
+                  </span>
+                ) : null}
               </div>
               <span className="debateBadge">
                 <MessageSquareQuote size={13} />
@@ -2698,7 +2921,7 @@ function TribunalView({
 
 
 function ResultsDashboard({
-  models, query, synthesis, fusionJudge, fusionPanelId, followUps, generatedImages, imageStatus, onOpenModal, onRunFollowup, tokenUsage,
+  models, query, synthesis, fusionJudge, fusionPanelId, followUps, generatedImages, imageStatus, onOpenModal, onRunFollowup, tokenUsage, tokenBreakdown,
 }: {
   models: RunModel[];
   query: string;
@@ -2711,6 +2934,7 @@ function ResultsDashboard({
   onOpenModal: (id: string) => void;
   onRunFollowup: (query: string) => void;
   tokenUsage: TokenUsage;
+  tokenBreakdown: Array<{ phase: string; modelId?: string; label?: string; usage: TokenUsage }>;
 }) {
   const useDemoTables = query.trim() === DEFAULT_QUERY;
   const activePanel = FUSION_PANELS.find((panel) => panel.id === fusionPanelId);
@@ -2888,6 +3112,33 @@ function ResultsDashboard({
         </>
       ) : null}
 
+      {fusionJudge?.contradictions?.length ? (
+        <section className="resultSection">
+          <h3><Gavel size={14} /> Mapa de desacuerdo</h3>
+          <p style={{ color: "var(--muted)", margin: "-4px 0 6px", fontSize: 13 }}>
+            Puntos concretos donde el panel no coincidió, con la posición de cada modelo y cómo lo resolvió el juez.
+          </p>
+          <div className="disagreementMap">
+            {fusionJudge.contradictions.map((item, index) => (
+              <article className="disagreementCard" key={index}>
+                <h4>{item.topic}</h4>
+                <div className="disagreementPositions">
+                  {Object.entries(item.positions).map(([modelLabel, position]) => (
+                    <div className="disagreementPosition" key={modelLabel}>
+                      <strong>{modelLabel}</strong>
+                      <span>{position}</span>
+                    </div>
+                  ))}
+                </div>
+                <p className="disagreementJudgment"><Trophy size={12} /> {item.judgment}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {tokenBreakdown.length ? <TokenBreakdownSection breakdown={tokenBreakdown} /> : null}
+
       <section className="resultSection">
         <h3>Respuestas individuales</h3>
         <div className="modelResponseButtons">
@@ -2916,6 +3167,50 @@ function ResultsDashboard({
         )}
       </section>
     </div>
+  );
+}
+
+/**
+ * Groups the run's raw per-event token usage by phase (draft/debate/vote/
+ * judge/synthesis/...) so it's obvious which STEP is actually expensive —
+ * e.g. the vote step sends every candidate's full answer to every voter, an
+ * O(n²)-ish prompt cost that's easy to miss when only a single grand total
+ * is shown.
+ */
+function TokenBreakdownSection({ breakdown }: { breakdown: Array<{ phase: string; modelId?: string; label?: string; usage: TokenUsage }> }) {
+  const byPhase = new Map<string, { prompt: number; completion: number; total: number; calls: number }>();
+  for (const entry of breakdown) {
+    const current = byPhase.get(entry.phase) ?? { prompt: 0, completion: 0, total: 0, calls: 0 };
+    current.prompt += entry.usage.prompt_tokens ?? 0;
+    current.completion += entry.usage.completion_tokens ?? 0;
+    current.total += entry.usage.total_tokens ?? 0;
+    current.calls += 1;
+    byPhase.set(entry.phase, current);
+  }
+  const rows = [...byPhase.entries()].sort((a, b) => b[1].total - a[1].total);
+  const grandTotal = rows.reduce((sum, [, v]) => sum + v.total, 0) || 1;
+
+  return (
+    <section className="resultSection">
+      <h3>Desglose de tokens por paso</h3>
+      <p style={{ color: "var(--muted)", margin: "-4px 0 6px", fontSize: 13 }}>
+        Qué parte de la corrida consumió más — por ejemplo, el paso de votación manda la respuesta completa de cada
+        modelo a cada votante, así que suele pesar más de lo que parece.
+      </p>
+      <div className="tokenBreakdownList">
+        {rows.map(([phase, v]) => (
+          <div className="tokenBreakdownRow" key={phase}>
+            <span className="tokenBreakdownPhase">{phase}</span>
+            <div className="tokenBreakdownBarTrack">
+              <div className="tokenBreakdownBarFill" style={{ width: `${(v.total / grandTotal) * 100}%` }} />
+            </div>
+            <span className="tokenBreakdownValue">
+              {formatTokens(v.total)} <em>({v.calls} llamada{v.calls === 1 ? "" : "s"} · {formatTokens(v.prompt)} prompt / {formatTokens(v.completion)} completion)</em>
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
