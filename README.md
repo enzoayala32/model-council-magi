@@ -20,15 +20,35 @@ Podés inspeccionar cada fase en la UI, ver el **desglose de tokens por paso** (
 
 ---
 
-## Modo MAGI
+## Modo adaptativo
 
-Con **exactamente 3 modelos** seleccionados, podés activar "Modo MAGI" en Ajustes → Investigación. Le asigna a cada asiento una lente analítica fija, inspirada en el sistema del mismo nombre:
+Activá "Modo adaptativo" en Ajustes → Investigación para que el consejo no debata a ciegas. Antes de arrancar el debate, mide cuánto coinciden ya los borradores independientes (misma heurística léxica top-K que la detección de convergencia mid-debate, pero con un umbral más estricto — 35% en vez de 25% — porque saltar el debate entero es una decisión más grande que solo cortar uno que ya viene convergiendo). Si el acuerdo supera el umbral, se salta tanto el debate como la votación final y va directo a la síntesis, ahorrando esas llamadas cuando el panel ya estaba de acuerdo desde el arranque. Si no, corre el debate normal (con las rondas y la votación configuradas). Cuando se salta, la pestaña Debate muestra el motivo (score de acuerdo y umbral) en vez de dejarla vacía sin explicación.
 
-- **Melchior** — la científica: rigor empírico, evidencia verificable, precisión técnica.
-- **Balthasar** — la guardiana: riesgo primero, quién puede salir perjudicado, consecuencias a largo plazo.
-- **Casper** — la defensora: impacto humano real, contexto social, la fricción práctica que una vista puramente técnica se pierde.
+Inspirado en el proyecto [`magi`](https://github.com/fshiori/magi) (protocolo "adaptive"), aunque con la heurística de similitud recalibrada — su versión usa Jaccard sobre el texto completo con un umbral de 0.8, que en la práctica rara vez dispara con respuestas largas de LLMs reales.
 
-Los modelos no "actúan" un personaje — el prompt les pide razonar explícitamente desde ese ángulo analítico, como una lente de revisión profesional, no un rol de ficción. Es una referencia estética a la franquicia (mismos nombres, mismo panel triangular), sin imitar diálogo ni personalidad de los personajes originales.
+---
+
+## Tracking de cambio de opinión
+
+Después de cada debate, la pestaña Debate muestra si cada modelo **se mantuvo firme** o **cambió de posición** respecto a su propio borrador inicial — comparando su draft independiente contra su respuesta final del debate (misma heurística de vocabulario top-K, pero ahora comparando a un modelo consigo mismo a través del tiempo, no contra los demás). El umbral (40% de similitud) se calibró aparte del resto: como un mismo autor reutiliza frases y estructura incluso cuando cambia de fondo, la autosimilitud de "se mantuvo firme" corre bastante más alta (~0.65-0.8) que la similitud entre modelos distintos — y cualquier cambio real de posición, sea total o parcial, cayó cerca de 0 en las pruebas.
+
+Inspirado en el mismo proyecto [`magi`](https://github.com/fshiori/magi) (que llama a esto `mind_changes`).
+
+---
+
+## Presets de personas del debate
+
+Con **exactamente 3 modelos** seleccionados, podés elegir un "Preset de personas del debate" en Ajustes → Investigación. Le asigna a cada asiento una lente analítica fija durante el debate — mismo asiento en el panel triangular, mismos nombres en los nodos MAGI, pero con distintos sets intercambiables según lo que estés evaluando:
+
+- **MAGI (Evangelion)** — Melchior (la científica: rigor empírico, evidencia verificable), Balthasar (la guardiana: riesgo primero, quién puede salir perjudicado), Casper (la defensora: impacto humano real, contexto social). El preset original, y el que le da nombre al panel.
+- **Code Review** — Security (piensa como atacante), Performance (qué se rompe a 100x escala), Quality (mantenibilidad a largo plazo).
+- **Research** — Methodologist (rigor del método), Domain Expert (consenso establecido del campo), Devil's Advocate (el mejor contraargumento posible).
+- **Writing** — Editor (estructura y economía), Reader (cómo lo vive el lector real), Fact-Checker (verificabilidad de cada dato).
+- **Strategy** — Optimist (mejor escenario), Pessimist (peor escenario, riesgos de segundo orden), Pragmatist (qué es realmente ejecutable con los recursos reales).
+
+Los modelos no "actúan" un personaje — el prompt les pide razonar explícitamente desde ese ángulo analítico, como una lente de revisión profesional, no un rol de ficción.
+
+Inspirado en el proyecto [`magi`](https://github.com/fshiori/magi), que tiene el mismo concepto de presets intercambiables (`eva`, `code-review`, `research`, `writing`, `strategy`) — acá con los textos de cada lente reescritos para nuestro propio prompt de debate.
 
 Cuando está activo y hay una corrida en curso, el panel MAGI (triángulo, con exactamente 3 asientos) muestra **MELCHIOR / BALTHASAR / CASPER** en los nodos en vez del nombre del modelo — el asiento sigue siendo el mismo modelo por debajo, la persona es una capa de encuadre sobre el prompt, no un modelo distinto. Si tenés un conteo distinto de 3 modelos seleccionados, el toggle se queda activado pero sin efecto (te avisa en la nota), y vuelve a aplicarse solo apenas volvés a 3 — no hace falta reactivarlo.
 
