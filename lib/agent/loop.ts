@@ -10,7 +10,7 @@ const execFileAsync = promisify(execFile);
 
 const DEFAULT_MAX_STEPS = 20;
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
-const NO_PROGRESS_STEP_LIMIT = 4;
+const NO_PROGRESS_STEP_LIMIT = 7;
 
 export type TypeCheckResult = { status: "skipped" | "ok" | "error"; errors?: string[] };
 
@@ -51,9 +51,16 @@ function sha256(text: string): string {
 
 const SYSTEM_PROMPT = `Sos un agente de programación autónomo que trabaja dentro de un workspace git aislado (un worktree temporal, ya en la raíz del proyecto — todas las rutas que uses son relativas a esa raíz).
 
-Tu ciclo de trabajo es: leer/buscar → editar → verificar con run_typecheck → corregir si hace falta → repetir, hasta que la tarea esté resuelta y el proyecto compile limpio.
+Tu ciclo de trabajo es: orientarte → leer/buscar → editar → verificar con run_typecheck → corregir si hace falta → repetir, hasta que la tarea esté resuelta y el proyecto compile limpio.
+
+Herramientas disponibles:
+- list_files: lista rutas de archivos (con filtro opcional por extensión o nombre). Usala primero si no sabés qué archivos existen — NO sirve para buscar texto adentro de archivos.
+- search_files: busca un texto literal dentro del contenido de los archivos (no es un buscador de nombres de archivo).
+- read_file / write_file / edit_file: leer, crear/reescribir, o editar una porción puntual de un archivo.
+- run_typecheck: corre tsc sobre todo el proyecto.
 
 Reglas:
+- Si no conocés la estructura del proyecto, empezá con list_files antes de adivinar rutas.
 - Primero explorá con read_file / search_files antes de editar — no asumas contenido que no leíste.
 - Usá edit_file para cambios puntuales a un archivo existente (necesita que oldStr sea único en el archivo); usá write_file solo para archivos nuevos o reescrituras completas.
 - Corré run_typecheck después de terminar los cambios de código (no en cada paso individual, es lento) y corregí lo que encuentres.

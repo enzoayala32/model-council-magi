@@ -9,6 +9,7 @@ const execFileAsync = promisify(execFile);
 
 const MAX_READ_BYTES = 200_000;
 const MAX_SEARCH_RESULTS = 60;
+const MAX_LIST_RESULTS = 300;
 const MAX_TYPECHECK_OUTPUT = 20_000;
 const SKIP_DIRS = new Set(["node_modules", ".git", ".next", "dist", "build"]);
 
@@ -85,6 +86,33 @@ export type AgentToolEvent =
  */
 export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentToolEvent) => void) {
   return {
+    list_files: tool({
+      description:
+        "Lista los archivos del proyecto (rutas relativas), para orientarse antes de buscar o editar. No busca texto adentro de los archivos — para eso usá search_files. Podés filtrar por extensión o por un fragmento del nombre.",
+      inputSchema: z.object({
+        subPath: z.string().optional().describe("Subcarpeta relativa donde listar (opcional, por default toda la raíz del workspace)."),
+        extension: z.string().optional().describe("Filtrar solo archivos con esta extensión, por ejemplo 'ts' o '.tsx' (opcional)."),
+        nameContains: z.string().optional().describe("Filtrar solo archivos cuyo nombre contenga este texto (opcional)."),
+      }),
+      execute: async ({ subPath, extension, nameContains }) => {
+        try {
+          const listRoot = subPath ? await resolveSafePath(workspaceRoot, subPath) : workspaceRoot;
+          const ext = extension ? (extension.startsWith(".") ? extension : `.${extension}`) : undefined;
+          const files: string[] = [];
+          await walkFiles(workspaceRoot, listRoot, async (absPath) => {
+            const rel = path.relative(workspaceRoot, absPath);
+            if (ext && !rel.endsWith(ext)) return true;
+            if (nameContains && !path.basename(rel).toLowerCase().includes(nameContains.toLowerCase())) return true;
+            files.push(rel);
+            return files.length < MAX_LIST_RESULTS;
+          });
+          return { ok: true, files, truncated: files.length >= MAX_LIST_RESULTS };
+        } catch (error) {
+          return { ok: false, error: describeError(error, subPath ?? "") };
+        }
+      },
+    }),
+
     read_file: tool({
       description: "Lee el contenido de un archivo de texto dentro del workspace. Devuelve un error legible si el archivo no existe.",
       inputSchema: z.object({

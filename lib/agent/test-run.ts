@@ -24,7 +24,7 @@ for (const file of [".env.local", ".env"]) {
 }
 
 async function main() {
-  const task = process.argv.slice(2).join(" ").trim() || "En el archivo lib/models.ts, agregá un comentario arriba de COUNCIL_MODELS que diga '// probado por el coding agent' y nada más.";
+  const task = process.argv.slice(2).join(" ").trim() || "En el archivo lib/models.ts, agregá un comentario de una línea arriba de COUNCIL_MODELS que diga '// probado por el coding agent' y nada más. No busques ni crees ningún archivo nuevo — el archivo ya existe.";
 
   console.log("== Coding Agent — prueba aislada (Fase 1) ==\n");
 
