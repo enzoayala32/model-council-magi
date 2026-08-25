@@ -45,6 +45,17 @@ export type RunAgentLoopOptions = {
   modelId?: string;
 };
 
+const DEFAULT_CODING_MODEL = "nvidia/nemotron-3.5-lightning:free";
+
+/** Mismo criterio que usa `runAgentLoop` por default — separado para que
+ * quien dispare la corrida (ej. `test-run.ts`) pueda loguear el modelo
+ * resuelto ANTES de arrancar, y así confirmar de entrada que el override
+ * por `.env` (`OPENROUTER_CODING_MODEL`) surtió efecto o no. */
+export function resolveCodingModelId(): { modelId: string; source: "env" | "default" } {
+  const fromEnv = process.env.OPENROUTER_CODING_MODEL;
+  return fromEnv ? { modelId: fromEnv, source: "env" } : { modelId: DEFAULT_CODING_MODEL, source: "default" };
+}
+
 function sha256(text: string): string {
   return crypto.createHash("sha256").update(text, "utf-8").digest("hex");
 }
@@ -95,7 +106,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
     repoRoot,
     maxSteps = DEFAULT_MAX_STEPS,
     timeoutMs = DEFAULT_TIMEOUT_MS,
-    modelId = process.env.OPENROUTER_CODING_MODEL ?? "nvidia/nemotron-3.5-lightning:free",
+    modelId = resolveCodingModelId().modelId,
   } = options;
 
   const transcript: string[] = [];
@@ -131,9 +142,18 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
         for (const part of step.content) {
           if (part.type === "tool-call") transcript.push(`🔧 ${part.toolName}(${JSON.stringify(part.input).slice(0, 200)})`);
           if (part.type === "tool-result") {
-            const output = part.output as { ok?: boolean; error?: string; success?: boolean } | undefined;
+            const output = part.output as { ok?: boolean; error?: string; success?: boolean; output?: string } | undefined;
             if (part.toolName === "run_typecheck" && output && typeof output.success === "boolean") {
               lastTypeCheckOk = output.success;
+              // `run_typecheck` siempre devuelve ok:true (la llamada en sí no
+              // "falla"), así que sin esto nunca se ve SI tsc pasó o no, ni
+              // por qué — quedaba igual de invisible que el bug de edit_file
+              // que motivó el logueo de errores de más arriba.
+              transcript.push(
+                output.success
+                  ? "✅ run_typecheck: compila limpio"
+                  : `❌ run_typecheck: hay errores —\n${(output.output ?? "").split("\n").slice(0, 15).join("\n")}`,
+              );
             }
             // Sin esto, una tool que falla de forma "prolija" (ok: false, con
             // error legible) queda invisible en el transcript — solo se ve

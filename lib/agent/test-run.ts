@@ -8,7 +8,7 @@
  * (o sin argumento, usa una tarea de prueba por default.)
  */
 import { createAgentWorkspace, destroyAgentWorkspace, sweepOrphanedWorkspaces } from "./workspace";
-import { runAgentLoop } from "./loop";
+import { runAgentLoop, resolveCodingModelId } from "./loop";
 
 // A diferencia de `next dev` (que carga .env / .env.local solo), este
 // script corre por fuera de Next.js — nadie carga el .env automáticamente
@@ -28,6 +28,9 @@ async function main() {
 
   console.log("== Coding Agent — prueba aislada (Fase 1) ==\n");
 
+  const { modelId, source } = resolveCodingModelId();
+  console.log(`Modelo: ${modelId} (${source === "env" ? "de OPENROUTER_CODING_MODEL en .env" : "default — no hay OPENROUTER_CODING_MODEL en .env"})\n`);
+
   const { swept } = await sweepOrphanedWorkspaces();
   if (swept.length) console.log(`Barrido de arranque: se limpiaron ${swept.length} workspace(s) huérfano(s).\n`);
 
@@ -44,6 +47,7 @@ async function main() {
       task,
       workspaceRoot: workspace.worktreePath,
       repoRoot: workspace.repoRoot,
+      modelId,
     });
 
     console.log("--- Transcript ---");

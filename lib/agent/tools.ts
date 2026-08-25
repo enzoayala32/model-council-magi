@@ -236,10 +236,14 @@ export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentTo
       inputSchema: z.object({}),
       execute: async () => {
         try {
+          // En Windows, npx en realidad es npx.cmd — execFile sin shell:true
+          // no lo resuelve (falla con "spawn npx ENOENT"), aunque en
+          // Linux/Mac funcione directo. shell:true anda en ambos.
           const { stdout, stderr } = await execFileAsync("npx", ["tsc", "--noEmit"], {
             cwd: workspaceRoot,
             maxBuffer: 16 * 1024 * 1024,
             timeout: 120_000,
+            shell: true,
           });
           const output = (stdout + stderr).trim();
           return { ok: true, success: true, output: output.slice(0, MAX_TYPECHECK_OUTPUT) };
