@@ -49,12 +49,23 @@ export async function createAgentWorkspace(taskId: string): Promise<AgentWorkspa
   // `run_typecheck` correría contra un tsc "pelado" sin @types/* ni el
   // resto de las dependencias, y el veredicto no serviría de nada.
   // Symlink, no copia: son las mismas dependencias, no hace falta duplicar.
+  // En Windows, un symlink de directorio ("dir") requiere modo Desarrollador
+  // o una consola elevada — una "junction" (NTFS) no necesita ninguno de
+  // los dos, así que la usamos ahí en vez de pelear con permisos.
   const nodeModulesPath = path.join(repoRoot, "node_modules");
   const hasNodeModules = await fs.stat(nodeModulesPath).then(() => true).catch(() => false);
   if (hasNodeModules) {
-    await fs.symlink(nodeModulesPath, path.join(worktreePath, "node_modules"), "dir").catch(() => {
-      // Best-effort — si falla (ej. ya existe), run_typecheck simplemente va a fallar más claro después.
-    });
+    const symlinkType = process.platform === "win32" ? "junction" : "dir";
+    try {
+      await fs.symlink(nodeModulesPath, path.join(worktreePath, "node_modules"), symlinkType);
+    } catch (error) {
+      // No lo tragamos en silencio: sin esto, run_typecheck va a fallar con
+      // errores confusos y sin relación con el cambio real del agente.
+      console.warn(
+        `[coding-agent] No se pudo enlazar node_modules al workspace (${error instanceof Error ? error.message : error}). ` +
+          `run_typecheck puede fallar con errores que no tienen que ver con el cambio real.`,
+      );
+    }
   }
 
   return { taskId, worktreePath, branchName, repoRoot, createdAt: Date.now() };

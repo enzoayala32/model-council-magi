@@ -210,12 +210,22 @@ async function buildProposals(repoRoot: string, workspaceRoot: string, lastTypeC
  * lo renderice igual sin cambios. Copia self-contained a propósito — el
  * Coding Agent no importa nada de fs-tools.ts. */
 function buildDiff(oldText: string, newText: string, relPath: string, isNew: boolean): string {
+  // `git show HEAD:path` devuelve el blob crudo (LF), pero en Windows el
+  // checkout real del worktree suele tener CRLF (core.autocrlf) — sin
+  // normalizar acá, CADA línea se ve "distinta" (un \r de más) y el diff
+  // muestra el archivo entero como borrado+reescrito. Esto es solo para
+  // la comparación/visualización: `nextContent` en la propuesta sigue
+  // siendo el contenido real tal cual quedó en el worktree.
+  const normalize = (text: string) => text.replace(/\r\n/g, "\n");
+  const normalizedOld = normalize(oldText);
+  const normalizedNew = normalize(newText);
+
   if (isNew) {
-    const body = newText.split("\n").map((line) => `+${line}`).join("\n");
+    const body = normalizedNew.split("\n").map((line) => `+${line}`).join("\n");
     return `--- /dev/null\n+++ ${relPath}\n${body}`;
   }
-  const oldLines = oldText.split("\n");
-  const newLines = newText.split("\n");
+  const oldLines = normalizedOld.split("\n");
+  const newLines = normalizedNew.split("\n");
   const ops = diffLines(oldLines, newLines);
   const out: string[] = [`--- ${relPath}`, `+++ ${relPath}`];
   for (const op of ops) {
