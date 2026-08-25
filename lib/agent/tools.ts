@@ -164,14 +164,28 @@ export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentTo
         try {
           const abs = await resolveSafePath(workspaceRoot, relPath);
           const original = await fs.readFile(abs, "utf-8");
-          const occurrences = original.split(oldStr).length - 1;
+
+          // El modelo siempre escribe oldStr/newStr con \n puro — nunca \r\n,
+          // ni aunque el archivo real lo tenga. En Windows (core.autocrlf)
+          // el checkout real suele tener CRLF, así que cualquier oldStr que
+          // cruce un salto de línea nunca matchearía comparando tal cual.
+          // Matcheamos sobre versiones normalizadas a LF, y si el archivo
+          // original era CRLF, devolvemos el resultado a CRLF al guardar —
+          // así no cambiamos el estilo de fin de línea del archivo.
+          const isCRLF = original.includes("\r\n");
+          const normalizedOriginal = isCRLF ? original.replace(/\r\n/g, "\n") : original;
+          const normalizedOldStr = oldStr.replace(/\r\n/g, "\n");
+          const normalizedNewStr = newStr.replace(/\r\n/g, "\n");
+
+          const occurrences = normalizedOriginal.split(normalizedOldStr).length - 1;
           if (occurrences === 0) {
             return { ok: false, error: `oldStr no se encontró en ${relPath}. Releé el archivo con read_file y ajustá el texto.` };
           }
           if (occurrences > 1) {
             return { ok: false, error: `oldStr aparece ${occurrences} veces en ${relPath} — agregá más contexto para que sea único.` };
           }
-          const updated = original.replace(oldStr, newStr);
+          const normalizedUpdated = normalizedOriginal.replace(normalizedOldStr, normalizedNewStr);
+          const updated = isCRLF ? normalizedUpdated.replace(/\n/g, "\r\n") : normalizedUpdated;
           await fs.writeFile(abs, updated, "utf-8");
           onEvent({ type: "file_edited", relPath });
           return { ok: true };

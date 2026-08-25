@@ -9,6 +9,12 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# SQLite local (historial de hilos) — nunca versionar, es data del usuario
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+
 # Editor / agent state
 .claude/
 .playwright-mcp/

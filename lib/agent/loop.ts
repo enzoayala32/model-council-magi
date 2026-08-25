@@ -10,7 +10,7 @@ const execFileAsync = promisify(execFile);
 
 const DEFAULT_MAX_STEPS = 20;
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
-const NO_PROGRESS_STEP_LIMIT = 7;
+const NO_PROGRESS_STEP_LIMIT = 10;
 
 export type TypeCheckResult = { status: "skipped" | "ok" | "error"; errors?: string[] };
 
@@ -130,9 +130,19 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
         if (step.text) transcript.push(`💬 ${step.text.slice(0, 300)}`);
         for (const part of step.content) {
           if (part.type === "tool-call") transcript.push(`🔧 ${part.toolName}(${JSON.stringify(part.input).slice(0, 200)})`);
-          if (part.type === "tool-result" && part.toolName === "run_typecheck") {
-            const output = part.output as { success?: boolean } | undefined;
-            if (output && typeof output.success === "boolean") lastTypeCheckOk = output.success;
+          if (part.type === "tool-result") {
+            const output = part.output as { ok?: boolean; error?: string; success?: boolean } | undefined;
+            if (part.toolName === "run_typecheck" && output && typeof output.success === "boolean") {
+              lastTypeCheckOk = output.success;
+            }
+            // Sin esto, una tool que falla de forma "prolija" (ok: false, con
+            // error legible) queda invisible en el transcript — solo se ve
+            // la llamada, nunca por qué no funcionó. Esto es justamente lo
+            // que hacía imposible diagnosticar un edit_file fallido a
+            // distancia con solo el log del usuario.
+            if (output && output.ok === false) {
+              transcript.push(`❌ ${part.toolName} falló: ${output.error ?? "sin detalle"}`);
+            }
           }
         }
       },
