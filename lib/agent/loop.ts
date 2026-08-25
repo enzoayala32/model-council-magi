@@ -88,7 +88,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
     repoRoot,
     maxSteps = DEFAULT_MAX_STEPS,
     timeoutMs = DEFAULT_TIMEOUT_MS,
-    modelId = process.env.OPENROUTER_CODING_MODEL ?? "openai/gpt-oss-20b:free",
+    modelId = process.env.OPENROUTER_CODING_MODEL ?? "nvidia/nemotron-3.5-lightning:free",
   } = options;
 
   const transcript: string[] = [];

@@ -10,6 +10,19 @@
 import { createAgentWorkspace, destroyAgentWorkspace, sweepOrphanedWorkspaces } from "./workspace";
 import { runAgentLoop } from "./loop";
 
+// A diferencia de `next dev` (que carga .env / .env.local solo), este
+// script corre por fuera de Next.js — nadie carga el .env automáticamente
+// acá. Probamos .env.local primero (así Next.js prioriza overrides locales)
+// y después .env; si ninguno existe, seguimos igual — buildOpenRouterModel
+// va a tirar un error claro si de verdad falta la key.
+for (const file of [".env.local", ".env"]) {
+  try {
+    process.loadEnvFile(file);
+  } catch {
+    // no existe ese archivo puntual — probamos el siguiente
+  }
+}
+
 async function main() {
   const task = process.argv.slice(2).join(" ").trim() || "En el archivo lib/models.ts, agregá un comentario arriba de COUNCIL_MODELS que diga '// probado por el coding agent' y nada más.";
 
