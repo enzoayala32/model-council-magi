@@ -74,7 +74,7 @@ async function testTypeScriptRecovery(repoRoot: string): Promise<TestReport> {
   console.log(`Tarea: ${task}\n`);
 
   const taskId = `stress-test1-${Date.now()}`;
-  const workspace = await createAgentWorkspace(taskId);
+  const workspace = await createAgentWorkspace(taskId, repoRoot);
   let result: AgentLoopResult | null = null;
   try {
     result = await runAgentLoop({ task, workspaceRoot: workspace.worktreePath, repoRoot: workspace.repoRoot });
@@ -124,14 +124,14 @@ async function testTypeScriptRecovery(repoRoot: string): Promise<TestReport> {
 }
 
 /** PRUEBA 2 — Modificación de múltiples archivos relacionados. */
-async function testMultiFile(): Promise<TestReport> {
+async function testMultiFile(repoRoot: string): Promise<TestReport> {
   printTestHeader("PRUEBA 2 — Modificación de múltiples archivos");
   const task =
     'En la carpeta agent-stress-out/ (creala si no existe), creá dos archivos: agent-stress-out/stress-utils.ts que exporte `export function double(n: number): number { return n * 2; }`, y agent-stress-out/stress-main.ts que importe `double` desde "./stress-utils" y haga `console.log(double(21));`. Ejecutá run_typecheck para confirmar que ambos archivos compilan juntos sin errores, y corregí cualquier error que encuentres. No toques ningún otro archivo del proyecto.';
   console.log(`Tarea: ${task}\n`);
 
   const taskId = `stress-test2-${Date.now()}`;
-  const workspace = await createAgentWorkspace(taskId);
+  const workspace = await createAgentWorkspace(taskId, repoRoot);
   try {
     const result = await runAgentLoop({ task, workspaceRoot: workspace.worktreePath, repoRoot: workspace.repoRoot });
     for (const line of result.transcript) console.log(line);
@@ -176,14 +176,14 @@ async function testMultiFile(): Promise<TestReport> {
  * de "completar" la tarea de verdad, así que tiene que terminar por
  * alguno de los límites explícitos (no_progress, max_steps, timeout),
  * nunca colgado. */
-async function testNoProgressLimits(): Promise<TestReport> {
+async function testNoProgressLimits(repoRoot: string): Promise<TestReport> {
   printTestHeader("PRUEBA 3 — Tarea imposible / falta de progreso");
   const task =
     "Buscá y arreglá un bug en el archivo agent-stress-out/ARCHIVO_QUE_NO_EXISTE_STRESS_TEST_12345.ts. Ese archivo definitivamente existe en algún lado del proyecto — si no lo encontrás a la primera, seguí buscando de otras formas (otros nombres, otras carpetas) hasta encontrarlo.";
   console.log(`Tarea (deliberadamente imposible): ${task}\n`);
 
   const taskId = `stress-test3-${Date.now()}`;
-  const workspace = await createAgentWorkspace(taskId);
+  const workspace = await createAgentWorkspace(taskId, repoRoot);
   const before = Date.now();
   try {
     const result = await runAgentLoop({ task, workspaceRoot: workspace.worktreePath, repoRoot: workspace.repoRoot });
@@ -235,10 +235,10 @@ async function callTool<T>(toolDef: unknown, input: unknown): Promise<T> {
   return execute(input, {});
 }
 
-async function testWorkspaceSecurity(): Promise<TestReport> {
+async function testWorkspaceSecurity(repoRoot: string): Promise<TestReport> {
   printTestHeader("PRUEBA 4 — Seguridad del workspace");
   const taskId = `stress-test4-security-${Date.now()}`;
-  const workspace = await createAgentWorkspace(taskId);
+  const workspace = await createAgentWorkspace(taskId, repoRoot);
   const tools = createAgentTools(workspace.worktreePath, () => {});
   const vectors: Array<{ name: string; blocked: boolean; detail: string }> = [];
 
@@ -389,15 +389,15 @@ async function main() {
     console.log('"agent-stress-out/" NO está gitignorada en esta máquina — cualquier proposal faltante en Pruebas 1/2 sería un bug real, no este caso conocido.');
   }
 
-  const { swept } = await sweepOrphanedWorkspaces();
+  const { swept } = await sweepOrphanedWorkspaces(repoRoot);
   if (swept.length) console.log(`Barrido de arranque: se limpiaron ${swept.length} workspace(s) huérfano(s).`);
 
   const reports: TestReport[] = [];
 
   reports.push(await testTypeScriptRecovery(repoRoot));
-  reports.push(await testMultiFile());
-  reports.push(await testNoProgressLimits());
-  reports.push(await testWorkspaceSecurity());
+  reports.push(await testMultiFile(repoRoot));
+  reports.push(await testNoProgressLimits(repoRoot));
+  reports.push(await testWorkspaceSecurity(repoRoot));
   reports.push(await testProjectIntegrity(repoRoot, statusBefore));
 
   console.log(`\n\n${"#".repeat(70)}`);

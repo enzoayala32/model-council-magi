@@ -29,6 +29,22 @@ function createConnection(): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_threads_updated_at ON threads(updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_threads_favorite ON threads(favorite);
+
+    -- Fase 2A del Coding Agent: proyectos externos sobre los que puede
+    -- trabajar el agente. Separada conceptualmente de "threads" (que es el
+    -- historial del Council) aunque comparta el mismo archivo .db — ver
+    -- diseño de Fase 2 (persistencia, decisión 4).
+    CREATE TABLE IF NOT EXISTS agent_projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      local_path TEXT NOT NULL,
+      is_git_repo INTEGER NOT NULL,
+      archived INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      last_used_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_projects_archived ON agent_projects(archived);
   `);
   return db;
 }

@@ -25,20 +25,32 @@ async function run(cwd: string, command: string, args: string[]) {
   return execFileAsync(command, args, { cwd, maxBuffer: 16 * 1024 * 1024 });
 }
 
-/** Raíz del repo git real (donde vive `.git`), no `AGENT_FS_ROOT`. */
-export async function getRepoRoot(): Promise<string> {
-  const { stdout } = await run(process.cwd(), "git", ["rev-parse", "--show-toplevel"]);
+/** Raíz del repo git real que contiene `cwd` (donde vive `.git`), no
+ * `AGENT_FS_ROOT`. Sigue existiendo como utilidad standalone (la usa
+ * `test-run.ts` para probar el agente contra el propio repo de MAGI sin
+ * pasar por la abstracción `Project`) pero `createAgentWorkspace` ya NO la
+ * llama internamente — a partir de Fase 2A recibe `repoRoot` explícito,
+ * resuelto por quien la invoque (típicamente `project.localPath` para
+ * proyectos git, ver `lib/agent/project-store.ts`). Esto es lo que permite
+ * que el Coding Agent trabaje sobre cualquier proyecto externo, no solo
+ * sobre MAGI. */
+export async function getRepoRoot(cwd: string = process.cwd()): Promise<string> {
+  const { stdout } = await run(cwd, "git", ["rev-parse", "--show-toplevel"]);
   return stdout.trim();
 }
 
 /**
  * Crea un worktree git nuevo y aislado, en una rama descartable
- * (`agent/<taskId>`), a partir de HEAD. El Coding Agent trabaja
- * exclusivamente dentro de `worktreePath` — nunca toca el checkout
+ * (`agent/<taskId>`), a partir de HEAD de `repoRoot`. El Coding Agent
+ * trabaja exclusivamente dentro de `worktreePath` — nunca toca el checkout
  * principal del usuario mientras itera.
+ *
+ * `repoRoot` es la raíz real del proyecto objetivo (`AgentProject.localPath`
+ * cuando `isGitRepo` es true) — nunca se asume `process.cwd()`. Para
+ * proyectos que NO son un repo git, no se usa esta función: ver el modo
+ * `"copy"` que se suma en Fase 2C.
  */
-export async function createAgentWorkspace(taskId: string): Promise<AgentWorkspace> {
-  const repoRoot = await getRepoRoot();
+export async function createAgentWorkspace(taskId: string, repoRoot: string): Promise<AgentWorkspace> {
   const worktreePath = path.join(WORKSPACE_ROOT, taskId);
   const branchName = `agent/${taskId}`;
 
@@ -91,9 +103,16 @@ export async function destroyAgentWorkspace(workspace: Pick<AgentWorkspace, "wor
  * que quedaron colgadas (crash del server, TTL vencido) sin que nadie
  * las haya limpiado. Se llama una vez al iniciar el server (o al empezar
  * el script de prueba), nunca en medio de una corrida activa.
+ *
+ * LIMITACIÓN CONOCIDA (Fase 2A): recibe un solo `repoRoot` porque hoy no
+ * hay todavía una tabla `agent_workspaces` persistida que diga a qué
+ * proyecto pertenece cada `taskId` huérfano bajo `WORKSPACE_ROOT` — eso
+ * llega en Fase 2C. Hasta entonces, este barrido solo puede limpiar
+ * worktrees huérfanos del `repoRoot` que se le pase (por ahora, el propio
+ * repo de MAGI vía `test-run.ts`); worktrees huérfanos de otros proyectos
+ * quedan sin barrer hasta 2C.
  */
-export async function sweepOrphanedWorkspaces(): Promise<{ swept: string[] }> {
-  const repoRoot = await getRepoRoot();
+export async function sweepOrphanedWorkspaces(repoRoot: string): Promise<{ swept: string[] }> {
   const swept: string[] = [];
 
   let entries: string[] = [];

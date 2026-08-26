@@ -7,7 +7,7 @@
  * Uso: npm run agent:test -- "tarea en texto libre"
  * (o sin argumento, usa una tarea de prueba por default.)
  */
-import { createAgentWorkspace, destroyAgentWorkspace, sweepOrphanedWorkspaces } from "./workspace";
+import { createAgentWorkspace, destroyAgentWorkspace, sweepOrphanedWorkspaces, getRepoRoot } from "./workspace";
 import { runAgentLoop, resolveCodingModelId } from "./loop";
 
 // A diferencia de `next dev` (que carga .env / .env.local solo), este
@@ -31,13 +31,20 @@ async function main() {
   const { modelId, source } = resolveCodingModelId();
   console.log(`Modelo: ${modelId} (${source === "env" ? "de OPENROUTER_CODING_MODEL en .env" : "default — no hay OPENROUTER_CODING_MODEL en .env"})\n`);
 
-  const { swept } = await sweepOrphanedWorkspaces();
+  // Este script de prueba sigue probando el agente contra el propio repo de
+  // MAGI (no pasa por la abstracción `Project` de Fase 2A) — por eso resuelve
+  // `repoRoot` acá mismo con `getRepoRoot()` en vez de leerlo de un proyecto
+  // registrado. `createAgentWorkspace`/`sweepOrphanedWorkspaces` ya no lo
+  // asumen solos.
+  const repoRoot = await getRepoRoot();
+
+  const { swept } = await sweepOrphanedWorkspaces(repoRoot);
   if (swept.length) console.log(`Barrido de arranque: se limpiaron ${swept.length} workspace(s) huérfano(s).\n`);
 
   const taskId = `test-${Date.now()}`;
   console.log(`Tarea: ${task}`);
   console.log(`Creando workspace aislado (${taskId})…`);
-  const workspace = await createAgentWorkspace(taskId);
+  const workspace = await createAgentWorkspace(taskId, repoRoot);
   console.log(`Worktree: ${workspace.worktreePath}`);
   console.log(`Rama descartable: ${workspace.branchName}\n`);
 
