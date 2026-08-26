@@ -45,6 +45,44 @@ function createConnection(): Database.Database {
       last_used_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_agent_projects_archived ON agent_projects(archived);
+
+    -- Fase 2B: CodingTask — una corrida puntual del Coding Agent sobre un
+    -- Project. Ver diseño de Fase 2, secciones 3, 7 y 8 (máquina de estados).
+    CREATE TABLE IF NOT EXISTS agent_tasks (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES agent_projects(id),
+      model_id TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      started_at INTEGER,
+      finished_at INTEGER,
+      base_commit TEXT,
+      workspace_id TEXT,
+      stop_reason TEXT,
+      error TEXT,
+      discard_reason TEXT,
+      conflicted_paths TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_tasks_project ON agent_tasks(project_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status);
+
+    -- Fase 2C: registro persistido de cada AgentWorkspace (worktree o copia
+    -- física) creado para una CodingTask. Relación 1:1 con agent_tasks
+    -- (id = task_id, sin id separado) — ver diseño de Fase 2, sección 4.
+    CREATE TABLE IF NOT EXISTS agent_workspaces (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES agent_tasks(id),
+      project_id TEXT NOT NULL REFERENCES agent_projects(id),
+      mode TEXT NOT NULL,
+      base_path TEXT NOT NULL,
+      worktree_path TEXT NOT NULL,
+      branch_name TEXT,
+      base_commit TEXT,
+      created_at INTEGER NOT NULL,
+      destroyed_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_workspaces_task ON agent_workspaces(task_id);
   `);
   return db;
 }

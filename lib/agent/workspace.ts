@@ -39,6 +39,15 @@ export async function getRepoRoot(cwd: string = process.cwd()): Promise<string> 
   return stdout.trim();
 }
 
+/** SHA de `HEAD` en `repoRoot` — usado como `baseCommit` de la task (ver
+ * diseño de Fase 2, sección 13: detección de conflictos al aplicar). Solo
+ * tiene sentido en modo `"worktree"` — en modo `"copy"` no hay git de por
+ * medio, el chequeo de conflictos usa un snapshot de hashes en su lugar. */
+export async function getHeadCommit(repoRoot: string): Promise<string> {
+  const { stdout } = await run(repoRoot, "git", ["rev-parse", "HEAD"]);
+  return stdout.trim();
+}
+
 /**
  * Crea un worktree git nuevo y aislado, en una rama descartable
  * (`agent/<taskId>`), a partir de HEAD de `repoRoot`. El Coding Agent
@@ -96,6 +105,60 @@ export async function destroyAgentWorkspace(workspace: Pick<AgentWorkspace, "wor
   await run(workspace.repoRoot, "git", ["branch", "-D", workspace.branchName]).catch(() => {
     // La rama puede no existir más si el worktree nunca se llegó a crear del todo — no es un error real.
   });
+}
+
+/**
+ * Copia un proyecto que NO es un repo git (o que tiene git pero sin ningún
+ * commit todavía, ver `detectIsGitRepo`) a una carpeta temporal aislada.
+ * Es el equivalente de `createAgentWorkspace` para el modo `"copy"` —
+ * la garantía que importa ("el agente nunca toca el proyecto real mientras
+ * trabaja") se cumple igual que con un worktree, solo que sin depender de
+ * git para lograrlo (ver diseño de Fase 2, sección 14).
+ *
+ * No copia `.git` (por si el directorio tiene git sin commits — no tiene
+ * sentido arrastrar un repo a medio inicializar) ni `node_modules` (se
+ * enlaza con symlink/junction, igual que en el modo worktree, para no
+ * duplicar dependencias pesadas).
+ */
+export async function createCopyWorkspace(taskId: string, basePath: string): Promise<AgentWorkspace> {
+  const worktreePath = path.join(WORKSPACE_ROOT, taskId);
+  await fs.mkdir(WORKSPACE_ROOT, { recursive: true });
+
+  await fs.cp(basePath, worktreePath, {
+    recursive: true,
+    filter: (source) => {
+      const base = path.basename(source);
+      return base !== ".git" && base !== "node_modules";
+    },
+  });
+
+  const nodeModulesPath = path.join(basePath, "node_modules");
+  const hasNodeModules = await fs.stat(nodeModulesPath).then(() => true).catch(() => false);
+  if (hasNodeModules) {
+    const symlinkType = process.platform === "win32" ? "junction" : "dir";
+    try {
+      await fs.symlink(nodeModulesPath, path.join(worktreePath, "node_modules"), symlinkType);
+    } catch (error) {
+      console.warn(
+        `[coding-agent] No se pudo enlazar node_modules al workspace (${error instanceof Error ? error.message : error}). ` +
+          `run_typecheck puede fallar con errores que no tienen que ver con el cambio real.`,
+      );
+    }
+  }
+
+  // `branchName`/`repoRoot` no aplican en modo copy (no hay git de por
+  // medio) — se dejan en `""`/`basePath` respectivamente; el wrapper de
+  // `workspace-manager.ts` es quien persiste el registro completo con el
+  // campo `mode`. Esta función de bajo nivel devuelve solo lo que necesita
+  // para funcionar como copia física.
+  return { taskId, worktreePath, branchName: "", repoRoot: basePath, createdAt: Date.now() };
+}
+
+/** Elimina la copia física de un workspace en modo `"copy"`. A diferencia
+ * de `destroyAgentWorkspace` no hay ningún comando git que correr — es un
+ * `rm -rf` directo sobre `worktreePath`, nunca sobre `basePath`. */
+export async function destroyCopyWorkspace(workspace: Pick<AgentWorkspace, "worktreePath">): Promise<void> {
+  await fs.rm(workspace.worktreePath, { recursive: true, force: true }).catch(() => {});
 }
 
 /**

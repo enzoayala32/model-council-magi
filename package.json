@@ -9,6 +9,8 @@
     "lint": "next lint",
     "agent:test": "tsx lib/agent/test-run.ts",
     "agent:test-project": "tsx lib/agent/test-project.ts",
+    "agent:test-task-state": "tsx lib/agent/test-task-state.ts",
+    "agent:test-workspace-manager": "tsx lib/agent/test-workspace-manager.ts",
     "agent:stress": "tsx lib/agent/stress-test.ts"
   },
   "dependencies": {
