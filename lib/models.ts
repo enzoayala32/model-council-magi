@@ -72,8 +72,14 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     maker: "OpenAI",
     accent: "#2563eb",
     logoUrl: "/model-logos/openai.svg",
-    description: "Open-weight OpenAI model with tool use and structured outputs — strong default all-rounder.",
-    defaultSelected: true,
+    // CONFIRMED DEAD as of 2026-08-26: OpenRouter now 404s this slug and
+    // says to use the paid "openai/gpt-oss-20b" instead — it's off the free
+    // collection entirely (checked openrouter.ai/collections/free-models
+    // live). No free OpenAI model currently exists on OpenRouter. Kept
+    // (not defaultSelected) so old references don't break; don't re-enable
+    // without re-checking the free collection first.
+    description: "Open-weight OpenAI model with tool use and structured outputs. NOTE: the :free slug is currently dead on OpenRouter (404) — not recommended to select.",
+    defaultSelected: false,
     defaultReasoningEffort: "medium",
     supportsImages: false,
   },
@@ -84,8 +90,13 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     maker: "Google DeepMind",
     accent: "#0f766e",
     logoUrl: "/model-logos/gemini.svg",
-    description: "Multimodal (text/image/video) instruction-tuned model with a 256K context window.",
-    defaultSelected: true,
+    // CONFIRMED DEAD as of 2026-08-26: no longer in OpenRouter's free
+    // collection (checked openrouter.ai/collections/free-models live) —
+    // the 429s in the 19:35 test run were the shared pool being congested
+    // on its way out, not a fluke. Kept (not defaultSelected) so old
+    // references don't break; don't re-enable without re-checking first.
+    description: "Multimodal (text/image/video) instruction-tuned model with a 256K context window. NOTE: the :free slug appears to be off OpenRouter's free tier currently — not recommended to select.",
+    defaultSelected: false,
     defaultReasoningEffort: "medium",
     supportsImages: true,
   },
@@ -124,6 +135,11 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     defaultSelected: false,
     defaultReasoningEffort: "medium",
     supportsImages: false,
+    // Observed live (2026-08-26 test run): this seat hit OpenRouter's shared
+    // free-pool 429 three times in a row with no success. Laguna XS is the
+    // same vendor's lighter model — not a different pool, but worth a shot
+    // before giving up the seat entirely.
+    fallbackModelId: "poolside/laguna-xs-2.1:free",
   },
   {
     id: "cohere/north-mini-code:free",
@@ -149,36 +165,103 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     defaultReasoningEffort: "medium",
     supportsImages: true,
   },
-  // ---- NVIDIA NIM native models (not on OpenRouter) ----
-  // Called directly via build.nvidia.com, not through OpenRouter — needs
-  // NVIDIA_API_KEY set in .env, otherwise selecting these will fail with a
-  // clear "NVIDIA_API_KEY is not configured" error. Not defaultSelected
-  // since the key is opt-in.
   {
-    id: "meta/llama-3.1-8b-instruct",
-    label: "Llama 3.1 8B",
-    shortName: "Llama",
-    maker: "Meta (via NVIDIA NIM)",
-    accent: "#0866ff",
+    id: "poolside/laguna-xs-2.1:free",
+    label: "Laguna XS 2.1",
+    shortName: "Laguna XS",
+    maker: "Poolside",
+    accent: "#a855f7",
     logoUrl: "",
-    description: "Meta's Llama 3.1 8B Instruct, called directly through NVIDIA NIM — a separate free quota from OpenRouter's shared pool. Smaller/faster than the 70B variant, picked after 3.3-70B consistently timed out on NVIDIA's free endpoint (likely capacity congestion on the larger model).",
+    description: "Lighter/faster sibling of Laguna S 2.1 (33B-A3B) for local, long-horizon agentic coding and terminal tasks. Confirmed live and free on OpenRouter as of Aug 2026.",
     defaultSelected: false,
     defaultReasoningEffort: "medium",
     supportsImages: false,
-    provider: "nvidia",
+    fallbackModelId: "cohere/north-mini-code:free",
   },
   {
-    id: "z-ai/glm-5.2",
+    id: "z-ai/glm-5.2:free",
     label: "GLM-5.2",
     shortName: "GLM",
-    maker: "Z.ai (via NVIDIA NIM)",
+    maker: "Z.ai",
     accent: "#7c5cff",
     logoUrl: "",
-    description: "Zhipu AI's flagship agentic/long-horizon reasoning model, called directly through NVIDIA NIM — a genuinely different vendor/perspective from the rest of the panel.",
+    description: "Zhipu AI's flagship agentic/long-horizon reasoning model, 1M context. Confirmed live and free directly on OpenRouter as of Aug 2026 — a genuinely different vendor/perspective from the rest of the panel. (Previously wired as an NVIDIA NIM native call under the ID \"z-ai/glm-5.2\", but NVIDIA's own catalog only has the older \"z-ai/glm5\" — that mismatch meant every call would have 404'd; moved to OpenRouter's confirmed-working free slug instead.)",
     defaultSelected: false,
     defaultReasoningEffort: "high",
     supportsImages: false,
-    provider: "nvidia",
+  },
+  {
+    id: "minimax/minimax-m3:free",
+    label: "MiniMax M3",
+    shortName: "MiniMax M3",
+    maker: "MiniMax",
+    accent: "#f97316",
+    logoUrl: "",
+    description: "Multimodal (text/image/video) foundation model, 1M context, built for long-horizon agentic work, coding, and tool use. Confirmed live and free on OpenRouter as of Aug 2026.",
+    defaultSelected: false,
+    defaultReasoningEffort: "medium",
+    supportsImages: true,
+  },
+  {
+    id: "minimax/minimax-m2.7:free",
+    label: "MiniMax M2.7",
+    shortName: "MiniMax M2.7",
+    maker: "MiniMax",
+    accent: "#fb923c",
+    logoUrl: "",
+    description: "Next-gen agentic model tuned for autonomous multi-step productivity work (debugging, financial modeling, document generation). Confirmed live and free on OpenRouter as of Aug 2026.",
+    defaultSelected: false,
+    defaultReasoningEffort: "high",
+    supportsImages: false,
+  },
+  {
+    id: "thinkingmachines/inkling:free",
+    label: "Inkling",
+    shortName: "Inkling",
+    maker: "Thinking Machines Lab",
+    accent: "#14b8a6",
+    logoUrl: "",
+    description: "Multimodal MoE (975B total / 41B active) for general reasoning, coding, agentic and tool-use systems, RAG, and multilingual conversation. Confirmed live and free on OpenRouter as of Aug 2026.",
+    defaultSelected: false,
+    defaultReasoningEffort: "medium",
+    supportsImages: true,
+    fallbackModelId: "thinkingmachines/inkling-small:free",
+  },
+  {
+    id: "thinkingmachines/inkling-small:free",
+    label: "Inkling Small",
+    shortName: "Inkling S",
+    maker: "Thinking Machines Lab",
+    accent: "#2dd4bf",
+    logoUrl: "",
+    description: "Smaller, more efficient sibling of Inkling (276B total / 12B active) — same use cases, faster/cheaper. Confirmed live and free on OpenRouter as of Aug 2026.",
+    defaultSelected: false,
+    defaultReasoningEffort: "medium",
+    supportsImages: true,
+  },
+  {
+    id: "liquid/lfm-2.5-2.6b:free",
+    label: "LFM2.5 2.6B",
+    shortName: "LFM2.5",
+    maker: "Liquid AI",
+    accent: "#84cc16",
+    logoUrl: "",
+    description: "Small, fast compact reasoning model for agent workflows, data extraction, RAG, and long-context processing. Liquid advises against agentic-coding/knowledge-heavy tasks. Confirmed live and free on OpenRouter as of Aug 2026 — a good quick fallback seat.",
+    defaultSelected: false,
+    defaultReasoningEffort: "low",
+    supportsImages: false,
+  },
+  {
+    id: "dots-studio/dots-3-note-preview:free",
+    label: "Dots3 Note",
+    shortName: "Dots3",
+    maker: "Dots Studio",
+    accent: "#eab308",
+    logoUrl: "",
+    description: "Lightest model in the Dots 3 MoE family (280B total / 16B active) — reasoning, coding, multimodal understanding, long-context, multi-step agent workflows. Confirmed live and free on OpenRouter as of Aug 2026.",
+    defaultSelected: false,
+    defaultReasoningEffort: "medium",
+    supportsImages: true,
   },
   // ---- Google AI Studio native models (not on OpenRouter) ----
   // Called directly via generativelanguage.googleapis.com (Google's own
@@ -268,21 +351,28 @@ export const COUNCIL_MODELS: CouncilModel[] = [
 
 export const FUSION_PANELS: FusionPanel[] = [
   {
-    id: "lightning-gptoss-fusion",
-    label: "Lightning + GPT-OSS 20B",
-    shortName: "Lightning + GPT-OSS",
+    id: "lightning-glm-fusion",
+    label: "Lightning + GLM-5.2",
+    shortName: "Lightning + GLM",
+    // Was "Lightning + GPT-OSS 20B" — openai/gpt-oss-20b:free 404s as of
+    // 2026-08-26 (off OpenRouter's free collection). Swapped for GLM-5.2,
+    // confirmed live/free, and still a different vendor from Lightning.
     description: "Fast free two-model panel for quick council rounds without a long wait.",
-    modelIds: ["nvidia/nemotron-3.5-lightning:free", "openai/gpt-oss-20b:free"],
+    modelIds: ["nvidia/nemotron-3.5-lightning:free", "z-ai/glm-5.2:free"],
     featured: true,
     scoreLabel: "Fast",
     costLabel: "$0",
   },
   {
     id: "free-trio-fusion",
-    label: "Lightning + GPT-OSS + Gemma 4",
+    label: "Lightning + GLM + MiniMax M3",
     shortName: "Free trio",
+    // Was "Lightning + GPT-OSS + Gemma 4" — both gpt-oss-20b:free and
+    // gemma-4-26b-a4b-it:free 404/were pulled from OpenRouter's free tier
+    // as of 2026-08-26. Swapped for two confirmed-live free models from
+    // different vendors (Z.ai, MiniMax) to keep the multi-provider spread.
     description: "Diverse three-provider free panel — broader disagreement coverage, still fast.",
-    modelIds: ["nvidia/nemotron-3.5-lightning:free", "openai/gpt-oss-20b:free", "google/gemma-4-26b-a4b-it:free"],
+    modelIds: ["nvidia/nemotron-3.5-lightning:free", "z-ai/glm-5.2:free", "minimax/minimax-m3:free"],
     featured: true,
     scoreLabel: "Broad coverage",
     costLabel: "$0",
@@ -308,7 +398,7 @@ export const FUSION_PANELS: FusionPanel[] = [
   },
 ];
 
-export const DEFAULT_FUSION_PANEL_ID = "lightning-gptoss-fusion";
+export const DEFAULT_FUSION_PANEL_ID = "lightning-glm-fusion";
 
 export const IMAGE_MODELS: ImageModel[] = [
   {

@@ -542,7 +542,7 @@ function normalizeSelection(selectedModels: string[] | undefined, fusionPanelId?
     .filter((id) => knownIds.has(id));
 
   const fallback = COUNCIL_MODELS.filter((model) => model.defaultSelected).map((model) => model.id);
-  return Array.from(new Set(panelModels?.length ? panelModels : requested.length ? requested : fallback)).slice(0, 7);
+  return Array.from(new Set(panelModels?.length ? panelModels : requested.length ? requested : fallback)).slice(0, 10);
 }
 
 function normalizeAttachments(attachments: UploadedAttachment[] | undefined) {
