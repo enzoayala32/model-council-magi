@@ -32,6 +32,13 @@ export type AgentLoopResult = {
   steps: number;
   transcript: string[]; // resumen legible paso a paso, para debug/logs
   proposals: AgentFileProposal[];
+  /** Rutas que las tools reportaron haber escrito/editado con éxito,
+   * independientemente de si terminaron en `proposals`. Existe porque
+   * `proposals` depende de que `git status` detecte el cambio — un
+   * archivo dentro de una carpeta gitignorada (local o global) puede
+   * escribirse y compilar perfecto y aun así no aparecer ahí. Este
+   * campo es la fuente de verdad de "¿la tool realmente actuó?". */
+  touchedFiles: string[];
   error?: string;
 };
 
@@ -103,7 +110,6 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
   const {
     task,
     workspaceRoot,
-    repoRoot,
     maxSteps = DEFAULT_MAX_STEPS,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     modelId = resolveCodingModelId().modelId,
@@ -112,9 +118,11 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
   const transcript: string[] = [];
   const lastProgressStepRef = { current: 0 };
   let lastTypeCheckOk: boolean | null = null;
+  const touchedFiles = new Set<string>();
 
   const onEvent = (event: AgentToolEvent) => {
     lastProgressStepRef.current = currentStepIndex.current;
+    touchedFiles.add(event.relPath);
     transcript.push(event.type === "file_written" ? `✏️  Escribió ${event.relPath}` : `✏️  Editó ${event.relPath}`);
   };
   const currentStepIndex = { current: 0 };
@@ -183,17 +191,43 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
     stopReason = "no_progress";
   }
 
-  const proposals = errorMessage ? [] : await buildProposals(repoRoot, workspaceRoot, lastTypeCheckOk);
+  const { stdout: rawGitStatus } = await execFileAsync("git", ["status", "--porcelain", "--untracked-files=all"], { cwd: workspaceRoot, maxBuffer: 8 * 1024 * 1024 }).catch(
+    (err) => ({ stdout: `<git status falló: ${err instanceof Error ? err.message : String(err)}>` }),
+  );
+  const proposals = errorMessage ? [] : await buildProposals(rawGitStatus, workspaceRoot, lastTypeCheckOk);
 
-  return { stopReason, steps: currentStepIndex.current, transcript, proposals, error: errorMessage };
+  // Si una tool reportó haber escrito/editado un archivo pero git no lo ve
+  // como cambio (típicamente: la ruta cae dentro de un .gitignore local o
+  // GLOBAL del usuario — aunque ya se confirmó que NO es siempre el caso),
+  // la propuesta final nunca lo va a incluir aunque el trabajo se haya
+  // hecho bien. Avisamos explícito, con la salida cruda de git y una
+  // verificación física de existencia, en vez de adivinar la causa otra
+  // vez — así el próximo reporte trae evidencia, no una hipótesis más.
+  const missingFromGit = Array.from(touchedFiles).filter((f) => !proposals.some((p) => p.relPath === f));
+  if (missingFromGit.length) {
+    const fsCheck = await import("node:fs/promises");
+    const existsChecks = await Promise.all(
+      missingFromGit.map(async (f) => {
+        const exists = await fsCheck.stat(path.join(workspaceRoot, f)).then(() => true).catch(() => false);
+        return `${f} (¿existe en disco ahora?: ${exists})`;
+      }),
+    );
+    transcript.push(
+      `⚠️ Estos archivos se escribieron/editaron con éxito pero no aparecen en la propuesta final: ${existsChecks.join(", ")}. ` +
+        `Salida cruda de "git status --porcelain" en el worktree: ${JSON.stringify(rawGitStatus)}`,
+    );
+  }
+
+  return { stopReason, steps: currentStepIndex.current, transcript, proposals, touchedFiles: Array.from(touchedFiles), error: errorMessage };
 }
 
 /** Arma un `AgentFileProposal` por cada archivo tocado en el worktree,
  * comparando contra HEAD (la raíz desde la que se creó el worktree) vía
- * git — no hace falta snapshotear contenido "antes" a mano. */
-async function buildProposals(repoRoot: string, workspaceRoot: string, lastTypeCheckOk: boolean | null): Promise<AgentFileProposal[]> {
-  const { stdout } = await execFileAsync("git", ["status", "--porcelain"], { cwd: workspaceRoot, maxBuffer: 8 * 1024 * 1024 });
-  const lines = stdout.split("\n").filter(Boolean);
+ * git — no hace falta snapshotear contenido "antes" a mano. `rawGitStatus`
+ * se recibe ya calculado (no se vuelve a pedir acá) para que quien llama
+ * pueda loguear la salida cruda si hace falta diagnosticar una discrepancia. */
+async function buildProposals(rawGitStatus: string, workspaceRoot: string, lastTypeCheckOk: boolean | null): Promise<AgentFileProposal[]> {
+  const lines = rawGitStatus.split("\n").filter(Boolean);
 
   const typeCheck: TypeCheckResult =
     lastTypeCheckOk === null ? { status: "skipped" } : lastTypeCheckOk ? { status: "ok" } : { status: "error", errors: ["Ver output de run_typecheck en el transcript."] };
