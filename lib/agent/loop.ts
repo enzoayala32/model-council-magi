@@ -50,6 +50,10 @@ export type RunAgentLoopOptions = {
   timeoutMs?: number;
   /** Model id de OpenRouter. Default: OPENROUTER_CODING_MODEL o un modelo con buen soporte de tool-use. */
   modelId?: string;
+  /** Señal externa de cancelación (ej. desde `lib/agent/runner.ts`, cuando
+   * el usuario cancela una task en `RUNNING`) — se combina con el timeout
+   * interno, no lo reemplaza: cualquiera de los dos corta el loop. */
+  abortSignal?: AbortSignal;
 };
 
 const DEFAULT_CODING_MODEL = "nvidia/nemotron-3.5-lightning:free";
@@ -132,6 +136,12 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
 
   const controller = new AbortController();
   const timeoutTimer = setTimeout(() => controller.abort(), timeoutMs);
+  // La cancelación externa (usuario cancela la task) se combina con el
+  // timeout interno — el que dispare primero corta el loop igual.
+  if (options.abortSignal) {
+    if (options.abortSignal.aborted) controller.abort();
+    else options.abortSignal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
 
   let stopReason: AgentLoopResult["stopReason"] = "completed";
   let errorMessage: string | undefined;

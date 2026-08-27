@@ -209,6 +209,37 @@ export type TransitionPatch = Partial<
   Pick<CodingTask, "baseCommit" | "workspaceId" | "stopReason" | "error" | "discardReason" | "conflictedPaths">
 >;
 
+/** Actualiza campos de una task SIN cambiar su `status` — para datos que se
+ * conocen a mitad de una corrida (ej. `workspaceId`/`baseCommit`, apenas se
+ * crea el workspace, todavía en `RUNNING`) y que no corresponden a ninguna
+ * transición de estado. `transitionTask` es el único lugar que cambia
+ * `status`; esta función nunca lo toca. */
+export function updateTaskFields(id: string, patch: TransitionPatch): CodingTask {
+  const task = getTask(id);
+  if (!task) throw new Error(`No existe la task ${id}`);
+
+  const next: CodingTask = { ...task, ...patch };
+
+  getDb()
+    .prepare(
+      `UPDATE agent_tasks
+       SET base_commit = @baseCommit, workspace_id = @workspaceId, stop_reason = @stopReason,
+           error = @error, discard_reason = @discardReason, conflicted_paths = @conflictedPaths
+       WHERE id = @id`,
+    )
+    .run({
+      id: next.id,
+      baseCommit: next.baseCommit,
+      workspaceId: next.workspaceId,
+      stopReason: next.stopReason,
+      error: next.error,
+      discardReason: next.discardReason,
+      conflictedPaths: next.conflictedPaths ? JSON.stringify(next.conflictedPaths) : null,
+    });
+
+  return next;
+}
+
 /** Único punto de escritura del `status` de una task. Rechaza cualquier
  * transición que no esté en `ALLOWED_TRANSITIONS` — quien quiera saltear la
  * máquina de estados (ej. escribir `status` directo con SQL a mano) se está

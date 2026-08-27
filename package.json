@@ -11,6 +11,8 @@
     "agent:test-project": "tsx lib/agent/test-project.ts",
     "agent:test-task-state": "tsx lib/agent/test-task-state.ts",
     "agent:test-workspace-manager": "tsx lib/agent/test-workspace-manager.ts",
+    "agent:test-runner": "tsx lib/agent/test-runner.ts",
+    "agent:test-runner-real": "tsx lib/agent/test-runner-real.ts",
     "agent:stress": "tsx lib/agent/stress-test.ts"
   },
   "dependencies": {
