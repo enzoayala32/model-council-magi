@@ -1,9 +1,23 @@
-import { getTask, transitionTask, updateTaskFields, listTasks, isTerminalStatus } from "./task-store";
+import { getTask, transitionTask, updateTaskFields, listTasks, isTerminalStatus, type TaskStatus, type TransitionPatch } from "./task-store";
 import { getProject } from "./project-store";
 import { createWorkspaceForTask, destroyWorkspaceForTask, loadWorkspaceForTask, type TaskWorkspace } from "./workspace-manager";
 import { runAgentLoop, type AgentLoopResult, type RunAgentLoopOptions } from "./loop";
+import { appendEvent } from "./event-log";
 
 type LoopRunner = (options: RunAgentLoopOptions) => Promise<AgentLoopResult>;
+
+/** Envoltorio de `transitionTask` que además deja un evento `status_change`
+ * en `agent_events` (Fase 2E, ver diseño de Fase 2, sección 12) — sin esto
+ * no se puede reconstruir la línea de tiempo de estados de una task solo
+ * mirando `agent_events` (que hoy solo tenía eventos del loop en sí). Lee
+ * el `status` actual justo antes de transicionar para que `from` sea
+ * siempre el real, no uno cacheado de más arriba en la función. */
+function transitionAndLog(taskId: string, to: TaskStatus, patch?: TransitionPatch, reason?: string) {
+  const from = getTask(taskId)?.status ?? "QUEUED";
+  const next = transitionTask(taskId, to, patch);
+  appendEvent(taskId, { type: "status_change", from, to, reason });
+  return next;
+}
 
 /** Única fuente de "¿hay un proceso de verdad corriendo esta task ahora?" —
  * vive en memoria a propósito (ver diseño de Fase 2, sección 10/13): si el
@@ -78,7 +92,7 @@ export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promis
 
   let workspace: TaskWorkspace | null = null;
   try {
-    transitionTask(taskId, "RUNNING");
+    transitionAndLog(taskId, "RUNNING");
     workspace = await createWorkspaceForTask(task, project);
     updateTaskFields(taskId, { workspaceId: taskId, baseCommit: workspace.baseCommit });
 
@@ -88,21 +102,22 @@ export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promis
       repoRoot: workspace.basePath,
       modelId: task.modelId,
       abortSignal: abortController.signal,
+      taskId,
     });
 
     if (abortController.signal.aborted) {
-      transitionTask(taskId, "CANCELLED");
+      transitionAndLog(taskId, "CANCELLED");
     } else if (result.error) {
-      transitionTask(taskId, "FAILED", { error: result.error, stopReason: result.stopReason });
+      transitionAndLog(taskId, "FAILED", { error: result.error, stopReason: result.stopReason }, result.error);
     } else if (result.proposals.length > 0) {
       // Las propuestas en sí todavía no se persisten acá (eso es Fase 2F) —
       // 2D solo decide el estado final de la task a partir del resultado.
-      transitionTask(taskId, "READY_FOR_REVIEW", { stopReason: result.stopReason });
+      transitionAndLog(taskId, "READY_FOR_REVIEW", { stopReason: result.stopReason });
     } else {
-      transitionTask(taskId, "NO_CHANGES", { stopReason: result.stopReason });
+      transitionAndLog(taskId, "NO_CHANGES", { stopReason: result.stopReason });
     }
   } catch (error) {
-    transitionTask(taskId, "FAILED", { error: error instanceof Error ? error.message : String(error) });
+    transitionAndLog(taskId, "FAILED", { error: error instanceof Error ? error.message : String(error) });
   } finally {
     activeRuns.delete(taskId);
     // READY_FOR_REVIEW deja el workspace vivo a propósito — el diff todavía
@@ -132,7 +147,7 @@ export async function reconcileInterruptedTasks(): Promise<{ interrupted: string
     // tocamos — la reconciliación es solo para huérfanas de verdad.
     if (isTaskActive(task.id)) continue;
 
-    transitionTask(task.id, "INTERRUPTED");
+    transitionAndLog(task.id, "INTERRUPTED", undefined, "reinicio del servidor a mitad de una corrida");
     const workspace = loadWorkspaceForTask(task.id);
     if (workspace) await destroyWorkspaceForTask(workspace);
     interrupted.push(task.id);

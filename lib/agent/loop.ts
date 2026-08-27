@@ -4,7 +4,10 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { generateText, stepCountIs, type StopCondition, type ToolSet } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createAgentTools, type AgentToolEvent } from "./tools";
+import { getCouncilModel } from "../models";
+import { appendEvent } from "./event-log";
 
 const execFileAsync = promisify(execFile);
 
@@ -54,6 +57,12 @@ export type RunAgentLoopOptions = {
    * el usuario cancela una task en `RUNNING`) — se combina con el timeout
    * interno, no lo reemplaza: cualquiera de los dos corta el loop. */
   abortSignal?: AbortSignal;
+  /** Si se provee (Fase 2E), cada tool_call/tool_result/text/typecheck del
+   * loop también se persiste en `agent_events` con este `taskId`, además
+   * de seguir armando el `transcript` en memoria de siempre (no se rompe
+   * ningún consumidor existente — `test-run.ts`/`stress-test.ts` no pasan
+   * `taskId` y siguen funcionando idéntico, sin tocar SQLite). */
+  taskId?: string;
 };
 
 const DEFAULT_CODING_MODEL = "nvidia/nemotron-3.5-lightning:free";
@@ -103,6 +112,54 @@ function buildOpenRouterModel(modelId: string) {
   return provider.chat(modelId);
 }
 
+/** NVIDIA NIM (build.nvidia.com) es un endpoint OpenAI-compatible — mismo
+ * mecanismo que OpenRouter, distinta base URL/key. Mismo endpoint que ya
+ * usa `lib/nvidia.ts` para el Council, solo que acá se le pasa el AI SDK
+ * en vez de un fetch a mano. */
+function buildNvidiaModel(modelId: string) {
+  const apiKey = process.env.NVIDIA_API_KEY;
+  if (!apiKey) throw new Error("Falta NVIDIA_API_KEY en .env (conseguí una gratis en build.nvidia.com).");
+  const provider = createOpenAI({ baseURL: "https://integrate.api.nvidia.com/v1", apiKey });
+  return provider.chat(modelId);
+}
+
+/** Google AI Studio — usa el provider NATIVO de AI SDK (`@ai-sdk/google`,
+ * habla contra generativelanguage.googleapis.com/v1beta directo), no el
+ * shim OpenAI-compat que usan NVIDIA/OpenRouter. Motivo (Fase 2E, hallazgo
+ * en una corrida real): toda la línea Gemini 3.x son modelos "thinking" que
+ * firman su razonamiento con un `thought_signature` y lo devuelven en un
+ * campo no estándar (`extra_content.google.thought_signature`, fuera del
+ * spec de OpenAI). Cualquier cliente OpenAI-compat GENÉRICO (no es un
+ * problema de este proyecto puntual — reportado igual en VS Code Copilot,
+ * el propio openai-agents-python de OpenAI, open-webui, etc.) descarta ese
+ * campo por no reconocerlo, y en el siguiente tool-call round-trip Google
+ * rechaza el request con 400 "Function call is missing a thought_signature"
+ * porque no puede verificar el razonamiento previo. El Council nunca lo
+ * sufrió porque sus llamadas a Google son de un solo turno (sin
+ * tool-calling multi-paso) — recién con el Coding Agent (multi-step) se
+ * vuelve un problema real. El provider nativo maneja el signature
+ * correctamente sin que el código de acá tenga que tocarlo. */
+function buildGoogleModel(modelId: string) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("Falta GEMINI_API_KEY en .env (conseguí una gratis en aistudio.google.com/apikey).");
+  const google = createGoogleGenerativeAI({ apiKey });
+  return google.chat(modelId);
+}
+
+/** Dispatcher multi-proveedor del Coding Agent Model Registry (ver diseño
+ * de Fase 2, sección 15) — mismo criterio de ruteo por `provider` que ya
+ * usa `runCouncilCompletion` en `lib/council-run.ts` para el Council, pero
+ * devolviendo un `LanguageModel` de AI SDK en vez de una completion cruda.
+ * Reemplaza el `buildOpenRouterModel` fijo que tenía el loop hasta Fase 2D
+ * — todo modelo sigue siendo OpenRouter por default (el campo `provider`
+ * solo está seteado en los entries NVIDIA/Google nativos de `models.ts`). */
+function buildModelForId(modelId: string) {
+  const councilModel = getCouncilModel(modelId);
+  if (councilModel?.provider === "nvidia") return buildNvidiaModel(modelId);
+  if (councilModel?.provider === "google") return buildGoogleModel(modelId);
+  return buildOpenRouterModel(modelId);
+}
+
 /** Stop condition custom: si pasaron `limit` pasos sin que ninguna tool
  * haya escrito/editado un archivo con éxito, cortamos — el modelo está
  * dando vueltas sin avanzar (o solo leyendo/buscando en loop). */
@@ -132,7 +189,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
   const currentStepIndex = { current: 0 };
 
   const tools = createAgentTools(workspaceRoot, onEvent);
-  const model = buildOpenRouterModel(modelId);
+  const model = buildModelForId(modelId);
 
   const controller = new AbortController();
   const timeoutTimer = setTimeout(() => controller.abort(), timeoutMs);
@@ -156,9 +213,15 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
       stopWhen: [stepCountIs(maxSteps), noProgressFor(NO_PROGRESS_STEP_LIMIT, lastProgressStepRef)],
       onStepFinish: (step) => {
         currentStepIndex.current += 1;
-        if (step.text) transcript.push(`💬 ${step.text.slice(0, 300)}`);
+        if (step.text) {
+          transcript.push(`💬 ${step.text.slice(0, 300)}`);
+          if (options.taskId) appendEvent(options.taskId, { type: "text", text: step.text.slice(0, 300) });
+        }
         for (const part of step.content) {
-          if (part.type === "tool-call") transcript.push(`🔧 ${part.toolName}(${JSON.stringify(part.input).slice(0, 200)})`);
+          if (part.type === "tool-call") {
+            transcript.push(`🔧 ${part.toolName}(${JSON.stringify(part.input).slice(0, 200)})`);
+            if (options.taskId) appendEvent(options.taskId, { type: "tool_call", toolName: part.toolName, input: part.input });
+          }
           if (part.type === "tool-result") {
             const output = part.output as { ok?: boolean; error?: string; success?: boolean; output?: string } | undefined;
             if (part.toolName === "run_typecheck" && output && typeof output.success === "boolean") {
@@ -167,11 +230,11 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
               // "falla"), así que sin esto nunca se ve SI tsc pasó o no, ni
               // por qué — quedaba igual de invisible que el bug de edit_file
               // que motivó el logueo de errores de más arriba.
-              transcript.push(
-                output.success
-                  ? "✅ run_typecheck: compila limpio"
-                  : `❌ run_typecheck: hay errores —\n${(output.output ?? "").split("\n").slice(0, 15).join("\n")}`,
-              );
+              const excerpt = (output.output ?? "").split("\n").slice(0, 15).join("\n");
+              transcript.push(output.success ? "✅ run_typecheck: compila limpio" : `❌ run_typecheck: hay errores —\n${excerpt}`);
+              if (options.taskId) {
+                appendEvent(options.taskId, { type: "typecheck_result", success: output.success, outputExcerpt: output.success ? undefined : excerpt });
+              }
             }
             // Sin esto, una tool que falla de forma "prolija" (ok: false, con
             // error legible) queda invisible en el transcript — solo se ve
@@ -180,6 +243,11 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
             // distancia con solo el log del usuario.
             if (output && output.ok === false) {
               transcript.push(`❌ ${part.toolName} falló: ${output.error ?? "sin detalle"}`);
+              if (options.taskId) {
+                appendEvent(options.taskId, { type: "tool_result", toolName: part.toolName, ok: false, error: output.error, summary: output.error ?? "sin detalle" });
+              }
+            } else if (output && output.ok === true && part.toolName !== "run_typecheck" && options.taskId) {
+              appendEvent(options.taskId, { type: "tool_result", toolName: part.toolName, ok: true, summary: `${part.toolName} OK` });
             }
           }
         }
@@ -190,7 +258,16 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
       stopReason = "timeout";
     } else {
       stopReason = "error";
-      errorMessage = error instanceof Error ? error.message : "Error desconocido en el loop del agente.";
+      // Un `APICallError` de AI SDK (fetch a un proveedor real fallido) trae
+      // `.message` == solo el texto HTTP genérico ("Bad Request") — el
+      // motivo real está en `.responseBody`, que el proveedor sí manda
+      // (ej. Google explica ahí por qué exactamente rechazó el request).
+      // Sin esto, un 400/404/403 real queda indistinguible de cualquier
+      // otro error, y depurar un proveedor nuevo (NVIDIA/Google nativos,
+      // Fase 2E) a ciegas es prácticamente imposible.
+      const responseBody = error && typeof error === "object" && "responseBody" in error ? String((error as { responseBody?: unknown }).responseBody ?? "").slice(0, 2000) : null;
+      const baseMessage = error instanceof Error ? error.message : "Error desconocido en el loop del agente.";
+      errorMessage = responseBody ? `${baseMessage} — respuesta del proveedor: ${responseBody}` : baseMessage;
     }
   } finally {
     clearTimeout(timeoutTimer);

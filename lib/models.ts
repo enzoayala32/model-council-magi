@@ -27,6 +27,15 @@ export type CouncilModel = {
    * reason about. Only set where there's a real, observed failure mode to
    * guard against (see the Google entries below). */
   fallbackModelId?: string;
+  /** Ver diseño de Fase 2, sección 15 (Coding Agent Model Registry). Anota
+   * si este modelo del Council está habilitado para el Coding Agent —
+   * campo opcional anidado en el mismo objeto en vez de una segunda lista
+   * separada, para no tener dos lugares que mantener sincronizados.
+   * `reason` documenta in-line por qué sí/no, no es solo un booleano mudo. */
+  codingAgent?: {
+    enabled: boolean;
+    reason?: string;
+  };
 };
 
 export type FusionPanel = {
@@ -64,6 +73,10 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     defaultSelected: true,
     defaultReasoningEffort: "medium",
     supportsImages: false,
+    // Fase 2E: es el modelo con el que se corrieron las 5 pruebas de
+    // aceptación de Fase 1.5 con éxito real (ver stress-test.ts) — el
+    // único candidato "sin dudas" para habilitar de entrada.
+    codingAgent: { enabled: true, reason: "Validado con las 5 pruebas de aceptación de Fase 1.5 (OpenRouter)." },
   },
   {
     id: "openai/gpt-oss-20b:free",
@@ -263,6 +276,34 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     defaultReasoningEffort: "medium",
     supportsImages: true,
   },
+  // ---- NVIDIA NIM native model (not on OpenRouter) ----
+  // Called directly against build.nvidia.com/integrate.api.nvidia.com (a
+  // fully OpenAI-compatible endpoint, see lib/nvidia.ts) — needs
+  // NVIDIA_API_KEY set in .env (an "nvapi-" key from build.nvidia.com),
+  // otherwise selecting this fails with a clear error. Not defaultSelected
+  // (BYOK, opt-in). Existía solo como fallback interno oculto dentro de
+  // OpenRouter (lib/openrouter.ts, NVIDIA_MODEL_MAP) hasta Fase 2E — esta
+  // es la primera vez que aparece como asiento propio, seleccionable, del
+  // Council. Model ID tomado directo de NVIDIA_MODEL_MAP en lib/nvidia.ts
+  // (NVIDIA mantiene el sufijo de tamaño de parámetros, a diferencia del
+  // slug de OpenRouter).
+  {
+    id: "nvidia/nemotron-3.5-lightning-30b-a3b",
+    label: "Nemotron 3.5 Lightning (NVIDIA directo)",
+    shortName: "Lightning NIM",
+    maker: "NVIDIA",
+    accent: "#76b900",
+    logoUrl: "",
+    description: "Mismo modelo que el asiento OpenRouter de Nemotron 3.5 Lightning, pero llamado directo contra la cuota propia de NVIDIA (build.nvidia.com) en vez del pool compartido de OpenRouter — evita los 429 del pool free de OpenRouter. Requiere tu propia NVIDIA_API_KEY.",
+    defaultSelected: false,
+    defaultReasoningEffort: "medium",
+    supportsImages: false,
+    provider: "nvidia",
+    codingAgent: {
+      enabled: true,
+      reason: "Fase 2E: habilitado para probar el dispatcher multi-proveedor del Coding Agent Model Registry contra un proveedor nativo (además de OpenRouter y Google).",
+    },
+  },
   // ---- Google AI Studio native models (not on OpenRouter) ----
   // Called directly via generativelanguage.googleapis.com (Google's own
   // documented OpenAI-compatibility endpoint) — needs GEMINI_API_KEY set in
@@ -286,9 +327,11 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     supportsImages: false,
     provider: "google",
     // Observed live: transient 503 "high demand" on this newest model even
-    // after the 429/503 retry loop — 2.5 Flash is a much lower-demand,
-    // well-established fallback that keeps the seat productive.
-    fallbackModelId: "gemini-2.5-flash",
+    // after the 429/503 retry loop — Gemini 3.5 Flash-Lite es un fallback
+    // de mucha menor demanda y bien establecido (confirmado GA 21/7/2026)
+    // que mantiene el asiento productivo. Redirigido desde gemini-2.5-flash
+    // (CONFIRMED DEAD, 404 real) el 2026-08-27.
+    fallbackModelId: "gemini-3.5-flash-lite",
   },
   {
     id: "gemini-3.5-flash",
@@ -302,7 +345,9 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     defaultReasoningEffort: "medium",
     supportsImages: false,
     provider: "google",
-    fallbackModelId: "gemini-2.5-flash",
+    // Redirigido de gemini-2.5-flash (CONFIRMED DEAD, ver esa entrada) a
+    // gemini-3.5-flash-lite (GA oficial 21/7/2026) el 2026-08-27.
+    fallbackModelId: "gemini-3.5-flash-lite",
   },
   {
     id: "gemini-2.5-flash",
@@ -311,11 +356,25 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     maker: "Google AI Studio",
     accent: "#8ab4f8",
     logoUrl: "",
-    description: "Google's proven prior-generation Flash — cheaper than the Gemini 3 line and a reliable free-tier fallback if 3.x quota is tight. Called directly with your own Gemini API key.",
+    // CONFIRMED DEAD as of 2026-08-27: 404 real ("Not Found") en una
+    // corrida real del usuario. Verificado contra ai.google.dev/gemini-api
+    // /docs/changelog (oficial): Gemini 2.0 Flash/Flash-Lite se dieron de
+    // baja el 1/6/2026, y la línea GA vigente a esta fecha es enteramente
+    // 3.x (3.5/3.6/3.7 Flash, 3.5-flash-lite GA 21/7/2026, 3.7-flash GA
+    // 13/8/2026) — no hay evidencia de que 2.5-flash (texto, no confundir
+    // con gemini-2.5-flash-image que recién se da de baja en oct 2026)
+    // siga vigente. Kept (not defaultSelected, codingAgent disabled) por
+    // compatibilidad con referencias viejas — no reactivar sin re-chequear
+    // el changelog oficial primero.
+    description: "Google's prior-generation Flash. NOTE: confirmed dead (404) as of 2026-08-27 — not recommended to select.",
     defaultSelected: false,
     defaultReasoningEffort: "medium",
     supportsImages: false,
     provider: "google",
+    codingAgent: {
+      enabled: false,
+      reason: "CONFIRMED DEAD — ver comentario en la definición del modelo. No reactivar sin re-verificar contra ai.google.dev/gemini-api/docs/models primero.",
+    },
   },
   {
     id: "gemini-3.1-pro-preview",
@@ -329,10 +388,10 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     defaultReasoningEffort: "high",
     supportsImages: false,
     provider: "google",
-    // Observed live: "limit: 0" on the free tier — this model simply can't
-    // run without billing enabled. Falls back to 2.5 Flash instead of
-    // losing the seat outright.
-    fallbackModelId: "gemini-2.5-flash",
+    // Redirigido de gemini-2.5-flash (CONFIRMED DEAD, ver esa entrada) a
+    // gemini-3.5-flash-lite (GA oficial 21/7/2026, confirmado vivo — ver
+    // ai.google.dev/gemini-api/docs/changelog) el 2026-08-27.
+    fallbackModelId: "gemini-3.5-flash-lite",
   },
   {
     id: "gemini-2.5-flash-lite",
@@ -341,11 +400,45 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     maker: "Google AI Studio",
     accent: "#8ab4f8",
     logoUrl: "",
-    description: "Google's cheapest, fastest Gemini model and historically the most generous free-tier daily quota — a good budget pick for quick council rounds. Called directly with your own Gemini API key.",
+    // CONFIRMED DEAD as of 2026-08-27 — mismo motivo que gemini-2.5-flash
+    // (ver esa entrada): sin evidencia de que la línea 2.5 de texto siga
+    // vigente en ai.google.dev/gemini-api/docs/changelog a esta fecha. No
+    // se probó en vivo esta entrada puntual (solo -flash sin -lite dio el
+    // 404 real), pero comparte generación — se marca preventivamente hasta
+    // confirmar lo contrario, para no repetir el mismo error de elegirla
+    // como pick "seguro" del Coding Agent sin haberla probado.
+    description: "Google's cheapest, fastest 2.5-gen Gemini model. NOTE: probable 404 (misma generación que gemini-2.5-flash, confirmado muerto) — no recomendado hasta re-verificar contra el changelog oficial.",
     defaultSelected: false,
     defaultReasoningEffort: "low",
     supportsImages: false,
     provider: "google",
+    codingAgent: {
+      enabled: false,
+      reason: "Probable 404 (misma generación 2.5 que gemini-2.5-flash, CONFIRMED DEAD) — no probada en vivo todavía, deshabilitada por precaución. Ver gemini-3.5-flash-lite en su lugar.",
+    },
+  },
+  {
+    id: "gemini-3.5-flash-lite",
+    label: "Gemini 3.5 Flash-Lite",
+    shortName: "Gemini 3.5 Lite",
+    maker: "Google AI Studio",
+    accent: "#8ab4f8",
+    logoUrl: "",
+    // Reemplaza a gemini-2.5-flash/-lite (ambos CONFIRMED DEAD) como el
+    // pick "barato y confiable" de Google — confirmado GA el 21/7/2026 vía
+    // ai.google.dev/gemini-api/docs/changelog (oficial, chequeado
+    // 2026-08-27): "our fastest, most cost-effective 3.5 model for
+    // high-throughput execution... a low-latency, highly cost-effective
+    // subagent option designed for high-volume automation".
+    description: "Google's fastest, cheapest 3.5-gen Gemini model — GA oficial 21/7/2026, confirmado vigente. Reemplaza a Gemini 2.5 Flash-Lite (dado de baja) como el pick barato del roster. Called directly with your own Gemini API key.",
+    defaultSelected: false,
+    defaultReasoningEffort: "low",
+    supportsImages: false,
+    provider: "google",
+    codingAgent: {
+      enabled: true,
+      reason: "Fase 2E: reemplaza a gemini-2.5-flash/-lite (ambos CONFIRMED DEAD tras el 404 real) como pick de Google — GA oficial confirmado el 21/7/2026, la fuente más reciente y confiable que se pudo verificar (a diferencia del comentario viejo de google-ai-studio.ts, que ya estaba desactualizado).",
+    },
   },
 ];
 
@@ -435,6 +528,21 @@ export const IMAGE_MODELS: ImageModel[] = [
 
 export function getCouncilModel(id: string) {
   return COUNCIL_MODELS.find((model) => model.id === id);
+}
+
+/** Ver diseño de Fase 2, sección 15. El selector de modelo del Coding
+ * Agent en la UI debe llamar esta función — nunca `COUNCIL_MODELS` directo
+ * — para no ofrecer modelos sin validar contra tool-calling multi-step. */
+export function getCodingAgentModels(): CouncilModel[] {
+  return COUNCIL_MODELS.filter((m) => m.codingAgent?.enabled === true);
+}
+
+/** El endpoint de crear `CodingTask` debe validar esto antes de aceptar la
+ * task — rechaza con error claro si alguien manda un `modelId` que existe
+ * en el Council pero no está habilitado para agente (cliente desactualizado
+ * o llamada directa a la API). */
+export function isCodingAgentEnabled(modelId: string): boolean {
+  return getCouncilModel(modelId)?.codingAgent?.enabled === true;
 }
 
 export function getFusionPanel(id: string) {

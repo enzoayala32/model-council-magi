@@ -13,9 +13,11 @@
     "agent:test-workspace-manager": "tsx lib/agent/test-workspace-manager.ts",
     "agent:test-runner": "tsx lib/agent/test-runner.ts",
     "agent:test-runner-real": "tsx lib/agent/test-runner-real.ts",
+    "agent:test-model-registry": "tsx lib/agent/test-model-registry.ts",
     "agent:stress": "tsx lib/agent/stress-test.ts"
   },
   "dependencies": {
+    "@ai-sdk/google": "^4.0.55",
     "@ai-sdk/openai": "^4.0.46",
     "ai": "^7.0.78",
     "better-sqlite3": "^13.0.3",

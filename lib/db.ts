@@ -83,6 +83,24 @@ function createConnection(): Database.Database {
       destroyed_at INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_agent_workspaces_task ON agent_workspaces(task_id);
+
+    -- Fase 2E: log de eventos de una CodingTask (tool_call/tool_result/
+    -- text/typecheck_result/status_change), reemplaza el "transcript" en
+    -- memoria de loop.ts como fuente de verdad persistida — permite
+    -- reconstruir el timeline completo de una corrida vieja aunque el
+    -- proceso que la corrió ya no exista. "seq" (no "ts") es la clave de
+    -- reanudación: dos eventos pueden compartir milisegundo, nunca seq.
+    -- Ver diseño de Fase 2, secciones 5, 7 y 12.
+    CREATE TABLE IF NOT EXISTS agent_events (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES agent_tasks(id),
+      seq INTEGER NOT NULL,
+      ts INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      UNIQUE (task_id, seq)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_events_task ON agent_events(task_id, seq);
   `);
   return db;
 }

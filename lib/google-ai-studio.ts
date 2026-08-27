@@ -16,12 +16,27 @@ import { OpenRouterError, type OpenRouterMessage, type OpenRouterTool, type Open
  * sent as a standard `Authorization: Bearer <key>` header — NOT an OpenAI
  * key, and not interchangeable with one.
  *
- * Model IDs (verified against ai.google.dev in August 2026 — Google's
- * lineup moves fast, double check ai.google.dev/gemini-api/docs/models if a
- * call 404s):
- *   gemini-3.7-flash        — newest GA workhorse (coding/agents), 1M ctx
- *   gemini-3.1-pro-preview  — flagship reasoning model, 2M context
- *   gemini-2.5-flash-lite   — cheapest/fastest, most generous free-tier RPD
+ * Model IDs — la lista original de este comentario (escrita antes de esta
+ * revisión) ya estaba desactualizada y llevó a elegir un modelo muerto
+ * (gemini-2.5-flash) para el Coding Agent, que dio 404 real en producción.
+ * Re-verificado el 2026-08-27 contra la fuente oficial en sí
+ * (ai.google.dev/gemini-api/docs/changelog, no un resumen de terceros):
+ *   gemini-3.7-flash        — GA 13/8/2026, el más nuevo, coding/agentic
+ *   gemini-3.6-flash        — GA 21/7/2026
+ *   gemini-3.5-flash-lite   — GA 21/7/2026, el más barato/rápido vigente
+ *   gemini-3.1-pro-preview  — flagship reasoning, 2M ctx (confirmado 0 quota gratis)
+ * CONFIRMADOS MUERTOS a esta fecha (no usar, ni como default ni fallback):
+ *   gemini-2.0-flash, gemini-2.0-flash-lite — dados de baja el 1/6/2026
+ *   gemini-2.5-flash                        — 404 real observado el 2026-08-27
+ *   gemini-2.5-flash-lite                   — misma generación que la anterior,
+ *                                              marcado muerto por precaución
+ *                                              (no probado en vivo todavía)
+ * Si un call 404s de nuevo: NO confiar en lo que un chat con Gemini diga
+ * sobre su propio catálogo (puede alucinar su propia nomenclatura — pasó
+ * una vez ya, sugiriendo gemini-2.0-flash como "vigente" cuando está muerto
+ * desde el 1/6/2026) — chequear siempre ai.google.dev/gemini-api/docs/models
+ * y el /docs/changelog directamente.
+ *
  * Reasoning cannot be fully disabled on Gemini 3.x or 2.5 Pro (only
  * low/medium/high), which is exactly the range our own ReasoningEffort type
  * already covers, so no special-casing is needed here (contrast with
