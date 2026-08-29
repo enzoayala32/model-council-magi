@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { ChevronDown, Plus, Search, Sparkles, Star, Trash2, Wrench } from "lucide-react";
+import Link from "next/link";
+import { ChevronDown, Plus, Search, Sparkles, Star, Trash2, Wrench, Code2 } from "lucide-react";
 import type { RunModel } from "../../lib/client-types";
 import type { StoredThread, StoredTurn } from "@/lib/threads";
 import { INITIAL_MODELS } from "../../lib/constants";
@@ -123,6 +124,10 @@ export function Sidebar({
       </div>
 
       <div className="sidebarFoot">
+        <Link href="/agent" className="sidebarSettings" style={{ textDecoration: "none" }}>
+          <Code2 size={15} />
+          <span>Coding Agent</span>
+        </Link>
         <button className="sidebarSettings" type="button" onClick={onOpenSettings}>
           <Wrench size={15} />
           <span>Ajustes</span>

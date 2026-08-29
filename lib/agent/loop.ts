@@ -76,7 +76,11 @@ export function resolveCodingModelId(): { modelId: string; source: "env" | "defa
   return fromEnv ? { modelId: fromEnv, source: "env" } : { modelId: DEFAULT_CODING_MODEL, source: "default" };
 }
 
-function sha256(text: string): string {
+/** Exportado para que `apply.ts` (Fase 2G) re-chequee `baseline_hash`
+ * contra el contenido real del proyecto con el MISMO algoritmo que se usó
+ * para calcularlo acá — un hash distinto (aunque fuera "equivalente")
+ * podría dar falsos conflictos o, peor, falsos negativos. */
+export function sha256(text: string): string {
   return crypto.createHash("sha256").update(text, "utf-8").digest("hex");
 }
 

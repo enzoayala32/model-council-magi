@@ -1,8 +1,9 @@
-import { getTask, transitionTask, updateTaskFields, listTasks, isTerminalStatus, type TaskStatus, type TransitionPatch } from "./task-store";
+import { getTask, transitionTask, updateTaskFields, listTasks, isTerminalStatus, type CodingTask, type TaskStatus, type TransitionPatch } from "./task-store";
 import { getProject } from "./project-store";
 import { createWorkspaceForTask, destroyWorkspaceForTask, loadWorkspaceForTask, type TaskWorkspace } from "./workspace-manager";
 import { runAgentLoop, type AgentLoopResult, type RunAgentLoopOptions } from "./loop";
 import { appendEvent } from "./event-log";
+import { persistProposals } from "./proposal-store";
 
 type LoopRunner = (options: RunAgentLoopOptions) => Promise<AgentLoopResult>;
 
@@ -11,8 +12,12 @@ type LoopRunner = (options: RunAgentLoopOptions) => Promise<AgentLoopResult>;
  * no se puede reconstruir la línea de tiempo de estados de una task solo
  * mirando `agent_events` (que hoy solo tenía eventos del loop en sí). Lee
  * el `status` actual justo antes de transicionar para que `from` sea
- * siempre el real, no uno cacheado de más arriba en la función. */
-function transitionAndLog(taskId: string, to: TaskStatus, patch?: TransitionPatch, reason?: string) {
+ * siempre el real, no uno cacheado de más arriba en la función. Exportada
+ * porque `apply.ts` (Fase 2G) también transiciona la task (READY_FOR_REVIEW
+ * → APPLYING → APPLIED/READY_FOR_REVIEW) y necesita el mismo espejo en
+ * `agent_events` — un solo lugar que hace "transicionar + loguear" evita
+ * que las dos rutas de transición (runner y apply) diverjan con el tiempo. */
+export function transitionAndLog(taskId: string, to: TaskStatus, patch?: TransitionPatch, reason?: string) {
   const from = getTask(taskId)?.status ?? "QUEUED";
   const next = transitionTask(taskId, to, patch);
   appendEvent(taskId, { type: "status_change", from, to, reason });
@@ -110,8 +115,10 @@ export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promis
     } else if (result.error) {
       transitionAndLog(taskId, "FAILED", { error: result.error, stopReason: result.stopReason }, result.error);
     } else if (result.proposals.length > 0) {
-      // Las propuestas en sí todavía no se persisten acá (eso es Fase 2F) —
-      // 2D solo decide el estado final de la task a partir del resultado.
+      // Fase 2F: se persisten ANTES de transicionar — si `persistProposals`
+      // tirara, la task no debe quedar en READY_FOR_REVIEW prometiendo un
+      // diff que no llegó a guardarse (cae al catch de abajo → FAILED).
+      persistProposals(taskId, result.proposals);
       transitionAndLog(taskId, "READY_FOR_REVIEW", { stopReason: result.stopReason });
     } else {
       transitionAndLog(taskId, "NO_CHANGES", { stopReason: result.stopReason });
@@ -130,6 +137,26 @@ export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promis
       await destroyWorkspaceForTask(workspace);
     }
   }
+}
+
+/**
+ * Fase 2H: descarta una task en `READY_FOR_REVIEW` — el usuario mira el
+ * diff y decide que no quiere aplicarlo. `transitionTask` ya rechaza sola
+ * cualquier estado que no sea `READY_FOR_REVIEW` (única transición
+ * permitida a `DISCARDED`, ver `task-store.ts`), así que no hace falta
+ * duplicar esa validación acá. Destruye el workspace igual que hace
+ * `applyTask` cuando termina sin conflictos — ya no hace falta.
+ */
+export async function discardTask(taskId: string, reason: CodingTask["discardReason"] = "user"): Promise<CodingTask> {
+  const next = transitionAndLog(
+    taskId,
+    "DISCARDED",
+    { discardReason: reason },
+    reason === "expired" ? "TTL venció sin decisión" : "descartada por el usuario",
+  );
+  const workspace = loadWorkspaceForTask(taskId);
+  if (workspace) await destroyWorkspaceForTask(workspace);
+  return next;
 }
 
 /**

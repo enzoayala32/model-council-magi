@@ -12,6 +12,9 @@
     "agent:test-task-state": "tsx lib/agent/test-task-state.ts",
     "agent:test-workspace-manager": "tsx lib/agent/test-workspace-manager.ts",
     "agent:test-runner": "tsx lib/agent/test-runner.ts",
+    "agent:test-proposal-store": "tsx lib/agent/test-proposal-store.ts",
+    "agent:test-apply": "tsx lib/agent/test-apply.ts",
+    "agent:test-agent-routes": "tsx lib/agent/test-agent-routes.ts",
     "agent:test-runner-real": "tsx lib/agent/test-runner-real.ts",
     "agent:test-model-registry": "tsx lib/agent/test-model-registry.ts",
     "agent:stress": "tsx lib/agent/stress-test.ts"

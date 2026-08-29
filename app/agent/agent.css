@@ -1,0 +1,213 @@
+.agentPage {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  height: 100vh;
+  background: #0b0d12;
+  color: #e6e8ec;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+}
+
+.agentSidebar {
+  border-right: 1px solid #1e2230;
+  padding: 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.agentBackLink {
+  color: #8892a6;
+  text-decoration: none;
+  font-size: 12px;
+}
+.agentBackLink:hover {
+  color: #e6e8ec;
+}
+
+.agentSectionTitle {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+  margin-bottom: 8px;
+}
+
+.agentList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agentListItem {
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: #c7cbd4;
+  cursor: pointer;
+  font: inherit;
+}
+.agentListItem:hover {
+  background: #151824;
+}
+.agentListItem.active {
+  background: #1c2135;
+  border-color: #3b4266;
+  color: #fff;
+}
+.agentListItem small {
+  display: block;
+  color: #6b7280;
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.agentForm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.agentForm input,
+.agentForm textarea,
+.agentForm select {
+  background: #11141d;
+  border: 1px solid #262b3d;
+  border-radius: 6px;
+  color: #e6e8ec;
+  padding: 6px 8px;
+  font: inherit;
+}
+.agentForm textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+.agentButton {
+  background: #2a5bd7;
+  border: none;
+  border-radius: 6px;
+  color: white;
+  padding: 7px 10px;
+  cursor: pointer;
+  font: inherit;
+}
+.agentButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.agentButton.secondary {
+  background: #1c2135;
+  border: 1px solid #333a55;
+}
+.agentButton.danger {
+  background: #7a2323;
+}
+
+.agentError {
+  color: #ff8080;
+  font-size: 12px;
+}
+
+.agentMain {
+  padding: 20px 28px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.agentEmpty {
+  color: #6b7280;
+  margin-top: 40px;
+  text-align: center;
+}
+
+.agentTaskHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.agentBadge {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+.agentBadge.QUEUED, .agentBadge.RUNNING { background: #1e3a5f; color: #7fc4ff; }
+.agentBadge.READY_FOR_REVIEW { background: #4a3d13; color: #f0c14b; }
+.agentBadge.APPLYING { background: #4a3d13; color: #f0c14b; }
+.agentBadge.APPLIED { background: #16401f; color: #6fd68a; }
+.agentBadge.DISCARDED, .agentBadge.CANCELLED, .agentBadge.INTERRUPTED { background: #2a2e3d; color: #9aa1b3; }
+.agentBadge.FAILED { background: #4a1a1a; color: #ff8080; }
+.agentBadge.NO_CHANGES { background: #2a2e3d; color: #9aa1b3; }
+
+.agentPrompt {
+  color: #9aa1b3;
+  white-space: pre-wrap;
+}
+
+.agentEventLog {
+  background: #0e1017;
+  border: 1px solid #1e2230;
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 45vh;
+  overflow-y: auto;
+}
+.agentEventLine {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+}
+.agentEventLine.err { color: #ff8080; }
+.agentEventLine.ok { color: #6fd68a; }
+.agentEventLine.status { color: #7fc4ff; }
+.agentEventLine.text { color: #c7cbd4; }
+
+.agentProposalList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.agentProposal {
+  border: 1px solid #262b3d;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.agentProposal.conflict {
+  border-color: #7a2323;
+}
+.agentProposalHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #11141d;
+  font-size: 12px;
+}
+.agentProposalDiff {
+  margin: 0;
+  padding: 10px 14px;
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  background: #0e1017;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.agentDiffAdd { color: #6fd68a; }
+.agentDiffDel { color: #ff8080; }
+
+.agentActions {
+  display: flex;
+  gap: 8px;
+}

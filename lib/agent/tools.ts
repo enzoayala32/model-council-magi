@@ -22,7 +22,7 @@ class UnsafePathError extends Error {}
  * pero no la hace), acá el `fs.realpath` se ejecuta y se compara de
  * verdad contra la raíz real.
  */
-async function resolveSafePath(root: string, relativePath: string): Promise<string> {
+export async function resolveSafePath(root: string, relativePath: string): Promise<string> {
   if (path.isAbsolute(relativePath)) throw new UnsafePathError(`Ruta absoluta no permitida: ${relativePath}`);
   const joined = path.resolve(root, relativePath);
   const realRoot = await fs.realpath(root);

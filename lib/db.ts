@@ -101,6 +101,26 @@ function createConnection(): Database.Database {
       UNIQUE (task_id, seq)
     );
     CREATE INDEX IF NOT EXISTS idx_agent_events_task ON agent_events(task_id, seq);
+
+    -- Fase 2F: propuestas de archivo de una CodingTask terminada, persistidas
+    -- tal cual salen de AgentFileProposal (loop.ts) al aterrizar en
+    -- READY_FOR_REVIEW — antes vivían solo en memoria durante el loop y se
+    -- perdían si el server se reiniciaba. "applied"/"conflict" quedan en 0
+    -- acá; los actualiza el endpoint de APPLY de la Fase 2G, no esta fase.
+    -- Ver diseño de Fase 2, secciones 6 y 7.
+    CREATE TABLE IF NOT EXISTS agent_proposals (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES agent_tasks(id),
+      kind TEXT NOT NULL,
+      rel_path TEXT NOT NULL,
+      diff TEXT NOT NULL,
+      next_content TEXT NOT NULL,
+      baseline_hash TEXT NOT NULL,
+      typecheck_status TEXT NOT NULL,
+      applied INTEGER NOT NULL DEFAULT 0,
+      conflict INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_proposals_task ON agent_proposals(task_id);
   `);
   return db;
 }
