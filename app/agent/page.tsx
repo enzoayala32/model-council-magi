@@ -10,9 +10,16 @@ import type { FileProposal } from "@/lib/fs-tools";
 import "./agent.css";
 
 import { useAgentTaskEvents } from "./useAgentTaskEvents";
+import { ProjectPicker } from "./ProjectPicker";
 
 type CodingAgentModel = { id: string; label: string; shortName: string; maker: string };
 type ProposalView = FileProposal & { applied: boolean; conflict: boolean };
+
+/** Espejo del `TERMINAL_STATUSES` de `lib/agent/task-store.ts` — no se
+ * puede importar ese array (es un valor en tiempo de ejecución, no un
+ * tipo) sin arrastrar `lib/db.ts` (better-sqlite3) al bundle del cliente.
+ * Solo estos estados habilitan el botón de eliminar una task. */
+const TERMINAL_TASK_STATUSES: TaskStatus[] = ["APPLIED", "DISCARDED", "FAILED", "NO_CHANGES", "CANCELLED", "INTERRUPTED"];
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -54,6 +61,10 @@ function DiffBlock({ diff }: { diff: string }) {
   );
 }
 
+/** Selector de carpetas del filesystem del server (Fase posterior a la 3)
+ * — ver `ProjectPicker.tsx` para la implementación completa (acceso
+ * rápido, recientes, breadcrumbs, análisis automático). */
+
 export default function AgentPage() {
   const [projects, setProjects] = useState<AgentProject[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -73,6 +84,8 @@ export default function AgentPage() {
   const [proposals, setProposals] = useState<ProposalView[]>([]);
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
 
   const selectedTask = useMemo(() => tasks.find((t) => t.id === selectedTaskId) ?? null, [tasks, selectedTaskId]);
   const { events, status: liveStatus, conflictedPaths: liveConflictedPaths } = useAgentTaskEvents(selectedTaskId);
@@ -220,6 +233,21 @@ export default function AgentPage() {
     }
   }
 
+  async function handleDeleteTask(taskId: string, e: React.MouseEvent) {
+    e.stopPropagation(); // no seleccionar la task al tocar el botón de borrar
+    if (!window.confirm("¿Eliminar esta task para siempre? No se puede deshacer.")) return;
+    setDeletingTaskId(taskId);
+    try {
+      await fetchJson(`/api/agent/tasks/${taskId}`, { method: "DELETE" });
+      setTasks((current) => current.filter((t) => t.id !== taskId));
+      if (selectedTaskId === taskId) setSelectedTaskId(null);
+    } catch (e) {
+      setTaskFormError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeletingTaskId(null);
+    }
+  }
+
   return (
     <div className="agentPage">
       <aside className="agentSidebar">
@@ -253,7 +281,12 @@ export default function AgentPage() {
         <form className="agentForm" onSubmit={handleCreateProject}>
           <div className="agentSectionTitle">Agregar proyecto</div>
           <input placeholder="Nombre" value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} required />
-          <input placeholder="Ruta local (ej. C:\\proyectos\\mi-app)" value={newProjectPath} onChange={(e) => setNewProjectPath(e.target.value)} required />
+          <div className="agentPathRow">
+            <input placeholder="Ruta local (ej. C:\\proyectos\\mi-app)" value={newProjectPath} onChange={(e) => setNewProjectPath(e.target.value)} required />
+            <button type="button" className="agentButton secondary" onClick={() => setPickerOpen(true)}>
+              Explorar…
+            </button>
+          </div>
           <button className="agentButton" type="submit" disabled={creatingProject}>
             {creatingProject ? "Agregando…" : "Agregar"}
           </button>
@@ -271,8 +304,26 @@ export default function AgentPage() {
                   className={`agentListItem${task.id === selectedTaskId ? " active" : ""}`}
                   onClick={() => setSelectedTaskId(task.id)}
                 >
-                  {task.prompt.slice(0, 40)}
-                  {task.prompt.length > 40 ? "…" : ""}
+                  <span className="agentTaskRowTop">
+                    <span>
+                      {task.prompt.slice(0, 40)}
+                      {task.prompt.length > 40 ? "…" : ""}
+                    </span>
+                    {TERMINAL_TASK_STATUSES.includes(task.status) && (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        className="agentDeleteTaskBtn"
+                        title="Eliminar task"
+                        onClick={(e) => handleDeleteTask(task.id, e)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") handleDeleteTask(task.id, e as unknown as React.MouseEvent);
+                        }}
+                      >
+                        {deletingTaskId === task.id ? "…" : "🗑"}
+                      </span>
+                    )}
+                  </span>
                   <small>
                     {task.status} · {new Date(task.createdAt).toLocaleString()}
                   </small>
@@ -363,6 +414,17 @@ export default function AgentPage() {
           </>
         )}
       </main>
+
+      {pickerOpen && (
+        <ProjectPicker
+          onClose={() => setPickerOpen(false)}
+          onChoose={(path, suggestedName) => {
+            setNewProjectPath(path);
+            setNewProjectName((current) => current || suggestedName);
+            setPickerOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }

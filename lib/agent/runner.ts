@@ -1,4 +1,14 @@
-import { getTask, transitionTask, updateTaskFields, listTasks, isTerminalStatus, type CodingTask, type TaskStatus, type TransitionPatch } from "./task-store";
+import {
+  getTask,
+  transitionTask,
+  updateTaskFields,
+  listTasks,
+  isTerminalStatus,
+  deleteTaskRow,
+  type CodingTask,
+  type TaskStatus,
+  type TransitionPatch,
+} from "./task-store";
 import { getProject } from "./project-store";
 import { createWorkspaceForTask, destroyWorkspaceForTask, loadWorkspaceForTask, type TaskWorkspace } from "./workspace-manager";
 import { runAgentLoop, type AgentLoopResult, type RunAgentLoopOptions } from "./loop";
@@ -6,6 +16,11 @@ import { appendEvent } from "./event-log";
 import { persistProposals } from "./proposal-store";
 
 type LoopRunner = (options: RunAgentLoopOptions) => Promise<AgentLoopResult>;
+
+/** Tope de reintentos automáticos por restart antes de rendirse y dejar la
+ * task en `INTERRUPTED` para que la mire un humano — ver diseño de Fase 3,
+ * sección 4. 3 reintentos = hasta 4 intentos `RUNNING` totales. */
+export const MAX_AUTO_RESTART_RETRIES = 3;
 
 /** Envoltorio de `transitionTask` que además deja un evento `status_change`
  * en `agent_events` (Fase 2E, ver diseño de Fase 2, sección 12) — sin esto
@@ -27,7 +42,7 @@ export function transitionAndLog(taskId: string, to: TaskStatus, patch?: Transit
 /** Única fuente de "¿hay un proceso de verdad corriendo esta task ahora?" —
  * vive en memoria a propósito (ver diseño de Fase 2, sección 10/13): si el
  * proceso muere, este Map desaparece con él, y es exactamente lo que hace
- * que `reconcileInterruptedTasks` (llamada al boot) sea necesaria en vez de
+ * que `reconcileOrphanedTasks` (llamada al boot) sea necesaria en vez de
  * intentar "revivir" nada. */
 const activeRuns = new Map<string, AbortController>();
 
@@ -37,9 +52,9 @@ export function isTaskActive(taskId: string): boolean {
 
 /** Pide cancelar una task `RUNNING`. Best-effort: si el proceso que la
  * corría ya no existe (se reinició el server), no hay nada que cancelar acá
- * — esa task se resuelve como `INTERRUPTED` en el próximo boot, no como
- * `CANCELLED`. Devuelve `false` si no hay una corrida activa en memoria
- * para ese id. */
+ * — esa task se resuelve reencolándose sola en el próximo boot (Fase 3),
+ * no como `CANCELLED`. Devuelve `false` si no hay una corrida activa en
+ * memoria para ese id. */
 export function cancelTask(taskId: string): boolean {
   const controller = activeRuns.get(taskId);
   if (!controller) return false;
@@ -61,9 +76,18 @@ export type RunTaskOptions = {
  *
  * Deliberadamente fire-and-forget desde el punto de vista de quien la
  * invoca (ver diseño de Fase 2, sección 10): esta función se llama sin
- * esperarla (`runTask(id)` sin `await` desde el disparador real), el estado
- * de la task siempre se puede consultar después vía `getTask` — nunca
- * depende de que este `await` en particular siga vivo.
+ * esperarla, el estado de la task siempre se puede consultar después vía
+ * `getTask` — nunca depende de que este `await` en particular siga vivo.
+ *
+ * Fase 3: el primer paso (`QUEUED → RUNNING`) es un auto-claim protegido
+ * por el compare-and-swap de `transitionTask` + el índice único parcial de
+ * `agent_tasks` (una sola `RUNNING` por proyecto). Si esta task pierde la
+ * carrera — porque el dispatcher (`dispatcher.ts`) llamó a otra task del
+ * mismo proyecto casi al mismo tiempo, o porque ya había una `RUNNING` — el
+ * claim falla, y eso NO es un error real de la task: se loguea y se
+ * retorna sin tocar nada más, dejando la task como esté (`QUEUED`,
+ * esperando su turno). Marcarla `FAILED` acá sería activamente incorrecto
+ * — nunca llegó a correr.
  *
  * LIMITACIÓN CONOCIDA (Fase 2D): `runAgentLoop` arma el diff final
  * corriendo `git status`/`git show HEAD:` DENTRO del workspace — funciona
@@ -73,8 +97,17 @@ export type RunTaskOptions = {
  * cualquier task sobre un `Project` con `isGitRepo: false` — con un error
  * claro, en vez de dejarla correr y terminar con un resultado vacío o
  * incorrecto.
+ *
+ * Devuelve `true` si esta llamada llegó a tomar el turno de verdad
+ * (`QUEUED → RUNNING`) y ejecutó el loop completo, `false` si el auto-claim
+ * falló (perdió la carrera de dispatch) y no llegó a hacer nada. El
+ * dispatcher (`dispatcher.ts`) usa este valor para decidir si tiene sentido
+ * reintentar YA MISMO (algo cambió de verdad, vale la pena re-chequear la
+ * cola) o si conviene esperar un poco (perder la carrera no cambia nada del
+ * estado — reintentar sin pausa sería un busy-loop apretado hasta que la
+ * que sí está corriendo termine).
  */
-export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promise<void> {
+export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promise<boolean> {
   const loopRunner = opts.loopRunner ?? runAgentLoop;
 
   const task = getTask(taskId);
@@ -92,14 +125,33 @@ export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promis
     );
   }
 
+  try {
+    transitionAndLog(taskId, "RUNNING");
+  } catch (claimError) {
+    // Perdió la carrera de dispatch (índice único de agent_tasks, o el
+    // status ya había cambiado por otra llamada concurrente) — no es un
+    // error de la task en sí, así que no se toca su estado ni se registra
+    // como FAILED. Simplemente no había turno para ella todavía.
+    console.warn(
+      `[Coding Agent] runTask(${taskId}) no pudo tomar el turno de RUNNING ` +
+        `(probablemente ya hay otra task RUNNING del mismo proyecto):`,
+      claimError instanceof Error ? claimError.message : claimError,
+    );
+    return false;
+  }
+
   const abortController = new AbortController();
   activeRuns.set(taskId, abortController);
 
   let workspace: TaskWorkspace | null = null;
   try {
-    transitionAndLog(taskId, "RUNNING");
     workspace = await createWorkspaceForTask(task, project);
-    updateTaskFields(taskId, { workspaceId: taskId, baseCommit: workspace.baseCommit });
+    // Fase 3: `workspaceId` YA quedó apuntado correctamente por
+    // `recordWorkspaceCreated` (dentro de createWorkspaceForTask), en la
+    // misma transacción que crea el registro — acá solo hace falta
+    // guardar `baseCommit`, que es un dato propio de la task, no del
+    // workspace en sí.
+    updateTaskFields(taskId, { baseCommit: workspace.baseCommit });
 
     const result = await loopRunner({
       task: task.prompt,
@@ -124,19 +176,28 @@ export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promis
       transitionAndLog(taskId, "NO_CHANGES", { stopReason: result.stopReason });
     }
   } catch (error) {
-    transitionAndLog(taskId, "FAILED", { error: error instanceof Error ? error.message : String(error) });
+    try {
+      transitionAndLog(taskId, "FAILED", { error: error instanceof Error ? error.message : String(error) });
+    } catch (transitionError) {
+      // Fase 3, sección 12 del diseño: si ni siquiera se puede dejar la
+      // task en FAILED (por ejemplo porque ya no está en RUNNING por algún
+      // motivo), no dejamos que esto escale a una excepción sin capturar
+      // — se loguea y se sigue, la task queda en el estado que tenga.
+      console.error(`[Coding Agent] no se pudo transicionar la task ${taskId} a FAILED tras un error:`, transitionError);
+    }
   } finally {
     activeRuns.delete(taskId);
-    // READY_FOR_REVIEW deja el workspace vivo a propósito — el diff todavía
-    // no se persistió (2F) y el usuario puede necesitar aplicar/descartar
-    // más adelante (2G) sobre ESE mismo worktree. El resto de los estados
-    // terminales de esta corrida (FAILED/NO_CHANGES/CANCELLED) no lo
-    // necesitan más.
+    // READY_FOR_REVIEW deja el workspace vivo a propósito — el usuario
+    // puede necesitar aplicar/descartar más adelante (2G) sobre ESE mismo
+    // worktree. El resto de los estados terminales de esta corrida
+    // (FAILED/NO_CHANGES/CANCELLED) no lo necesitan más.
     const finalTask = getTask(taskId);
     if (workspace && finalTask && finalTask.status !== "READY_FOR_REVIEW" && isTerminalStatus(finalTask.status)) {
       await destroyWorkspaceForTask(workspace);
     }
   }
+
+  return true;
 }
 
 /**
@@ -159,25 +220,101 @@ export async function discardTask(taskId: string, reason: CodingTask["discardRea
   return next;
 }
 
+/** Best-effort: destruye el workspace actual de una task sin dejar que
+ * ningún error (directorio ya borrado a mano, fila sin workspace, lo que
+ * sea) se propague. Fase 3, sección 11 del diseño: la reconciliación de
+ * boot corre desde `instrumentation.ts` — una excepción sin capturar acá
+ * podría impedir que el server termine de arrancar, que es exactamente lo
+ * opuesto de lo que esta fase busca. Perder una carpeta huérfana en disco
+ * es un problema muchísimo más chico que un server que no arranca. */
+async function destroyWorkspaceBestEffort(taskId: string): Promise<void> {
+  try {
+    const workspace = loadWorkspaceForTask(taskId);
+    if (workspace) await destroyWorkspaceForTask(workspace);
+  } catch (error) {
+    console.warn(`[Coding Agent] no se pudo limpiar el workspace de la task ${taskId} durante la reconciliación (se ignora, no bloquea el boot):`, error);
+  }
+}
+
 /**
- * Reconciliación al boot (ver diseño de Fase 2, sección 13): cualquier task
- * que haya quedado en `RUNNING` en SQLite sin que exista un proceso real
- * corriéndola (porque el server se reinició a mitad de una corrida) pasa a
- * `INTERRUPTED` — nunca se intenta "retomarla". Se llama una única vez al
- * arrancar el server, antes de aceptar cualquier `CodingTask` nueva.
+ * Reconciliación al boot (Fase 3, sección 11 del diseño — reemplaza a
+ * `reconcileInterruptedTasks` de la Fase 2D): cualquier task que haya
+ * quedado en `RUNNING` en SQLite sin que exista un proceso real
+ * corriéndola (porque el server se reinició a mitad de una corrida) se
+ * reencola desde cero — el restart es invisible, no requiere que un
+ * humano la vuelva a crear a mano — SALVO que ya haya agotado
+ * `MAX_AUTO_RESTART_RETRIES` reintentos automáticos, en cuyo caso recién
+ * ahí pasa a `INTERRUPTED`.
+ *
+ * Se llama una única vez al arrancar el server (`instrumentation.ts`),
+ * antes de aceptar cualquier `CodingTask` nueva. El incremento/reset de
+ * `restart_retry_count` sigue la regla exacta de la sección 4 del diseño:
+ * acá SOLO se incrementa (nunca se resetea) — el reset ocurre del otro
+ * lado, en `transitionAndLog`, cuando una task sale de `RUNNING` por el
+ * camino normal.
  */
-export async function reconcileInterruptedTasks(): Promise<{ interrupted: string[] }> {
+export async function reconcileOrphanedTasks(): Promise<{ requeued: string[]; interrupted: string[] }> {
+  const requeued: string[] = [];
   const interrupted: string[] = [];
+
   for (const task of listTasks({ status: "RUNNING" })) {
     // Si por algún motivo SÍ hay una corrida activa en memoria para esta
     // task (no debería pasar justo al boot, pero por las dudas), no la
     // tocamos — la reconciliación es solo para huérfanas de verdad.
     if (isTaskActive(task.id)) continue;
 
-    transitionAndLog(task.id, "INTERRUPTED", undefined, "reinicio del servidor a mitad de una corrida");
-    const workspace = loadWorkspaceForTask(task.id);
-    if (workspace) await destroyWorkspaceForTask(workspace);
-    interrupted.push(task.id);
+    // Best-effort ANTES de decidir el destino — un workspace a medio
+    // terminar (o ya borrado a mano) nunca debe impedir la transición.
+    await destroyWorkspaceBestEffort(task.id);
+
+    if (task.restartRetryCount >= MAX_AUTO_RESTART_RETRIES) {
+      transitionAndLog(
+        task.id,
+        "INTERRUPTED",
+        undefined,
+        `${MAX_AUTO_RESTART_RETRIES} reintentos automáticos agotados sin llegar a un estado estable`,
+      );
+      interrupted.push(task.id);
+      continue;
+    }
+
+    try {
+      transitionAndLog(
+        task.id,
+        "QUEUED",
+        { restartRetryCount: task.restartRetryCount + 1 },
+        `reencolada tras reinicio del servidor (intento ${task.restartRetryCount + 1}/${MAX_AUTO_RESTART_RETRIES})`,
+      );
+      requeued.push(task.id);
+    } catch (error) {
+      // No debería pasar (venimos de leer RUNNING recién), pero si pasa
+      // (otro proceso la tocó justo en el medio), se loguea y se sigue con
+      // las demás — un fallo puntual acá no puede tirar todo el boot abajo.
+      console.error(`[Coding Agent] no se pudo reencolar la task huérfana ${task.id} durante la reconciliación:`, error);
+    }
   }
-  return { interrupted };
+
+  return { requeued, interrupted };
+}
+
+/**
+ * Borra definitivamente una task terminada (ver `TERMINAL_STATUSES` en
+ * `task-store.ts`) — pensada para el botón "eliminar" de tasks viejas en
+ * la UI. Antes de borrar el registro, limpia best-effort cualquier
+ * workspace que pudiera haber quedado vivo en disco (no debería pasar en
+ * operación normal — todo estado terminal ya destruye su workspace al
+ * llegar ahí — pero es más seguro no asumirlo). `deleteTaskRow` es quien
+ * realmente valida que el estado sea terminal y tira `TaskNotTerminalError`
+ * si no lo es; acá no se duplica esa validación.
+ */
+export async function deleteTask(taskId: string): Promise<void> {
+  const workspace = loadWorkspaceForTask(taskId);
+  if (workspace) {
+    try {
+      await destroyWorkspaceForTask(workspace);
+    } catch (error) {
+      console.warn(`[Coding Agent] no se pudo destruir el workspace de la task ${taskId} antes de borrarla (se continúa igual):`, error);
+    }
+  }
+  deleteTaskRow(taskId);
 }

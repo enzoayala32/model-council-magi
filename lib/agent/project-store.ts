@@ -68,7 +68,7 @@ function rowToProject(row: AgentProjectRow): AgentProject {
  * `git worktree add ... HEAD` pueda apuntar — falla con "invalid reference:
  * HEAD". Para nuestros fines (armar un worktree en Fase 2A) eso no cuenta
  * como un repo git utilizable todavía. */
-async function detectIsGitRepo(localPath: string): Promise<boolean> {
+export async function detectIsGitRepo(localPath: string): Promise<boolean> {
   try {
     const { stdout } = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: localPath });
     if (stdout.trim() !== "true") return false;

@@ -6,9 +6,54 @@ import path from "node:path";
 const DATA_DIR = path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "council.db");
 
+/** Fase 3, sección 7 del diseño: versión de schema trackeada vía
+ * `PRAGMA user_version` (nativo de SQLite, sin tabla extra). No es un
+ * sistema de migraciones — es una alarma barata para que el PRÓXIMO
+ * cambio de schema rompedor no pase desapercibido en silencio como casi
+ * pasó con este (`agent_workspaces` de 1:1 a 1:N). Se sube cada vez que
+ * haya un cambio de forma incompatible con `CREATE TABLE IF NOT EXISTS`. */
+const SCHEMA_VERSION = 1;
+
 declare global {
   // eslint-disable-next-line no-var
   var __councilDb: Database.Database | undefined;
+}
+
+function tableExists(db: Database.Database, table: string): boolean {
+  const row = db.prepare("SELECT count(*) as c FROM sqlite_master WHERE type='table' AND name = ?").get(table) as { c: number };
+  return row.c > 0;
+}
+
+function columnExists(db: Database.Database, table: string, column: string): boolean {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  return rows.some((r) => r.name === column);
+}
+
+/**
+ * Fase 3: detecta específicamente el caso peligroso — un `council.db` de
+ * ANTES de este cambio, con filas reales en `agent_workspaces` donde
+ * `id = task_id` (la firma inequívoca del schema 1:1 viejo). No basta con
+ * mirar si la tabla existe: una DB que nunca usó el Coding Agent, o que lo
+ * usó pero nunca llegó a crear un workspace, no tiene ningún dato que se
+ * pueda malinterpretar, y no hace falta molestar a nadie por eso. Si hay
+ * datos reales en la forma vieja, `CREATE TABLE IF NOT EXISTS` los dejaría
+ * conviviendo en silencio con código que ya asume 1:N — mejor cortar acá
+ * con un mensaje claro que dejar que aparezcan errores raros más adelante.
+ */
+function assertNoIncompatibleLegacySchema(db: Database.Database): void {
+  if (!tableExists(db, "agent_workspaces")) return;
+  if (!columnExists(db, "agent_workspaces", "task_id")) return; // no debería pasar, pero no es este chequeo el que lo valida
+
+  const legacyRows = db.prepare("SELECT count(*) as c FROM agent_workspaces WHERE id = task_id").get() as { c: number };
+  if (legacyRows.c > 0) {
+    throw new Error(
+      "data/council.db tiene datos de agent_workspaces con el schema 1:1 anterior a la Fase 3 " +
+        "(id = task_id). Ese schema ya no es compatible con el código actual (agent_workspaces " +
+        "ahora es 1:N, ver diseño de Fase 3). Borrá data/council.db y reiniciá el server para " +
+        "recrearlo desde cero — es la decisión ya tomada para este cambio puntual (dato de " +
+        "desarrollo, sin costo real de perder el historial de tasks/proyectos de prueba).",
+    );
+  }
 }
 
 function createConnection(): Database.Database {
@@ -17,6 +62,9 @@ function createConnection(): Database.Database {
   }
   const db = new Database(DB_PATH);
   db.pragma("journal_mode = WAL");
+
+  assertNoIncompatibleLegacySchema(db);
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS threads (
       id TEXT PRIMARY KEY,
@@ -48,6 +96,9 @@ function createConnection(): Database.Database {
 
     -- Fase 2B: CodingTask — una corrida puntual del Coding Agent sobre un
     -- Project. Ver diseño de Fase 2, secciones 3, 7 y 8 (máquina de estados).
+    -- Fase 3 agregó restart_retry_count (ver más abajo, vía ALTER TABLE
+    -- guardado, no acá, para no romper una DB ya creada con CREATE TABLE
+    -- IF NOT EXISTS).
     CREATE TABLE IF NOT EXISTS agent_tasks (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL REFERENCES agent_projects(id),
@@ -62,14 +113,32 @@ function createConnection(): Database.Database {
       stop_reason TEXT,
       error TEXT,
       discard_reason TEXT,
-      conflicted_paths TEXT
+      conflicted_paths TEXT,
+      restart_retry_count INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_agent_tasks_project ON agent_tasks(project_id);
     CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status);
 
-    -- Fase 2C: registro persistido de cada AgentWorkspace (worktree o copia
-    -- física) creado para una CodingTask. Relación 1:1 con agent_tasks
-    -- (id = task_id, sin id separado) — ver diseño de Fase 2, sección 4.
+    -- Fase 3, sección 3.1: garantía real (a nivel SQLite, no solo en
+    -- memoria) de "máximo una task RUNNING a la vez por Project". Un
+    -- índice único PARCIAL — solo aplica a filas con status='RUNNING' — es
+    -- el mecanismo mínimo que da esta propiedad sin importar cuántos
+    -- procesos Node le pegan al mismo archivo. Cualquier intento de dejar
+    -- una segunda RUNNING del mismo proyecto revienta con
+    -- "UNIQUE constraint failed", sin que la lógica de aplicación tenga
+    -- que acordarse de chequear nada.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_tasks_one_running_per_project
+      ON agent_tasks(project_id) WHERE status = 'RUNNING';
+
+    -- Fase 2C, corregida en Fase 3 (sección 5): registro persistido de cada
+    -- AgentWorkspace (worktree o copia física) creado para una CodingTask.
+    -- Pasó de 1:1 (id=task_id) a 1:N — una task puede acumular varios
+    -- intentos de workspace a lo largo de su vida (uno por cada restart
+    -- automático). "attempt" es informativo (Grupo B del diseño de Fase 3,
+    -- se puede derivar de restart_retry_count+1, pero es barato tenerlo
+    -- para no tener que recalcularlo en la UI). El workspace ACTIVO de una
+    -- task es el que apunta agent_tasks.workspace_id (FK), no "el más
+    -- reciente" ni ninguna otra heurística.
     CREATE TABLE IF NOT EXISTS agent_workspaces (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL REFERENCES agent_tasks(id),
@@ -79,6 +148,7 @@ function createConnection(): Database.Database {
       worktree_path TEXT NOT NULL,
       branch_name TEXT,
       base_commit TEXT,
+      attempt INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL,
       destroyed_at INTEGER
     );
@@ -90,7 +160,9 @@ function createConnection(): Database.Database {
     -- reconstruir el timeline completo de una corrida vieja aunque el
     -- proceso que la corrió ya no exista. "seq" (no "ts") es la clave de
     -- reanudación: dos eventos pueden compartir milisegundo, nunca seq.
-    -- Ver diseño de Fase 2, secciones 5, 7 y 12.
+    -- Ver diseño de Fase 2, secciones 5, 7 y 12. Fase 3 no le agrega nada
+    -- (ver diseño de Fase 3, sección 6: seq + status_change ya alcanza
+    -- para distinguir intentos sin agregar attempt/workspaceId/runId acá).
     CREATE TABLE IF NOT EXISTS agent_events (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL REFERENCES agent_tasks(id),
@@ -122,6 +194,19 @@ function createConnection(): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_agent_proposals_task ON agent_proposals(task_id);
   `);
+
+  // `restart_retry_count` puede faltar en una DB creada por una versión
+  // ligeramente anterior a este cambio (que ya tenía agent_tasks pero no
+  // esta columna) — CREATE TABLE IF NOT EXISTS no la agrega sola.
+  if (!columnExists(db, "agent_tasks", "restart_retry_count")) {
+    db.exec("ALTER TABLE agent_tasks ADD COLUMN restart_retry_count INTEGER NOT NULL DEFAULT 0");
+  }
+
+  const currentVersion = db.pragma("user_version", { simple: true }) as number;
+  if (currentVersion !== SCHEMA_VERSION) {
+    db.pragma(`user_version = ${SCHEMA_VERSION}`);
+  }
+
   return db;
 }
 
@@ -136,3 +221,4 @@ export function getDb(): Database.Database {
   }
   return globalThis.__councilDb;
 }
+

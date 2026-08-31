@@ -3,8 +3,8 @@
  * depender de un modelo real ni de red: usa un `loopRunner` inyectado (fake)
  * para confirmar que `runTask` orquesta bien la máquina de estados, crea y
  * destruye el workspace en el momento correcto, y que
- * `reconcileInterruptedTasks` marca `INTERRUPTED` a una task `RUNNING`
- * huérfana.
+ * `reconcileOrphanedTasks` reencola (o interrumpe, si ya agotó el tope de
+ * reintentos) a una task `RUNNING` huérfana.
  *
  * Esto NO reemplaza probar contra un modelo real — ver
  * `agent:test-runner-real` para eso, que sí necesita `OPENROUTER_API_KEY`
@@ -19,7 +19,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createProject } from "./project-store";
 import { createTask, getTask, transitionTask } from "./task-store";
-import { runTask, reconcileInterruptedTasks, isTaskActive } from "./runner";
+import { runTask, reconcileOrphanedTasks, isTaskActive } from "./runner";
 import { getWorkspaceForTask } from "./workspace-store";
 import type { AgentLoopResult } from "./loop";
 
@@ -126,7 +126,7 @@ async function main() {
     results.push(ok);
   }
 
-  // --- Caso 5: reconciliación al boot ---
+  // --- Caso 5: reconciliación al boot (Fase 3: reencola, no interrumpe de entrada) ---
   {
     console.log("\n--- Caso 5: reconciliación de una RUNNING huérfana ---");
     const project = await makeGitProject("caso5");
@@ -137,10 +137,14 @@ async function main() {
     transitionTask(task.id, "RUNNING");
     const activeBefore = isTaskActive(task.id);
 
-    const { interrupted } = await reconcileInterruptedTasks();
+    const { requeued, interrupted } = await reconcileOrphanedTasks();
     const finalTask = getTask(task.id)!;
-    const ok = !activeBefore && interrupted.includes(task.id) && finalTask.status === "INTERRUPTED";
-    console.log(ok ? "✅ La task huérfana quedó INTERRUPTED tras la reconciliación." : `❌ Falló. status=${finalTask.status}`);
+    // Fase 3: con restart_retry_count en 0 (recién arrancada), el destino
+    // correcto es QUEUED de nuevo (reintento automático invisible), NO
+    // INTERRUPTED directo — eso solo pasa tras agotar el tope de reintentos
+    // (ver test-dispatcher para ese caso específico).
+    const ok = !activeBefore && requeued.includes(task.id) && !interrupted.includes(task.id) && finalTask.status === "QUEUED" && finalTask.restartRetryCount === 1;
+    console.log(ok ? "✅ La task huérfana se reencoló sola (QUEUED, restartRetryCount=1)." : `❌ Falló. status=${finalTask.status}, restartRetryCount=${finalTask.restartRetryCount}`);
     results.push(ok);
   }
 

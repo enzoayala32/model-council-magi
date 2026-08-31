@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createTask, listTasks, type TaskStatus } from "@/lib/agent/task-store";
 import { getProject, touchProjectLastUsed } from "@/lib/agent/project-store";
 import { isCodingAgentEnabled } from "@/lib/models";
-import { runTask } from "@/lib/agent/runner";
+import { maybeDispatchNext } from "@/lib/agent/dispatcher";
 
 /** Fase 2H. `?projectId=` filtra por proyecto (lo que usa la UI para el
  * historial de un `Project`); sin filtro, devuelve todas las tasks. */
@@ -15,19 +15,15 @@ export async function GET(request: Request) {
 }
 
 /**
- * Crea una `CodingTask` en `QUEUED` y dispara `runTask` SIN esperarlo (ver
- * diseño de Fase 2, sección 9, paso 2: "responde inmediato"). El estado
- * real de la corrida se sigue después vía `GET /api/agent/tasks/[id]` o el
- * SSE de `/api/agent/tasks/[id]/events` — nunca dependiendo de que esta
+ * Crea una `CodingTask` en `QUEUED` y le avisa al dispatcher (Fase 3, ver
+ * diseño sección 3) que ese proyecto tiene trabajo nuevo pendiente — sin
+ * esperarlo (responde inmediato, ver diseño de Fase 2, sección 9, paso 2).
+ * Si ya hay otra task `RUNNING` de este mismo proyecto, esta queda
+ * simplemente esperando en `QUEUED` — `maybeDispatchNext` no hace nada en
+ * ese caso, y el turno le llega solo apenas la que está corriendo termine.
+ * El estado real se sigue después vía `GET /api/agent/tasks/[id]` o el SSE
+ * de `/api/agent/tasks/[id]/events` — nunca dependiendo de que esta
  * request HTTP en particular siga abierta.
- *
- * `runTask` corriendo sin `await` acá significa que una excepción suya no
- * viaja como rechazo de esta promesa hacia ningún `try/catch` — pero
- * `runTask` ya maneja sus propios errores internamente (los deja en
- * `task.error` + status `FAILED`, ver `runner.ts`), así que no hay un error
- * no capturado real; el `.catch` de abajo es solo una red de seguridad para
- * el caso (no debería pasar) de que algo reviente ANTES de ese manejo
- * interno, para que no quede como un unhandled rejection silencioso.
  */
 export async function POST(request: Request) {
   let body: unknown;
@@ -57,9 +53,7 @@ export async function POST(request: Request) {
   const task = createTask({ projectId, modelId, prompt });
   touchProjectLastUsed(projectId);
 
-  runTask(task.id).catch((error) => {
-    console.error(`[Coding Agent] runTask(${task.id}) tiró sin que runner.ts lo haya capturado internamente:`, error);
-  });
+  maybeDispatchNext(projectId);
 
   return NextResponse.json({ ok: true, task }, { status: 201 });
 }

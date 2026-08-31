@@ -17,6 +17,7 @@ import type { CodingTask } from "./task-store";
  * en 2D) necesita mirar para saber cómo se armó `worktreePath`.
  */
 export type TaskWorkspace = {
+  id: string;
   taskId: string;
   projectId: string;
   mode: WorkspaceMode;
@@ -27,25 +28,25 @@ export type TaskWorkspace = {
 };
 
 /**
- * Crea el workspace real para una `CodingTask`, eligiendo el modo según
- * `project.isGitRepo` (ver diseño de Fase 2, sección 14):
- * - `isGitRepo: true`  → `"worktree"` (git worktree real, rama descartable)
- * - `isGitRepo: false` → `"copy"` (copia física aislada, sin git de por medio)
+ * Workspace unificado para una `CodingTask`, ya persistido en
+ * `agent_workspaces`. A diferencia de `AgentWorkspace` (el tipo de bajo
+ * nivel en `workspace.ts`, específico de worktree), este es agnóstico al
+ * modo — `mode` es lo único que un consumidor (el futuro loop del agente,
+ * en 2D) necesita mirar para saber cómo se armó `worktreePath`.
  *
- * Persiste el registro en `agent_workspaces` antes de devolver el
- * resultado — si el proceso muere justo después de crear el directorio
- * físico pero antes de persistir, quedaría un huérfano sin registro; el
- * orden inverso (persistir y recién después crear el directorio) sería
- * peor: un registro que promete un workspace que nunca llegó a existir.
- * Se acepta el primer riesgo como el menor de los dos — el barrido de
- * arranque de 2D igual puede encontrar directorios sin registro por TTL.
+ * `id` (Fase 3) es el `id` PROPIO del registro en `agent_workspaces` — ya
+ * no es lo mismo que `taskId` (esa relación era 1:1 antes de Fase 3, ahora
+ * es 1:N: una task puede tener varios workspaces a lo largo de su vida,
+ * uno por cada restart automático). Hace falta guardarlo acá porque
+ * `destroyWorkspaceForTask` lo necesita para saber CUÁL de los posibles
+ * varios registros de esa task es el que hay que marcar destruido.
  */
 export async function createWorkspaceForTask(task: CodingTask, project: AgentProject): Promise<TaskWorkspace> {
   if (project.isGitRepo) {
     const baseCommit = await getHeadCommit(project.localPath);
     const workspace = await createAgentWorkspace(task.id, project.localPath);
 
-    recordWorkspaceCreated({
+    const persisted = recordWorkspaceCreated({
       taskId: task.id,
       projectId: project.id,
       mode: "worktree",
@@ -56,6 +57,7 @@ export async function createWorkspaceForTask(task: CodingTask, project: AgentPro
     });
 
     return {
+      id: persisted.id,
       taskId: task.id,
       projectId: project.id,
       mode: "worktree",
@@ -68,7 +70,7 @@ export async function createWorkspaceForTask(task: CodingTask, project: AgentPro
 
   const workspace = await createCopyWorkspace(task.id, project.localPath);
 
-  recordWorkspaceCreated({
+  const persisted = recordWorkspaceCreated({
     taskId: task.id,
     projectId: project.id,
     mode: "copy",
@@ -79,6 +81,7 @@ export async function createWorkspaceForTask(task: CodingTask, project: AgentPro
   });
 
   return {
+    id: persisted.id,
     taskId: task.id,
     projectId: project.id,
     mode: "copy",
@@ -91,9 +94,11 @@ export async function createWorkspaceForTask(task: CodingTask, project: AgentPro
 
 /** Destruye el workspace de una task, sin importar en qué modo se creó —
  * el llamador no necesita saber si era worktree o copy, `mode` ya viene en
- * `TaskWorkspace`. Marca `destroyedAt` en el registro persistido incluso si
- * la limpieza física falla parcialmente (best-effort, igual que las
- * funciones de bajo nivel que envuelve). */
+ * `TaskWorkspace`. Marca `destroyedAt` en el registro persistido (por su
+ * `id` PROPIO, Fase 3 — ya no alcanza con el `taskId` porque puede haber
+ * más de un registro por task) incluso si la limpieza física falla
+ * parcialmente (best-effort, igual que las funciones de bajo nivel que
+ * envuelve). */
 export async function destroyWorkspaceForTask(workspace: TaskWorkspace): Promise<void> {
   if (workspace.mode === "worktree") {
     await destroyAgentWorkspace({
@@ -104,17 +109,22 @@ export async function destroyWorkspaceForTask(workspace: TaskWorkspace): Promise
   } else {
     await destroyCopyWorkspace({ worktreePath: workspace.worktreePath });
   }
-  recordWorkspaceDestroyed(workspace.taskId);
+  recordWorkspaceDestroyed(workspace.id);
 }
 
 /** Reconstruye un `TaskWorkspace` a partir del registro persistido — útil
  * para que un proceso que no fue el que creó el workspace (ej. un endpoint
  * de "descartar" corriendo en otro request) pueda destruirlo sin tener el
- * objeto en memoria original. */
+ * objeto en memoria original. Fase 3: `getWorkspaceForTask` ahora resuelve
+ * el workspace ACTIVO siguiendo el puntero `agent_tasks.workspace_id`, no
+ * "el más reciente" — sigue devolviendo como mucho un resultado, igual que
+ * antes, solo que ahora sin ambigüedad si alguna vez hubiera dos filas sin
+ * `destroyedAt` por algún bug. */
 export function loadWorkspaceForTask(taskId: string): TaskWorkspace | null {
   const persisted = getWorkspaceForTask(taskId);
   if (!persisted) return null;
   return {
+    id: persisted.id,
     taskId: persisted.taskId,
     projectId: persisted.projectId,
     mode: persisted.mode,
