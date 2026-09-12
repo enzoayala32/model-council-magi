@@ -93,10 +93,24 @@ export type RunTaskOptions = {
  * corriendo `git status`/`git show HEAD:` DENTRO del workspace — funciona
  * para modo `"worktree"` (comparte objetos/refs con el repo real) pero NO
  * para modo `"copy"` (no tiene `.git`). Por eso, hasta que exista el diff
- * por hashes de la sección 14 del diseño, `runTask` rechaza de entrada
- * cualquier task sobre un `Project` con `isGitRepo: false` — con un error
- * claro, en vez de dejarla correr y terminar con un resultado vacío o
- * incorrecto.
+ * por hashes de la sección 14 del diseño, `runTask` rechaza cualquier task
+ * sobre un `Project` con `isGitRepo: false` — con un error claro, en vez
+ * de dejarla correr y terminar con un resultado vacío o incorrecto.
+ *
+ * Fase 4A: el chequeo de `isGitRepo` vive DENTRO del try principal (abajo,
+ * después del claim a `RUNNING`), no antes — es la capa DEFENSIVA de una
+ * validación de dos capas (la primaria está en `POST /api/agent/tasks`,
+ * que rechaza la creación de la task de entrada). Antes de este fix, el
+ * chequeo estaba ACÁ ARRIBA, antes del claim, y tirar una excepción en ese
+ * punto escapaba de `runTask` por completo — el `dispatcher.ts` la
+ * atrapaba, pero como `runTask` nunca llegaba a `return false` (la
+ * excepción cortaba antes), la task nunca salía de `QUEUED`, y el
+ * dispatcher reintentaba cada `RETRY_AFTER_LOST_RACE_MS` para siempre,
+ * bloqueando la cola de ese proyecto. Moviéndolo adentro del try principal,
+ * cualquier fallo acá cae en el mismo `catch` que ya lleva a `FAILED` —
+ * la task llega a un estado terminal real, libera el slot, y `runTask`
+ * devuelve `true` (llegó a "correr" en el sentido de haber tomado el turno
+ * y resuelto algo, aunque ese algo haya sido fallar).
  *
  * Devuelve `true` si esta llamada llegó a tomar el turno de verdad
  * (`QUEUED → RUNNING`) y ejecutó el loop completo, `false` si el auto-claim
@@ -113,17 +127,6 @@ export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promis
   const task = getTask(taskId);
   if (!task) throw new Error(`No existe la task ${taskId}`);
   if (task.status !== "QUEUED") throw new Error(`La task ${taskId} no está en QUEUED (está en ${task.status}).`);
-
-  const project = getProject(task.projectId);
-  if (!project) throw new Error(`No existe el Project ${task.projectId}`);
-
-  if (!project.isGitRepo) {
-    throw new Error(
-      `El proyecto "${project.name}" no es un repo git (modo "copy"). El diff del Coding Agent todavía depende de ` +
-        `git — correr tasks reales sobre proyectos sin git queda bloqueado hasta que se implemente el diff por ` +
-        `hashes (ver diseño de Fase 2, sección 14). Es una limitación conocida de la Fase 2D, no un bug.`,
-    );
-  }
 
   try {
     transitionAndLog(taskId, "RUNNING");
@@ -145,6 +148,15 @@ export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promis
 
   let workspace: TaskWorkspace | null = null;
   try {
+    const project = getProject(task.projectId);
+    if (!project) throw new Error(`No existe el Project ${task.projectId}`);
+
+    if (!project.isGitRepo) {
+      throw new Error(
+        "Este proyecto no es un repositorio git — el Coding Agent todavía no puede ejecutar tareas reales ahí. Convertilo en un repo git (`git init`) para poder usarlo.",
+      );
+    }
+
     workspace = await createWorkspaceForTask(task, project);
     // Fase 3: `workspaceId` YA quedó apuntado correctamente por
     // `recordWorkspaceCreated` (dentro de createWorkspaceForTask), en la
@@ -216,7 +228,11 @@ export async function discardTask(taskId: string, reason: CodingTask["discardRea
     reason === "expired" ? "TTL venció sin decisión" : "descartada por el usuario",
   );
   const workspace = loadWorkspaceForTask(taskId);
-  if (workspace) await destroyWorkspaceForTask(workspace);
+  // Fase 4D: la regla es sobre `gitCommitStatus`, nunca sobre el status
+  // final de la task — un apply parcial (algunos archivos aplicados,
+  // otros en conflicto) puede haber commiteado con éxito antes de que el
+  // usuario decida descartar el resto; ese commit real no se pierde.
+  if (workspace) await destroyWorkspaceForTask(workspace, { keepBranch: next.gitCommitStatus === "success" });
   return next;
 }
 
@@ -230,7 +246,8 @@ export async function discardTask(taskId: string, reason: CodingTask["discardRea
 async function destroyWorkspaceBestEffort(taskId: string): Promise<void> {
   try {
     const workspace = loadWorkspaceForTask(taskId);
-    if (workspace) await destroyWorkspaceForTask(workspace);
+    const task = getTask(taskId);
+    if (workspace) await destroyWorkspaceForTask(workspace, { keepBranch: task?.gitCommitStatus === "success" });
   } catch (error) {
     console.warn(`[Coding Agent] no se pudo limpiar el workspace de la task ${taskId} durante la reconciliación (se ignora, no bloquea el boot):`, error);
   }
@@ -252,10 +269,23 @@ async function destroyWorkspaceBestEffort(taskId: string): Promise<void> {
  * acá SOLO se incrementa (nunca se resetea) — el reset ocurre del otro
  * lado, en `transitionAndLog`, cuando una task sale de `RUNNING` por el
  * camino normal.
+ *
+ * Fase 4D (hallazgo de v3): `applyTask` solo mira tasks `RUNNING`
+ * huérfanas — una task que quedó a mitad de `APPLYING` (el server se cayó
+ * justo durante un apply) nunca pasa por acá y queda atascada para
+ * siempre, porque `APPLYING` no es un estado que ningún dispatcher vuelva
+ * a tocar solo. La transición `APPLYING → READY_FOR_REVIEW` YA es legal
+ * (es la misma que usa `apply.ts` para el rollback por conflicto), así que
+ * alcanza con dispararla acá sin reintentar el apply por sí sola — el
+ * usuario decide desde ahí si reintentar o descartar. No toca
+ * `restart_retry_count` (ese contador es específico de `RUNNING`, no
+ * aplica a este caso) ni destruye el workspace (puede seguir siendo
+ * necesario para terminar de aplicar a mano).
  */
-export async function reconcileOrphanedTasks(): Promise<{ requeued: string[]; interrupted: string[] }> {
+export async function reconcileOrphanedTasks(): Promise<{ requeued: string[]; interrupted: string[]; recoveredApplying: string[] }> {
   const requeued: string[] = [];
   const interrupted: string[] = [];
+  const recoveredApplying: string[] = [];
 
   for (const task of listTasks({ status: "RUNNING" })) {
     // Si por algún motivo SÍ hay una corrida activa en memoria para esta
@@ -294,7 +324,17 @@ export async function reconcileOrphanedTasks(): Promise<{ requeued: string[]; in
     }
   }
 
-  return { requeued, interrupted };
+  for (const task of listTasks({ status: "APPLYING" })) {
+    if (isTaskActive(task.id)) continue;
+    try {
+      transitionAndLog(task.id, "READY_FOR_REVIEW", undefined, "apply interrumpido por un reinicio del servidor — revisar antes de reintentar");
+      recoveredApplying.push(task.id);
+    } catch (error) {
+      console.error(`[Coding Agent] no se pudo recuperar la task ${task.id} atascada en APPLYING durante la reconciliación:`, error);
+    }
+  }
+
+  return { requeued, interrupted, recoveredApplying };
 }
 
 /**
@@ -311,7 +351,8 @@ export async function deleteTask(taskId: string): Promise<void> {
   const workspace = loadWorkspaceForTask(taskId);
   if (workspace) {
     try {
-      await destroyWorkspaceForTask(workspace);
+      const task = getTask(taskId);
+      await destroyWorkspaceForTask(workspace, { keepBranch: task?.gitCommitStatus === "success" });
     } catch (error) {
       console.warn(`[Coding Agent] no se pudo destruir el workspace de la task ${taskId} antes de borrarla (se continúa igual):`, error);
     }

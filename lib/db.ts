@@ -202,6 +202,23 @@ function createConnection(): Database.Database {
     db.exec("ALTER TABLE agent_tasks ADD COLUMN restart_retry_count INTEGER NOT NULL DEFAULT 0");
   }
 
+  // Fase 4D: trazabilidad git del commit que hace `apply.ts` en el
+  // worktree tras aplicar una task. Mismo patrón que `restart_retry_count`
+  // — ALTER TABLE guardado con `columnExists`, sin bump de SCHEMA_VERSION
+  // (cambio aditivo, TEXT nullable, no rompe ninguna DB existente).
+  if (!columnExists(db, "agent_tasks", "git_commit_status")) {
+    db.exec("ALTER TABLE agent_tasks ADD COLUMN git_commit_status TEXT");
+  }
+  if (!columnExists(db, "agent_tasks", "applied_commit_sha")) {
+    db.exec("ALTER TABLE agent_tasks ADD COLUMN applied_commit_sha TEXT");
+  }
+  if (!columnExists(db, "agent_tasks", "applied_branch_name")) {
+    db.exec("ALTER TABLE agent_tasks ADD COLUMN applied_branch_name TEXT");
+  }
+  if (!columnExists(db, "agent_tasks", "git_commit_error")) {
+    db.exec("ALTER TABLE agent_tasks ADD COLUMN git_commit_error TEXT");
+  }
+
   const currentVersion = db.pragma("user_version", { simple: true }) as number;
   if (currentVersion !== SCHEMA_VERSION) {
     db.pragma(`user_version = ${SCHEMA_VERSION}`);

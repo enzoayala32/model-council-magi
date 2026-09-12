@@ -22,7 +22,7 @@ export type TypeCheckResult = { status: "skipped" | "ok" | "error"; errors?: str
  * así el diff final del Coding Agent se puede volcar directo a
  * `FileProposalsPanel` sin duplicar la UI de revisión. */
 export type AgentFileProposal = {
-  kind: "write" | "edit";
+  kind: "write" | "edit" | "delete";
   relPath: string;
   diff: string;
   nextContent: string;
@@ -67,6 +67,34 @@ export type RunAgentLoopOptions = {
 
 const DEFAULT_CODING_MODEL = "nvidia/nemotron-3.5-lightning:free";
 
+/** Fase 4B: nombres de script que `run_script` puede llegar a ofrecer —
+ * deliberadamente NO incluye `"typecheck"` (esa verificación sigue siendo
+ * exclusiva de `run_typecheck`, que corre `tsc` directo y no depende de
+ * que el proyecto declare ese script; ver diseño de Fase 4, sección 3,
+ * para el razonamiento completo de por qué fusionarlas sería una
+ * regresión). Lista propia, independiente de `INTERESTING_SCRIPTS` de
+ * `/api/agent/inspect` (esa es más amplia porque es solo para MOSTRARLE
+ * información al usuario en el Project Picker, no para decidir qué puede
+ * EJECUTAR el modelo — mezclarlas conflaría dos preocupaciones distintas). */
+const RUN_SCRIPT_ALLOWED_NAMES = ["build", "test", "lint"] as const;
+
+/** Lee el `package.json` REAL del workspace (no el del `Project` original
+ * — el agente pudo haberlo modificado durante la corrida) e intersecta sus
+ * scripts declarados contra `RUN_SCRIPT_ALLOWED_NAMES`. Nunca tira: si no
+ * hay `package.json`, o no se puede parsear, devuelve `[]` (equivale a
+ * "no ofrecer `run_script` en esta corrida"), no a un error de la task. */
+async function detectAllowedScripts(workspaceRoot: string): Promise<string[]> {
+  try {
+    const fs = await import("node:fs/promises");
+    const raw = await fs.readFile(path.join(workspaceRoot, "package.json"), "utf-8");
+    const parsed = JSON.parse(raw) as { scripts?: Record<string, unknown> };
+    const declared = parsed.scripts && typeof parsed.scripts === "object" ? Object.keys(parsed.scripts) : [];
+    return RUN_SCRIPT_ALLOWED_NAMES.filter((name) => declared.includes(name));
+  } catch {
+    return [];
+  }
+}
+
 /** Mismo criterio que usa `runAgentLoop` por default — separado para que
  * quien dispare la corrida (ej. `test-run.ts`) pueda loguear el modelo
  * resuelto ANTES de arrancar, y así confirmar de entrada que el override
@@ -84,23 +112,31 @@ export function sha256(text: string): string {
   return crypto.createHash("sha256").update(text, "utf-8").digest("hex");
 }
 
-const SYSTEM_PROMPT = `Sos un agente de programación autónomo que trabaja dentro de un workspace git aislado (un worktree temporal, ya en la raíz del proyecto — todas las rutas que uses son relativas a esa raíz).
+function buildSystemPrompt(allowedScripts: string[]): string {
+  const runScriptLine =
+    allowedScripts.length > 0
+      ? `\n- run_script: corre uno de estos scripts del proyecto — ${allowedScripts.join(", ")} — siempre vía "npm run <nombre>". Usalo además de run_typecheck cuando corresponda (por ejemplo, correr los tests si la tarea tocó lógica, o el build si tocó algo que podría no compilar más allá del typecheck).`
+      : "";
+  const runScriptRule = allowedScripts.length > 0 ? "\n- Si la tarea lo amerita, corré también los scripts de verificación disponibles (run_script) antes de darte por terminado — no hace falta correrlos todos siempre, usá criterio según qué tocaste." : "";
+
+  return `Sos un agente de programación autónomo que trabaja dentro de un workspace git aislado (un worktree temporal, ya en la raíz del proyecto — todas las rutas que uses son relativas a esa raíz).
 
 Tu ciclo de trabajo es: orientarte → leer/buscar → editar → verificar con run_typecheck → corregir si hace falta → repetir, hasta que la tarea esté resuelta y el proyecto compile limpio.
 
 Herramientas disponibles:
 - list_files: lista rutas de archivos (con filtro opcional por extensión o nombre). Usala primero si no sabés qué archivos existen — NO sirve para buscar texto adentro de archivos.
 - search_files: busca un texto literal dentro del contenido de los archivos (no es un buscador de nombres de archivo).
-- read_file / write_file / edit_file: leer, crear/reescribir, o editar una porción puntual de un archivo.
-- run_typecheck: corre tsc sobre todo el proyecto.
+- read_file / write_file / edit_file / delete_file: leer, crear/reescribir, editar una porción puntual, o borrar un archivo.
+- run_typecheck: corre tsc sobre todo el proyecto.${runScriptLine}
 
 Reglas:
 - Si no conocés la estructura del proyecto, empezá con list_files antes de adivinar rutas.
 - Primero explorá con read_file / search_files antes de editar — no asumas contenido que no leíste.
 - Usá edit_file para cambios puntuales a un archivo existente (necesita que oldStr sea único en el archivo); usá write_file solo para archivos nuevos o reescrituras completas.
-- Corré run_typecheck después de terminar los cambios de código (no en cada paso individual, es lento) y corregí lo que encuentres.
+- Corré run_typecheck después de terminar los cambios de código (no en cada paso individual, es lento) y corregí lo que encuentres.${runScriptRule}
 - No hagas cambios fuera del alcance de la tarea pedida.
 - Cuando termines, respondé con un resumen breve en texto de qué cambiaste y por qué — sin volver a llamar ninguna tool.`;
+}
 
 function buildOpenRouterModel(modelId: string) {
   const apiKey = process.env.OPENROUTER_API_KEY;
@@ -192,7 +228,8 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
   };
   const currentStepIndex = { current: 0 };
 
-  const tools = createAgentTools(workspaceRoot, onEvent);
+  const allowedScripts = await detectAllowedScripts(workspaceRoot);
+  const tools = createAgentTools(workspaceRoot, onEvent, allowedScripts);
   const model = buildModelForId(modelId);
 
   const controller = new AbortController();
@@ -210,7 +247,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
   try {
     await generateText({
       model,
-      system: SYSTEM_PROMPT,
+      system: buildSystemPrompt(allowedScripts),
       prompt: task,
       tools,
       abortSignal: controller.signal,
@@ -227,7 +264,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
             if (options.taskId) appendEvent(options.taskId, { type: "tool_call", toolName: part.toolName, input: part.input });
           }
           if (part.type === "tool-result") {
-            const output = part.output as { ok?: boolean; error?: string; success?: boolean; output?: string } | undefined;
+            const output = part.output as { ok?: boolean; error?: string; success?: boolean; output?: string; name?: string } | undefined;
             if (part.toolName === "run_typecheck" && output && typeof output.success === "boolean") {
               lastTypeCheckOk = output.success;
               // `run_typecheck` siempre devuelve ok:true (la llamada en sí no
@@ -240,6 +277,20 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
                 appendEvent(options.taskId, { type: "typecheck_result", success: output.success, outputExcerpt: output.success ? undefined : excerpt });
               }
             }
+            // Fase 4B: mismo patrón que run_typecheck de arriba — run_script
+            // también devuelve siempre ok:true (la LLAMADA no falla), solo
+            // `success` dice si el script en sí pasó o no. `name` viaja en
+            // el output porque una sola tool puede correr cualquiera de los
+            // 3 scripts permitidos — sin esto, el transcript/evento no
+            // podría decir CUÁL de ellos se corrió.
+            if (part.toolName === "run_script" && output && typeof output.success === "boolean") {
+              const name = output.name ?? "?";
+              const excerpt = (output.output ?? "").split("\n").slice(0, 15).join("\n");
+              transcript.push(output.success ? `✅ run_script(${name}): OK` : `❌ run_script(${name}): falló —\n${excerpt}`);
+              if (options.taskId) {
+                appendEvent(options.taskId, { type: "run_script_result", name, success: output.success, outputExcerpt: output.success ? undefined : excerpt });
+              }
+            }
             // Sin esto, una tool que falla de forma "prolija" (ok: false, con
             // error legible) queda invisible en el transcript — solo se ve
             // la llamada, nunca por qué no funcionó. Esto es justamente lo
@@ -250,7 +301,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
               if (options.taskId) {
                 appendEvent(options.taskId, { type: "tool_result", toolName: part.toolName, ok: false, error: output.error, summary: output.error ?? "sin detalle" });
               }
-            } else if (output && output.ok === true && part.toolName !== "run_typecheck" && options.taskId) {
+            } else if (output && output.ok === true && part.toolName !== "run_typecheck" && part.toolName !== "run_script" && options.taskId) {
               appendEvent(options.taskId, { type: "tool_result", toolName: part.toolName, ok: true, summary: `${part.toolName} OK` });
             }
           }
@@ -327,9 +378,13 @@ async function buildProposals(rawGitStatus: string, workspaceRoot: string, lastT
   for (const line of lines) {
     const status = line.slice(0, 2).trim();
     const relPath = line.slice(3).trim();
-    if (status === "D") continue; // Fase 1: no proponemos borrados, solo write/edit.
-
+    // Fase 4C: antes acá había un `if (status === "D") continue;` — un
+    // borrado real del agente (vía la tool `delete_file`) quedaba
+    // completamente invisible, nunca llegaba a proponerse. Ahora participa
+    // del mismo flujo que write/edit, solo con `kind: "delete"`.
+    const isDeleted = status === "D";
     const isNew = status === "??" || status === "A";
+
     let oldContent = "";
     if (!isNew) {
       try {
@@ -341,17 +396,24 @@ async function buildProposals(rawGitStatus: string, workspaceRoot: string, lastT
     }
 
     let nextContent = "";
-    try {
-      const fs = await import("node:fs/promises");
-      nextContent = await fs.readFile(path.join(workspaceRoot, relPath), "utf-8");
-    } catch {
-      continue; // el archivo ya no existe (pudo haber sido creado y borrado en el mismo loop)
+    if (!isDeleted) {
+      try {
+        const fs = await import("node:fs/promises");
+        nextContent = await fs.readFile(path.join(workspaceRoot, relPath), "utf-8");
+      } catch {
+        continue; // el archivo ya no existe (pudo haber sido creado y borrado en el mismo loop)
+      }
     }
+    // Para `isDeleted`, `nextContent` queda "" a propósito — no hay nada
+    // que leer del worktree, el archivo ya no está ahí (por eso `git
+    // status` lo marca "D"). Mismo convenio que ya usa "write" para un
+    // archivo nuevo con `baselineHash = sha256("")`, aplicado simétrico
+    // acá del lado del contenido "después".
 
     proposals.push({
-      kind: isNew ? "write" : "edit",
+      kind: isDeleted ? "delete" : isNew ? "write" : "edit",
       relPath,
-      diff: buildDiff(oldContent, nextContent, relPath, isNew),
+      diff: buildDiff(oldContent, nextContent, relPath, isNew, isDeleted),
       nextContent,
       baselineHash: sha256(oldContent),
       typeCheck,
@@ -364,7 +426,7 @@ async function buildProposals(rawGitStatus: string, workspaceRoot: string, lastT
  * línea por línea con prefijo +/-/espacio) para que un futuro `DiffView`
  * lo renderice igual sin cambios. Copia self-contained a propósito — el
  * Coding Agent no importa nada de fs-tools.ts. */
-function buildDiff(oldText: string, newText: string, relPath: string, isNew: boolean): string {
+function buildDiff(oldText: string, newText: string, relPath: string, isNew: boolean, isDeleted: boolean = false): string {
   // `git show HEAD:path` devuelve el blob crudo (LF), pero en Windows el
   // checkout real del worktree suele tener CRLF (core.autocrlf) — sin
   // normalizar acá, CADA línea se ve "distinta" (un \r de más) y el diff
@@ -375,6 +437,12 @@ function buildDiff(oldText: string, newText: string, relPath: string, isNew: boo
   const normalizedOld = normalize(oldText);
   const normalizedNew = normalize(newText);
 
+  if (isDeleted) {
+    // Simétrico al caso `isNew` de abajo, pero al revés: todo el archivo
+    // como "antes" (con `-`), nada del lado "después".
+    const body = normalizedOld.split("\n").map((line) => `-${line}`).join("\n");
+    return `--- ${relPath}\n+++ /dev/null\n${body}`;
+  }
   if (isNew) {
     const body = normalizedNew.split("\n").map((line) => `+${line}`).join("\n");
     return `--- /dev/null\n+++ ${relPath}\n${body}`;

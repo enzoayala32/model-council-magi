@@ -13,7 +13,7 @@ import type { AgentFileProposal, TypeCheckResult } from "./loop";
 export type PersistedProposal = {
   id: string;
   taskId: string;
-  kind: "write" | "edit";
+  kind: "write" | "edit" | "delete";
   relPath: string;
   diff: string;
   nextContent: string;
@@ -40,7 +40,7 @@ function rowToProposal(row: PersistedProposalRow): PersistedProposal {
   return {
     id: row.id,
     taskId: row.task_id,
-    kind: row.kind as "write" | "edit",
+    kind: row.kind as "write" | "edit" | "delete",
     relPath: row.rel_path,
     diff: row.diff,
     nextContent: row.next_content,

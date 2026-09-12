@@ -45,7 +45,7 @@ export type TypeCheckResult = { status: "skipped" | "checking" | "ok" | "error";
 export type FileProposal = {
   id: string;
   groupId: string;
-  kind: "write" | "edit";
+  kind: "write" | "edit" | "delete";
   relPath: string;
   absPath: string;
   diff: string;

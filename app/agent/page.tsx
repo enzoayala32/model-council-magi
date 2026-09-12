@@ -45,7 +45,17 @@ function formatEvent(event: AgentEvent): { text: string; kind: "err" | "ok" | "s
       ? { text: "✅ run_typecheck: compila limpio", kind: "ok" }
       : { text: `❌ run_typecheck: hay errores —\n${p.outputExcerpt ?? ""}`, kind: "err" };
   }
+  if (p.type === "run_script_result") {
+    return p.success
+      ? { text: `✅ run_script(${p.name}): OK`, kind: "ok" }
+      : { text: `❌ run_script(${p.name}): falló —\n${p.outputExcerpt ?? ""}`, kind: "err" };
+  }
   if (p.type === "status_change") return { text: `↻ ${p.from} → ${p.to}${p.reason ? ` (${p.reason})` : ""}`, kind: "status" };
+  if (p.type === "git_commit_result") {
+    if (p.status === "success") return { text: `✅ commit git en ${p.branch}: ${p.sha?.slice(0, 7)} (${p.files.length} archivo(s))`, kind: "ok" };
+    if (p.status === "failed") return { text: `❌ commit git falló en ${p.branch}: ${p.error ?? "sin detalle"}`, kind: "err" };
+    return { text: "↻ commit git: no se intentó", kind: "status" };
+  }
   return { text: JSON.stringify(p), kind: "text" };
 }
 
@@ -88,6 +98,7 @@ export default function AgentPage() {
   const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
 
   const selectedTask = useMemo(() => tasks.find((t) => t.id === selectedTaskId) ?? null, [tasks, selectedTaskId]);
+  const selectedProject = useMemo(() => projects.find((p) => p.id === selectedProjectId) ?? null, [projects, selectedProjectId]);
   const { events, status: liveStatus, conflictedPaths: liveConflictedPaths } = useAgentTaskEvents(selectedTaskId);
 
   // --- Cargar proyectos y modelos habilitados una vez ---
@@ -345,10 +356,15 @@ export default function AgentPage() {
               ))}
             </select>
             <textarea placeholder="¿Qué querés que haga el agente?" value={newTaskPrompt} onChange={(e) => setNewTaskPrompt(e.target.value)} required />
-            <button className="agentButton" type="submit" disabled={creatingTask || models.length === 0}>
+            <button className="agentButton" type="submit" disabled={creatingTask || models.length === 0 || selectedProject?.isGitRepo === false}>
               {creatingTask ? "Creando…" : "Crear task"}
             </button>
             {models.length === 0 && <div className="agentError">No hay modelos habilitados para el Coding Agent.</div>}
+            {selectedProject?.isGitRepo === false && (
+              <div className="agentError">
+                Este proyecto no es un repositorio git — el Coding Agent todavía no puede ejecutar tareas reales ahí. Convertilo en un repo git (<code>git init</code>) para poder usarlo.
+              </div>
+            )}
             {taskFormError && <div className="agentError">{taskFormError}</div>}
           </form>
         )}
@@ -401,7 +417,9 @@ export default function AgentPage() {
                   <div key={proposal.id} className={`agentProposal${proposal.conflict ? " conflict" : ""}`}>
                     <div className="agentProposalHead">
                       <strong>{proposal.relPath}</strong>
-                      <span>{proposal.kind}</span>
+                      <span className={`agentKindBadge ${proposal.kind}`}>
+                        {proposal.kind === "delete" ? "🗑 delete" : proposal.kind === "write" ? "＋ write" : "✎ edit"}
+                      </span>
                       <span>typecheck: {proposal.typeCheck.status}</span>
                       {proposal.applied && <span>✅ aplicado</span>}
                       {proposal.conflict && <span>⚠️ conflicto (no se sobrescribió)</span>}
@@ -409,6 +427,25 @@ export default function AgentPage() {
                     <DiffBlock diff={proposal.diff} />
                   </div>
                 ))}
+              </div>
+            )}
+
+            {selectedTask.gitCommitStatus && (
+              <div className="agentGitCommitSection">
+                <div className="agentGitCommitHead">
+                  <strong>Commit Git</strong>
+                  <span className={`agentInspectBadge ${selectedTask.gitCommitStatus === "success" ? "yes" : selectedTask.gitCommitStatus === "failed" ? "no" : "neutral"}`}>
+                    {selectedTask.gitCommitStatus === "success" ? "✅ commiteado" : selectedTask.gitCommitStatus === "failed" ? "❌ falló" : "↻ no se intentó"}
+                  </span>
+                </div>
+                {selectedTask.gitCommitStatus === "success" && (
+                  <div className="agentGitCommitDetail">
+                    rama <code>{selectedTask.appliedBranchName}</code> — commit <code>{selectedTask.appliedCommitSha?.slice(0, 12)}</code>
+                  </div>
+                )}
+                {selectedTask.gitCommitStatus === "failed" && selectedTask.gitCommitError && (
+                  <div className="agentGitCommitDetail agentError">{selectedTask.gitCommitError}</div>
+                )}
               </div>
             )}
           </>

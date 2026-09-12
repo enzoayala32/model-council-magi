@@ -86,7 +86,7 @@ export type StreamEvent =
   | { type: "image_complete"; model: string; prompt: string; images: string[]; usage?: unknown }
   | { type: "image_error"; error: string }
   | { type: "followups_complete"; questions: string[]; usage?: unknown }
-  | { type: "file_proposal"; modelId: string; proposal: { id: string; groupId: string; kind: "write" | "edit"; path: string; diff: string; typeCheck: TypeCheckResult } }
+  | { type: "file_proposal"; modelId: string; proposal: { id: string; groupId: string; kind: "write" | "edit" | "delete"; path: string; diff: string; typeCheck: TypeCheckResult } }
   | { type: "file_proposal_verified"; proposalId: string; typeCheck: TypeCheckResult }
   | { type: "debate_skipped"; score: number; threshold: number; participantCount: number }
   | { type: "model_mind_change"; modelId: string; label: string; similarity: number; changed: boolean }

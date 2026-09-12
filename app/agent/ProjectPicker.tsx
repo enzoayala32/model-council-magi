@@ -16,7 +16,7 @@ type InspectResult = {
 
 const PINNED_KEY = "magi.projectPicker.pinned";
 const RECENT_KEY = "magi.projectPicker.recent";
-const MAX_RECENT = 6;
+const MAX_RECENT = 10;
 
 /** Acceso rápido y recientes viven en `localStorage` del navegador, NO en
  * el server — son un atajo puramente de UI para este usuario en esta
@@ -167,6 +167,14 @@ export function ProjectPicker({ onChoose, onClose }: { onChoose: (path: string, 
     });
   }
 
+  function removeRecent(p: string) {
+    setRecent((current) => {
+      const next = current.filter((entry) => entry.path !== p);
+      writeLocalList(RECENT_KEY, next);
+      return next;
+    });
+  }
+
   function isPinned(p: string): boolean {
     return pinned.some((entry) => entry.path === p);
   }
@@ -201,9 +209,14 @@ export function ProjectPicker({ onChoose, onClose }: { onChoose: (path: string, 
             <div className="agentPickerSectionTitle">📌 Acceso rápido</div>
             <div className="agentPickerShortcutList">
               {pinned.map((entry) => (
-                <button key={entry.path} type="button" className="agentPickerShortcut" title={entry.path} onClick={() => selectFolder(entry.path)}>
-                  📁 {entry.name}
-                </button>
+                <span key={entry.path} className="agentPickerShortcutWrap">
+                  <button type="button" className="agentPickerShortcut" title={entry.path} onClick={() => selectFolder(entry.path)}>
+                    📁 {entry.name}
+                  </button>
+                  <button type="button" className="agentPickerShortcutRemove" title="Quitar de acceso rápido" onClick={() => togglePin(entry)}>
+                    ✕
+                  </button>
+                </span>
               ))}
             </div>
           </div>
@@ -214,9 +227,14 @@ export function ProjectPicker({ onChoose, onClose }: { onChoose: (path: string, 
             <div className="agentPickerSectionTitle">🕒 Recientes</div>
             <div className="agentPickerShortcutList">
               {recent.map((entry) => (
-                <button key={entry.path} type="button" className="agentPickerShortcut" title={entry.path} onClick={() => selectFolder(entry.path)}>
-                  📁 {entry.name}
-                </button>
+                <span key={entry.path} className="agentPickerShortcutWrap">
+                  <button type="button" className="agentPickerShortcut" title={entry.path} onClick={() => selectFolder(entry.path)}>
+                    📁 {entry.name}
+                  </button>
+                  <button type="button" className="agentPickerShortcutRemove" title="Quitar de recientes" onClick={() => removeRecent(entry.path)}>
+                    ✕
+                  </button>
+                </span>
               ))}
             </div>
           </div>
@@ -279,11 +297,29 @@ export function ProjectPicker({ onChoose, onClose }: { onChoose: (path: string, 
             <div className="agentPickerSectionTitle">Carpeta elegida</div>
             <div className="agentBrowsePath">{selectedPath}</div>
             {inspectLoading && <div className="agentEmpty">Analizando…</div>}
-            {inspectError && <div className="agentError">{inspectError}</div>}
+            {inspectError && (
+              <div className="agentError">
+                {inspectError}
+                <div className="agentInspectErrorActions">
+                  {isPinned(selectedPath) && (
+                    <button type="button" className="agentButton secondary" onClick={() => togglePin({ name: baseName(selectedPath), path: selectedPath })}>
+                      Quitar de acceso rápido
+                    </button>
+                  )}
+                  {recent.some((r) => r.path === selectedPath) && (
+                    <button type="button" className="agentButton secondary" onClick={() => removeRecent(selectedPath)}>
+                      Quitar de recientes
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
             {inspect && (
               <div className="agentInspectGrid">
                 <span className={`agentInspectBadge ${inspect.isGitRepo ? "yes" : "no"}`}>{inspect.isGitRepo ? "✅ Repo git" : "⚠️ No es un repo git"}</span>
-                <span className="agentInspectBadge neutral">{inspect.workspaceMode === "worktree" ? "Usará git worktree" : "Usará copia temporal aislada"}</span>
+                <span className={`agentInspectBadge ${inspect.workspaceMode === "worktree" ? "neutral" : "no"}`}>
+                  {inspect.workspaceMode === "worktree" ? "Ejecutable (usará git worktree)" : "⚠️ Todavía no ejecutable — el Coding Agent solo corre tasks reales sobre repos git"}
+                </span>
                 <span className={`agentInspectBadge ${inspect.hasPackageJson ? "yes" : "no"}`}>
                   {inspect.hasPackageJson ? `✅ package.json${inspect.packageName ? ` (${inspect.packageName})` : ""}` : "Sin package.json"}
                 </span>
@@ -291,14 +327,19 @@ export function ProjectPicker({ onChoose, onClose }: { onChoose: (path: string, 
                 {inspect.scripts.length > 0 && <span className="agentInspectBadge neutral">Scripts: {inspect.scripts.join(", ")}</span>}
               </div>
             )}
-            <button type="button" className="agentButton secondary agentPinCurrentBtn" onClick={() => togglePin({ name: baseName(selectedPath), path: selectedPath })}>
+            <button
+              type="button"
+              className="agentButton secondary agentPinCurrentBtn"
+              disabled={!!inspectError && !isPinned(selectedPath)}
+              onClick={() => togglePin({ name: baseName(selectedPath), path: selectedPath })}
+            >
               {isPinned(selectedPath) ? "📌 Quitar de acceso rápido" : "📌 Fijar en acceso rápido"}
             </button>
           </div>
         )}
 
         <div className="agentActions">
-          <button className="agentButton" type="button" disabled={!selectedPath} onClick={() => selectedPath && pickAndClose(selectedPath)}>
+          <button className="agentButton" type="button" disabled={!selectedPath || !!inspectError} onClick={() => selectedPath && pickAndClose(selectedPath)}>
             Seleccionar
           </button>
           <button className="agentButton secondary" type="button" onClick={onClose}>

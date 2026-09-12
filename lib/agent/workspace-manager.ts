@@ -99,13 +99,20 @@ export async function createWorkspaceForTask(task: CodingTask, project: AgentPro
  * más de un registro por task) incluso si la limpieza física falla
  * parcialmente (best-effort, igual que las funciones de bajo nivel que
  * envuelve). */
-export async function destroyWorkspaceForTask(workspace: TaskWorkspace): Promise<void> {
+/** Fase 4D: `options.keepBranch` se reenvía tal cual a `destroyAgentWorkspace`
+ * — conserva la rama `agent/<taskId>` cuando hubo un commit exitoso ahí. Se
+ * ignora sin error en modo `"copy"` (no hay ninguna rama git de la que
+ * hablar en ese modo). */
+export async function destroyWorkspaceForTask(workspace: TaskWorkspace, options?: { keepBranch?: boolean }): Promise<void> {
   if (workspace.mode === "worktree") {
-    await destroyAgentWorkspace({
-      worktreePath: workspace.worktreePath,
-      branchName: workspace.branchName ?? "",
-      repoRoot: workspace.basePath,
-    });
+    await destroyAgentWorkspace(
+      {
+        worktreePath: workspace.worktreePath,
+        branchName: workspace.branchName ?? "",
+        repoRoot: workspace.basePath,
+      },
+      options,
+    );
   } else {
     await destroyCopyWorkspace({ worktreePath: workspace.worktreePath });
   }

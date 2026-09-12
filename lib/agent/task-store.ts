@@ -116,6 +116,18 @@ export type CodingTask = {
    * (READY_FOR_REVIEW/NO_CHANGES/FAILED real/CANCELLED). Nunca al volver a
    * arrancar — resetearlo ahí rompería el tope de reintentos. */
   restartRetryCount: number;
+  /** Fase 4D: resultado del intento de commit git que hace `apply.ts` en
+   * el worktree tras aplicar los cambios de la task. `null` mientras no se
+   * intentó todavía (task no aplicada, o proyecto sin git). Ver
+   * `apply.ts` para el detalle de cuándo se setea cada valor — este campo
+   * es deliberadamente independiente del `status` final de la task (una
+   * task puede quedar `APPLIED` con `git_commit_status:"failed"`, o
+   * `DISCARDED` con `git_commit_status:"success"` de un apply parcial
+   * previo). */
+  gitCommitStatus: "success" | "failed" | "not_attempted" | null;
+  appliedCommitSha: string | null;
+  appliedBranchName: string | null;
+  gitCommitError: string | null;
 };
 
 type CodingTaskRow = {
@@ -134,6 +146,10 @@ type CodingTaskRow = {
   discard_reason: string | null;
   conflicted_paths: string | null;
   restart_retry_count: number;
+  git_commit_status: string | null;
+  applied_commit_sha: string | null;
+  applied_branch_name: string | null;
+  git_commit_error: string | null;
 };
 
 function rowToTask(row: CodingTaskRow): CodingTask {
@@ -153,6 +169,10 @@ function rowToTask(row: CodingTaskRow): CodingTask {
     discardReason: row.discard_reason as CodingTask["discardReason"],
     conflictedPaths: row.conflicted_paths ? JSON.parse(row.conflicted_paths) : null,
     restartRetryCount: row.restart_retry_count,
+    gitCommitStatus: row.git_commit_status as CodingTask["gitCommitStatus"],
+    appliedCommitSha: row.applied_commit_sha,
+    appliedBranchName: row.applied_branch_name,
+    gitCommitError: row.git_commit_error,
   };
 }
 
@@ -187,13 +207,17 @@ export function createTask(input: CreateTaskInput): CodingTask {
     discardReason: null,
     conflictedPaths: null,
     restartRetryCount: 0,
+    gitCommitStatus: null,
+    appliedCommitSha: null,
+    appliedBranchName: null,
+    gitCommitError: null,
   };
 
   try {
     getDb()
       .prepare(
-        `INSERT INTO agent_tasks (id, project_id, model_id, prompt, status, created_at, started_at, finished_at, base_commit, workspace_id, stop_reason, error, discard_reason, conflicted_paths, restart_retry_count)
-         VALUES (@id, @projectId, @modelId, @prompt, @status, @createdAt, @startedAt, @finishedAt, @baseCommit, @workspaceId, @stopReason, @error, @discardReason, @conflictedPaths, @restartRetryCount)`,
+        `INSERT INTO agent_tasks (id, project_id, model_id, prompt, status, created_at, started_at, finished_at, base_commit, workspace_id, stop_reason, error, discard_reason, conflicted_paths, restart_retry_count, git_commit_status, applied_commit_sha, applied_branch_name, git_commit_error)
+         VALUES (@id, @projectId, @modelId, @prompt, @status, @createdAt, @startedAt, @finishedAt, @baseCommit, @workspaceId, @stopReason, @error, @discardReason, @conflictedPaths, @restartRetryCount, @gitCommitStatus, @appliedCommitSha, @appliedBranchName, @gitCommitError)`,
       )
       .run({
         id: task.id,
@@ -211,6 +235,10 @@ export function createTask(input: CreateTaskInput): CodingTask {
         discardReason: task.discardReason,
         conflictedPaths: task.conflictedPaths,
         restartRetryCount: task.restartRetryCount,
+        gitCommitStatus: task.gitCommitStatus,
+        appliedCommitSha: task.appliedCommitSha,
+        appliedBranchName: task.appliedBranchName,
+        gitCommitError: task.gitCommitError,
       });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
@@ -250,12 +278,21 @@ export type TransitionPatch = Partial<
   Pick<CodingTask, "baseCommit" | "workspaceId" | "stopReason" | "error" | "discardReason" | "conflictedPaths" | "restartRetryCount">
 >;
 
+/** Fase 4D: los 4 campos de trazabilidad git se setean DURANTE un apply
+ * (ver `apply.ts`), no son parte de ninguna transición de estado — por eso
+ * viven en su propio tipo, consumido solo por `updateTaskFields`, y no se
+ * suman a `TransitionPatch` (que es lo que acepta `transitionTask`). */
+export type GitCommitPatch = Partial<
+  Pick<CodingTask, "gitCommitStatus" | "appliedCommitSha" | "appliedBranchName" | "gitCommitError">
+>;
+
 /** Actualiza campos de una task SIN cambiar su `status` — para datos que se
  * conocen a mitad de una corrida (ej. `workspaceId`/`baseCommit`, apenas se
- * crea el workspace, todavía en `RUNNING`) y que no corresponden a ninguna
- * transición de estado. `transitionTask` es el único lugar que cambia
- * `status`; esta función nunca lo toca. */
-export function updateTaskFields(id: string, patch: TransitionPatch): CodingTask {
+ * crea el workspace, todavía en `RUNNING`; o los 4 campos de git de Fase 4D,
+ * seteados durante el apply) y que no corresponden a ninguna transición de
+ * estado. `transitionTask` es el único lugar que cambia `status`; esta
+ * función nunca lo toca. */
+export function updateTaskFields(id: string, patch: TransitionPatch & GitCommitPatch): CodingTask {
   const task = getTask(id);
   if (!task) throw new Error(`No existe la task ${id}`);
 
@@ -265,7 +302,9 @@ export function updateTaskFields(id: string, patch: TransitionPatch): CodingTask
     .prepare(
       `UPDATE agent_tasks
        SET base_commit = @baseCommit, workspace_id = @workspaceId, stop_reason = @stopReason,
-           error = @error, discard_reason = @discardReason, conflicted_paths = @conflictedPaths
+           error = @error, discard_reason = @discardReason, conflicted_paths = @conflictedPaths,
+           git_commit_status = @gitCommitStatus, applied_commit_sha = @appliedCommitSha,
+           applied_branch_name = @appliedBranchName, git_commit_error = @gitCommitError
        WHERE id = @id`,
     )
     .run({
@@ -276,6 +315,10 @@ export function updateTaskFields(id: string, patch: TransitionPatch): CodingTask
       error: next.error,
       discardReason: next.discardReason,
       conflictedPaths: next.conflictedPaths ? JSON.stringify(next.conflictedPaths) : null,
+      gitCommitStatus: next.gitCommitStatus,
+      appliedCommitSha: next.appliedCommitSha,
+      appliedBranchName: next.appliedBranchName,
+      gitCommitError: next.gitCommitError,
     });
 
   return next;

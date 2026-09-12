@@ -76,16 +76,25 @@ async function walkFiles(root: string, dir: string, onFile: (absPath: string) =>
 
 export type AgentToolEvent =
   | { type: "file_written"; relPath: string }
-  | { type: "file_edited"; relPath: string };
+  | { type: "file_edited"; relPath: string }
+  | { type: "file_deleted"; relPath: string };
 
 /**
  * Arma el set de tools para una corrida puntual del agente, scopeadas a
  * `workspaceRoot` (el worktree aislado). `onEvent` deja que `loop.ts`
  * sepa, sin adivinar, cuándo un paso modificó contenido de verdad — es
  * la señal que usa la detección de "sin progreso".
+ *
+ * `allowedScripts` (Fase 4B): los nombres de `package.json` que
+ * `run_script` puede correr en ESTE proyecto puntual — ya viene
+ * pre-calculado por `loop.ts` (intersección entre `["build","test","lint"]`
+ * y lo que el `package.json` real del workspace declara). Si viene vacío,
+ * `run_script` directamente no se ofrece como tool — no tiene sentido que
+ * el modelo gaste un paso intentando algo que sabemos de antemano que no
+ * existe en este proyecto.
  */
-export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentToolEvent) => void) {
-  return {
+export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentToolEvent) => void, allowedScripts: string[] = []) {
+  const baseTools = {
     list_files: tool({
       description:
         "Lista los archivos del proyecto (rutas relativas), para orientarse antes de buscar o editar. No busca texto adentro de los archivos — para eso usá search_files. Podés filtrar por extensión o por un fragmento del nombre.",
@@ -195,6 +204,27 @@ export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentTo
       },
     }),
 
+    delete_file: tool({
+      description:
+        "Borra un archivo existente dentro del workspace. El borrado participa del mismo flujo de revisión que write_file/edit_file — no se aplica al proyecto real hasta que el usuario lo revise y confirme.",
+      inputSchema: z.object({
+        path: z.string().describe("Ruta relativa al workspace del archivo a borrar."),
+      }),
+      execute: async ({ path: relPath }) => {
+        try {
+          const abs = await resolveSafePath(workspaceRoot, relPath);
+          const stat = await fs.stat(abs).catch(() => null);
+          if (!stat) return { ok: false, error: `${relPath} no existe — no hay nada que borrar.` };
+          if (!stat.isFile()) return { ok: false, error: `${relPath} no es un archivo (¿una carpeta?) — delete_file solo borra archivos.` };
+          await fs.unlink(abs);
+          onEvent({ type: "file_deleted", relPath });
+          return { ok: true };
+        } catch (error) {
+          return { ok: false, error: describeError(error, relPath) };
+        }
+      },
+    }),
+
     search_files: tool({
       description: "Busca un texto literal (sin regex) en todos los archivos de texto del workspace. Devuelve hasta 60 coincidencias con archivo:línea y el texto de esa línea.",
       inputSchema: z.object({
@@ -250,6 +280,45 @@ export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentTo
         } catch (error) {
           const output = errorOutput(error).slice(0, MAX_TYPECHECK_OUTPUT);
           return { ok: true, success: false, output };
+        }
+      },
+    }),
+  };
+
+  // Fase 4B: `run_script` solo se ofrece si el proyecto REALMENTE declara
+  // alguno de los scripts permitidos — nunca un comando arbitrario, nunca
+  // el contenido del script (siempre `npm run <name>`, con `<name>` ya
+  // validado tanto por el enum de Zod como por esta allowlist calculada
+  // en `loop.ts` antes de llamar acá). Deliberadamente NO incluye
+  // `"typecheck"` — esa verificación sigue siendo exclusiva de
+  // `run_typecheck` (corre `tsc` directo, funciona aunque el proyecto no
+  // tenga un script `"typecheck"` declarado; fusionarlas sería una
+  // regresión para esos proyectos, ver diseño de Fase 4, sección 3).
+  if (allowedScripts.length === 0) return baseTools;
+
+  return {
+    ...baseTools,
+    run_script: tool({
+      description: `Corre uno de los scripts de package.json disponibles en este proyecto: ${allowedScripts.join(", ")}. Siempre se ejecuta como "npm run <name>" — nunca un comando arbitrario. Usalo para correr tests/build/lint, además de run_typecheck.`,
+      inputSchema: z.object({
+        name: z.enum(["build", "test", "lint"]).describe(`Cuál de los scripts disponibles correr: ${allowedScripts.join(", ")}.`),
+      }),
+      execute: async ({ name }) => {
+        if (!allowedScripts.includes(name)) {
+          return { ok: false, error: `El script "${name}" no está disponible en este proyecto (disponibles: ${allowedScripts.join(", ") || "ninguno"}).` };
+        }
+        try {
+          const { stdout, stderr } = await execFileAsync("npm", ["run", name], {
+            cwd: workspaceRoot,
+            maxBuffer: 16 * 1024 * 1024,
+            timeout: 120_000,
+            shell: true,
+          });
+          const output = (stdout + stderr).trim();
+          return { ok: true, success: true, name, output: output.slice(0, MAX_TYPECHECK_OUTPUT) };
+        } catch (error) {
+          const output = errorOutput(error).slice(0, MAX_TYPECHECK_OUTPUT);
+          return { ok: true, success: false, name, output };
         }
       },
     }),

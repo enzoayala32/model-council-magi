@@ -318,19 +318,47 @@
   flex-wrap: wrap;
   gap: 6px;
 }
-.agentPickerShortcut {
+.agentPickerShortcutWrap {
+  display: inline-flex;
+  align-items: center;
   background: #151824;
   border: 1px solid #262b3d;
   border-radius: 999px;
+  overflow: hidden;
+}
+.agentPickerShortcut {
+  background: transparent;
+  border: none;
   color: #c7cbd4;
-  padding: 5px 12px;
+  padding: 5px 10px;
   font: inherit;
   font-size: 12px;
   cursor: pointer;
 }
+.agentPickerShortcutWrap:hover {
+  border-color: #3b4266;
+}
 .agentPickerShortcut:hover {
   background: #1c2135;
-  border-color: #3b4266;
+}
+.agentPickerShortcutRemove {
+  background: transparent;
+  border: none;
+  border-left: 1px solid #262b3d;
+  color: #6b7280;
+  padding: 5px 8px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.agentPickerShortcutRemove:hover {
+  color: #ff8080;
+  background: #2a1414;
+}
+
+.agentInspectErrorActions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
 }
 
 .agentBreadcrumbs {
@@ -425,4 +453,39 @@
 }
 .agentPinCurrentBtn {
   align-self: flex-start;
+}
+
+.agentKindBadge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+.agentKindBadge.write {
+  background: #16401f;
+  color: #6fd68a;
+}
+.agentKindBadge.edit {
+  background: #1e3a5f;
+  color: #7fc4ff;
+}
+.agentKindBadge.delete {
+  background: #4a1a1a;
+  color: #ff8080;
+}
+
+.agentGitCommitSection {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #2a2e3d;
+}
+.agentGitCommitHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.agentGitCommitDetail {
+  margin-top: 6px;
+  font-size: 13px;
+  color: #9aa1b3;
 }

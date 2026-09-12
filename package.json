@@ -18,6 +18,10 @@
     "agent:test-dispatcher": "tsx lib/agent/test-dispatcher.ts",
     "agent:test-delete-and-browse": "tsx lib/agent/test-delete-and-browse.ts",
     "agent:test-inspect": "tsx lib/agent/test-inspect.ts",
+    "agent:test-4a-nogit": "tsx lib/agent/test-4a-nogit.ts",
+    "agent:test-run-script": "tsx lib/agent/test-run-script.ts",
+    "agent:test-delete-file": "tsx lib/agent/test-delete-file.ts",
+    "agent:test-git-trace": "tsx lib/agent/test-git-trace.ts",
     "agent:test-runner-real": "tsx lib/agent/test-runner-real.ts",
     "agent:test-model-registry": "tsx lib/agent/test-model-registry.ts",
     "agent:stress": "tsx lib/agent/stress-test.ts"

@@ -43,6 +43,22 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: `No existe un Project con id "${projectId}".` }, { status: 404 });
   }
 
+  // Fase 4A: capa PRIMARIA de la validación de proyectos sin git — la task
+  // ni siquiera llega a crearse. `runner.ts` tiene una segunda capa
+  // defensiva por si este chequeo se saltea (llamada directa a la API,
+  // o `project.isGitRepo` cambia después de creada la task vía
+  // `refreshIsGitRepo`) — ver ese archivo para el porqué de la redundancia.
+  if (!project.isGitRepo) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          "Este proyecto no es un repositorio git — el Coding Agent todavía no puede ejecutar tareas reales ahí. Convertilo en un repo git (`git init`) para poder usarlo.",
+      },
+      { status: 400 },
+    );
+  }
+
   // Ver diseño de Fase 2, sección 15: protege contra un cliente
   // desactualizado (o una llamada directa a la API) que mande un modelId
   // que existe en el Council pero nunca se validó para el Coding Agent.

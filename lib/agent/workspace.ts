@@ -92,16 +92,25 @@ export async function createAgentWorkspace(taskId: string, repoRoot: string): Pr
   return { taskId, worktreePath, branchName, repoRoot, createdAt: Date.now() };
 }
 
-/** Elimina el worktree y su rama descartable. Best-effort: si `git worktree
- * remove` falla (por ej. el directorio ya no existe), cae a un `rm -rf`
- * directo para no dejar basura en el temp dir. */
-export async function destroyAgentWorkspace(workspace: Pick<AgentWorkspace, "worktreePath" | "branchName" | "repoRoot">): Promise<void> {
+/** Elimina el worktree y (salvo `keepBranch`) su rama descartable.
+ * Best-effort: si `git worktree remove` falla (por ej. el directorio ya no
+ * existe), cae a un `rm -rf` directo para no dejar basura en el temp dir.
+ *
+ * Fase 4D: `keepBranch` conserva la rama `agent/<taskId>` cuando `apply.ts`
+ * llegó a commitear algo exitosamente ahí — el directorio del worktree se
+ * remueve igual (ya no hace falta el filesystem temporal), solo se saltea
+ * el `git branch -D` para no perder el commit real que quedó en esa rama. */
+export async function destroyAgentWorkspace(
+  workspace: Pick<AgentWorkspace, "worktreePath" | "branchName" | "repoRoot">,
+  options?: { keepBranch?: boolean },
+): Promise<void> {
   try {
     await run(workspace.repoRoot, "git", ["worktree", "remove", "--force", workspace.worktreePath]);
   } catch {
     await fs.rm(workspace.worktreePath, { recursive: true, force: true }).catch(() => {});
     await run(workspace.repoRoot, "git", ["worktree", "prune"]).catch(() => {});
   }
+  if (options?.keepBranch) return;
   await run(workspace.repoRoot, "git", ["branch", "-D", workspace.branchName]).catch(() => {
     // La rama puede no existir más si el worktree nunca se llegó a crear del todo — no es un error real.
   });

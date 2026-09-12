@@ -107,22 +107,32 @@ async function main() {
     results.push(ok);
   }
 
-  // --- Caso 4: proyecto sin git → runTask rechaza de entrada ---
+  // --- Caso 4: proyecto sin git → runTask debe fallar limpio, sin loop (Fase 4A) ---
   {
-    console.log("\n--- Caso 4: proyecto SIN git → runTask debe rechazar ---");
+    console.log("\n--- Caso 4: proyecto SIN git → runTask debe fallar a FAILED, no quedar en QUEUED ---");
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "consenso-ia-test2d-nogit-"));
     await fs.writeFile(path.join(dir, "marker.txt"), "sin git\n");
     const project = await createProject({ name: "sin-git", localPath: dir });
     const task = createTask({ projectId: project.id, modelId: "test-model", prompt: "algo" });
-    let rejected = false;
-    try {
-      await runTask(task.id, { loopRunner: async () => fakeResult({}) });
-    } catch {
-      rejected = true;
-    }
+    // Fase 4A: antes de este fix, este chequeo vivía ANTES del claim a
+    // RUNNING — la excepción escapaba de runTask entero, la task nunca
+    // salía de QUEUED, y el dispatcher (dispatcher.ts) la reintentaba para
+    // siempre. Ahora el chequeo vive DENTRO del try principal (después del
+    // claim), así que cae en el mismo catch que ya lleva a FAILED —
+    // runTask NO tira, devuelve `true` (tomó el turno, resolvió algo,
+    // aunque haya sido fallar) y la task queda en un estado terminal real.
+    const claimedTheRun = await runTask(task.id, { loopRunner: async () => fakeResult({}) });
     const finalTask = getTask(task.id)!;
-    const ok = rejected && finalTask.status === "QUEUED";
-    console.log(ok ? "✅ runTask rechazó el proyecto sin git y la task quedó en QUEUED (no se tocó)." : `❌ Falló. rejected=${rejected}, status=${finalTask.status}`);
+    const ok =
+      claimedTheRun === true &&
+      finalTask.status === "FAILED" &&
+      typeof finalTask.error === "string" &&
+      finalTask.error.includes("no es un repositorio git");
+    console.log(
+      ok
+        ? "✅ runTask tomó el turno, la task quedó FAILED con un mensaje claro (no QUEUED para siempre, no una excepción sin capturar)."
+        : `❌ Falló. claimedTheRun=${claimedTheRun}, status=${finalTask.status}, error=${finalTask.error}`,
+    );
     results.push(ok);
   }
 

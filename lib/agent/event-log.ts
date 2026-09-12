@@ -6,14 +6,20 @@ import { getDb } from "../db";
  * 12). No hay un tipo por cada `stopReason` — eso vive en
  * `agent_tasks.stop_reason` y se comunica acá con un único `status_change`
  * al estado final. */
-export type AgentEventType = "tool_call" | "tool_result" | "text" | "typecheck_result" | "status_change";
+export type AgentEventType = "tool_call" | "tool_result" | "text" | "typecheck_result" | "run_script_result" | "status_change" | "git_commit_result";
 
 export type AgentEventPayload =
   | { type: "tool_call"; toolName: string; input: unknown }
   | { type: "tool_result"; toolName: string; ok: boolean; error?: string; summary: string }
   | { type: "text"; text: string }
   | { type: "typecheck_result"; success: boolean; outputExcerpt?: string }
-  | { type: "status_change"; from: string; to: string; reason?: string };
+  | { type: "run_script_result"; name: string; success: boolean; outputExcerpt?: string }
+  | { type: "status_change"; from: string; to: string; reason?: string }
+  /** Fase 4D: UN evento por intento de commit git en `apply.ts` (no uno
+   * separado por cada uno de los 3 posibles resultados) — "not_attempted"
+   * cubre tanto "proyecto sin git" como "no hubo appliedPaths que
+   * commitear". `sha`/`error` son mutuamente excluyentes según `status`. */
+  | { type: "git_commit_result"; status: "success" | "failed" | "not_attempted"; branch: string; files: string[]; sha?: string; error?: string };
 
 export type AgentEvent = {
   id: string;
@@ -105,7 +111,14 @@ export function eventsToTranscript(events: AgentEvent[]): string[] {
     else if (p.type === "tool_result" && p.ok) lines.push(`✏️  ${p.summary}`);
     else if (p.type === "typecheck_result") {
       lines.push(p.success ? "✅ run_typecheck: compila limpio" : `❌ run_typecheck: hay errores —\n${p.outputExcerpt ?? ""}`);
+    } else if (p.type === "run_script_result") {
+      lines.push(p.success ? `✅ run_script(${p.name}): OK` : `❌ run_script(${p.name}): falló —\n${p.outputExcerpt ?? ""}`);
     } else if (p.type === "status_change") lines.push(`↻ ${p.from} → ${p.to}${p.reason ? ` (${p.reason})` : ""}`);
+    else if (p.type === "git_commit_result") {
+      if (p.status === "success") lines.push(`✅ commit git en ${p.branch}: ${p.sha?.slice(0, 7)} (${p.files.length} archivo(s))`);
+      else if (p.status === "failed") lines.push(`❌ commit git falló en ${p.branch}: ${p.error ?? "sin detalle"}`);
+      else lines.push(`↻ commit git: no se intentó`);
+    }
   }
   return lines;
 }

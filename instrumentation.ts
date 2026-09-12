@@ -25,12 +25,15 @@ export async function register() {
     const { listTasks } = await import("./lib/agent/task-store");
     const { maybeDispatchNext } = await import("./lib/agent/dispatcher");
 
-    const { requeued, interrupted } = await reconcileOrphanedTasks();
+    const { requeued, interrupted, recoveredApplying } = await reconcileOrphanedTasks();
     if (requeued.length > 0) {
       console.log(`[Coding Agent] ${requeued.length} task(s) reencolada(s) tras un reinicio: ${requeued.join(", ")}`);
     }
     if (interrupted.length > 0) {
       console.log(`[Coding Agent] ${interrupted.length} task(s) quedaron INTERRUPTED (agotaron los reintentos automáticos): ${interrupted.join(", ")}`);
+    }
+    if (recoveredApplying.length > 0) {
+      console.log(`[Coding Agent] ${recoveredApplying.length} task(s) recuperada(s) de un APPLYING huérfano (vuelven a READY_FOR_REVIEW): ${recoveredApplying.join(", ")}`);
     }
 
     const projectIds = new Set(listTasks({ status: "QUEUED" }).map((t) => t.projectId));
