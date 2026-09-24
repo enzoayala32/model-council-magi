@@ -36,6 +36,23 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Espera activa con timeout, para condiciones que dependen de I/O real
+ * (ej. `createWorkspaceForTask` haciendo un `git worktree add` de verdad)
+ * cuya duración varía según la máquina (antivirus, disco, SO) — un
+ * `sleep(N)` fijo que alcanza de sobra en un entorno puede no alcanzar en
+ * otro, y encima un `?.()` sobre algo que todavía no se asignó falla en
+ * silencio en vez de avisar. Acá, si la condición nunca se cumple, se tira
+ * un error claro en vez de dejar la promesa esperando para siempre. */
+async function waitUntil(predicate: () => boolean, description: string, timeoutMs = 10_000, intervalMs = 10): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(`waitUntil: timeout tras ${timeoutMs}ms esperando "${description}".`);
+    }
+    await sleep(intervalMs);
+  }
+}
+
 async function makeGitProject(name: string, files: Record<string, string> = { "README.md": "proyecto de prueba\n" }): Promise<{ project: AgentProject; dir: string }> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), `consenso-ia-test3-${name}-`));
   for (const [relPath, content] of Object.entries(files)) {
@@ -130,7 +147,15 @@ async function main() {
     const taskBStillQueued = getTask(taskB.id)!.status === "QUEUED";
     const taskARunning = getTask(taskA.id)!.status === "RUNNING";
 
-    state.resolveA?.();
+    // Antes: un sleep(30) fijo + `state.resolveA?.()` — si crear el
+    // workspace de A (git worktree real) tarda más que eso en esta
+    // máquina, el `?.` se queda callado sin avisar, la promesa de
+    // slowLoopRunner nunca se resuelve, y A queda RUNNING para siempre
+    // (encontrado corriendo esta prueba en Windows: el dispatcher
+    // reintentaba B cada 200ms sin parar, sin ningún error visible).
+    // `waitUntil` espera lo que realmente haga falta, con un techo de 10s.
+    await waitUntil(() => state.resolveA !== null, "slowLoopRunner de A fue invocado (el workspace de A ya se creó)");
+    state.resolveA!();
     await runA;
     await sleep(30);
 

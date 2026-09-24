@@ -34,6 +34,35 @@
   margin-bottom: 8px;
 }
 
+.agentSectionTitleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.agentSectionTitleRow .agentSectionTitle {
+  margin-bottom: 0;
+}
+.agentDeleteAllBtn {
+  font-size: 11px;
+  color: #6b7280;
+  background: transparent;
+  border: 1px solid #2a2e3d;
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.agentDeleteAllBtn:hover:not(:disabled) {
+  color: #ff8080;
+  border-color: #ff8080;
+  background: #2a1414;
+}
+.agentDeleteAllBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .agentList {
   display: flex;
   flex-direction: column;
@@ -487,5 +516,39 @@
 .agentGitCommitDetail {
   margin-top: 6px;
   font-size: 13px;
+  color: #9aa1b3;
+}
+
+.agentResilienceSection {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #2a2e3d;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.agentResilienceProvider {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.agentResilienceProviderName {
+  font-size: 12px;
+  font-weight: 600;
+  color: #9aa1b3;
+  text-transform: uppercase;
+}
+.agentResilienceCreds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.agentResilienceEvents {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.agentResilienceEvents small {
   color: #9aa1b3;
 }

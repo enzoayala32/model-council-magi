@@ -29,6 +29,14 @@ import { OpenRouterError, type OpenRouterMessage, type OpenRouterTool, type Open
  */
 export const NVIDIA_MODEL_MAP: Record<string, string> = {
   "nvidia/nemotron-3.5-lightning:free": "nvidia/nemotron-3.5-lightning-30b-a3b",
+  // NOTA CORREGIDA 2026-09-18: no es una baja confirmada del modelo — es
+  // un bug ACTIVO y ya documentado del backend NIM de NVIDIA (404
+  // "Function id ... not found", reportado por varios usuarios en el foro
+  // oficial de NVIDIA Developer hace pocos días, con precedente de
+  // resolverse solo con un redeploy del lado de NVIDIA). Ver la nota
+  // completa en la entrada de este modelo en lib/models.ts. Se deja el
+  // mapping (sigue sin andar hoy, pero es candidato real a reactivar) en
+  // vez de borrarlo.
   "nvidia/nemotron-3-ultra-550b-a55b:free": "nvidia/nemotron-3-ultra-550b-a55b",
   "nvidia/nemotron-3-super-120b-a12b:free": "nvidia/nemotron-3-super-120b-a12b",
   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",

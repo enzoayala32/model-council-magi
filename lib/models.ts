@@ -120,7 +120,23 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     maker: "NVIDIA",
     accent: "#76b900",
     logoUrl: "",
-    description: "Frontier open reasoning/orchestration MoE, 1M context. Highest quality, but noticeably slower on the free tier — opt in when you can wait.",
+    // NOTA CORREGIDA 2026-09-18 (ver investigación posterior — la nota
+    // anterior decía "CONFIRMED DEAD", que era incorrecta): el 404
+    // "Function id ... not found in account ..." NO es una baja del modelo
+    // — es un bug ACTIVO y ya documentado del backend NIM de NVIDIA. Dos
+    // hilos del foro oficial de NVIDIA Developer, de hace pocos días,
+    // reportan el mismo error para este mismo modelo. Hay precedente
+    // directo: el mismo error, con otro modelo Nemotron, fue confirmado
+    // por soporte de NVIDIA como "known issue... the team is actively
+    // working to fix it" y se resolvió solo con un redeploy de su lado
+    // (sin cambios de nuestro lado). A diferencia de gpt-oss-20b/minimax-m3/
+    // minimax-m2.7 (que SÍ traen un mensaje explícito y deliberado de
+    // OpenRouter de "ya no es gratis"), esto es un problema de
+    // infraestructura transitorio del lado de NVIDIA, no una baja
+    // confirmada. Se deja igual en `defaultSelected:false` por ahora
+    // (sigue sin andar hoy, en las dos rutas), pero es candidato real a
+    // reactivar más adelante — reintentar antes de asumir que sigue roto.
+    description: "Frontier open reasoning/orchestration MoE, 1M context. NOTE: actualmente devuelve 404 (bug conocido del backend NIM de NVIDIA, no una baja del modelo — ver comentario) tanto en OpenRouter como en NVIDIA NIM directo.",
     defaultSelected: false,
     defaultReasoningEffort: "high",
     supportsImages: false,
@@ -198,7 +214,14 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     maker: "Z.ai",
     accent: "#7c5cff",
     logoUrl: "",
-    description: "Zhipu AI's flagship agentic/long-horizon reasoning model, 1M context. Confirmed live and free directly on OpenRouter as of Aug 2026 — a genuinely different vendor/perspective from the rest of the panel. (Previously wired as an NVIDIA NIM native call under the ID \"z-ai/glm-5.2\", but NVIDIA's own catalog only has the older \"z-ai/glm5\" — that mismatch meant every call would have 404'd; moved to OpenRouter's confirmed-working free slug instead.)",
+    // NOTA (confirmado 2026-09-18, corrida real de Council con el conector
+    // de GitHub activo): con tools habilitadas, OpenRouter devuelve 404
+    // "No endpoints found that support tool use" — no es un problema de
+    // credentials/cuota, es que el endpoint de este modelo en OpenRouter no
+    // soporta tool-calling. Sin tools (conector GitHub apagado) sigue
+    // funcionando normal. No se saca de los fusion panels por esto — la
+    // falla es condicional al conector, no permanente.
+    description: "Zhipu AI's flagship agentic/long-horizon reasoning model, 1M context. Confirmed live and free directly on OpenRouter as of Aug 2026 — a genuinely different vendor/perspective from the rest of the panel. NOTE: con el conector de GitHub activo (tool-calling), OpenRouter 404s este endpoint — anda bien sin tools. (Previously wired as an NVIDIA NIM native call under the ID \"z-ai/glm-5.2\", but NVIDIA's own catalog only has the older \"z-ai/glm5\" — that mismatch meant every call would have 404'd; moved to OpenRouter's confirmed-working free slug instead.)",
     defaultSelected: false,
     defaultReasoningEffort: "high",
     supportsImages: false,
@@ -210,7 +233,12 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     maker: "MiniMax",
     accent: "#f97316",
     logoUrl: "",
-    description: "Multimodal (text/image/video) foundation model, 1M context, built for long-horizon agentic work, coding, and tool use. Confirmed live and free on OpenRouter as of Aug 2026.",
+    // CONFIRMED DEAD as of 2026-09-18: OpenRouter 404s este slug y dice
+    // usar el pago "minimax/minimax-m3" en su lugar — fuera de la
+    // colección free. Confirmado en una corrida real de Council. Kept
+    // (not defaultSelected) para no romper referencias viejas; no
+    // reactivar sin volver a chequear openrouter.ai/collections/free-models.
+    description: "Multimodal (text/image/video) foundation model, 1M context, built for long-horizon agentic work, coding, and tool use. NOTE: the :free slug is currently dead on OpenRouter (404, paid-only now) — not recommended to select.",
     defaultSelected: false,
     defaultReasoningEffort: "medium",
     supportsImages: true,
@@ -222,7 +250,10 @@ export const COUNCIL_MODELS: CouncilModel[] = [
     maker: "MiniMax",
     accent: "#fb923c",
     logoUrl: "",
-    description: "Next-gen agentic model tuned for autonomous multi-step productivity work (debugging, financial modeling, document generation). Confirmed live and free on OpenRouter as of Aug 2026.",
+    // CONFIRMED DEAD as of 2026-09-18: mismo caso que MiniMax M3 arriba —
+    // OpenRouter 404s y dice usar el slug pago. Confirmado en la misma
+    // corrida real de Council.
+    description: "Next-gen agentic model tuned for autonomous multi-step productivity work (debugging, financial modeling, document generation). NOTE: the :free slug is currently dead on OpenRouter (404, paid-only now) — not recommended to select.",
     defaultSelected: false,
     defaultReasoningEffort: "high",
     supportsImages: false,
@@ -458,24 +489,36 @@ export const FUSION_PANELS: FusionPanel[] = [
   },
   {
     id: "free-trio-fusion",
-    label: "Lightning + GLM + MiniMax M3",
+    label: "Lightning + GLM + Inkling",
     shortName: "Free trio",
     // Was "Lightning + GPT-OSS + Gemma 4" — both gpt-oss-20b:free and
     // gemma-4-26b-a4b-it:free 404/were pulled from OpenRouter's free tier
     // as of 2026-08-26. Swapped for two confirmed-live free models from
     // different vendors (Z.ai, MiniMax) to keep the multi-provider spread.
+    // Then (2026-09-18): minimax/minimax-m3:free ALSO went dead (404,
+    // paid-only now, confirmed en corrida real) — swapped for
+    // thinkingmachines/inkling:free (confirmed live), otro vendor distinto.
     description: "Diverse three-provider free panel — broader disagreement coverage, still fast.",
-    modelIds: ["nvidia/nemotron-3.5-lightning:free", "z-ai/glm-5.2:free", "minimax/minimax-m3:free"],
+    modelIds: ["nvidia/nemotron-3.5-lightning:free", "z-ai/glm-5.2:free", "thinkingmachines/inkling:free"],
     featured: true,
     scoreLabel: "Broad coverage",
     costLabel: "$0",
   },
   {
     id: "deep-research-fusion",
-    label: "Nemotron 3 Ultra + Nemotron 3 Super",
+    label: "Nemotron 3 Super + GLM-5.2",
     shortName: "Deep research",
-    description: "Highest-accuracy free panel using the two largest Nemotron models. Noticeably slower on the free tier — expect several minutes.",
-    modelIds: ["nvidia/nemotron-3-ultra-550b-a55b:free", "nvidia/nemotron-3-super-120b-a12b:free"],
+    // Was "Nemotron 3 Ultra + Nemotron 3 Super" — nemotron-3-ultra-550b
+    // está devolviendo 404 en las dos rutas desde el 2026-09-18 (bug
+    // activo y documentado del backend NIM de NVIDIA, NO una baja del
+    // modelo — ver la nota completa en su entrada de COUNCIL_MODELS más
+    // arriba). Swapped por GLM-5.2 (mismo "high" reasoning effort, 1M de
+    // contexto) mientras dure — revertir a Nemotron Ultra si NVIDIA lo
+    // redespliega. GLM-5.2 no soporta tool-calling con el conector de
+    // GitHub activo (ver su nota en COUNCIL_MODELS) — sin ese conector,
+    // funciona normal.
+    description: "Highest-accuracy free panel pairing the two largest reasoning models available. Noticeably slower on the free tier — expect several minutes.",
+    modelIds: ["nvidia/nemotron-3-super-120b-a12b:free", "z-ai/glm-5.2:free"],
     scoreLabel: "Highest quality, slow",
     costLabel: "$0",
   },

@@ -15,6 +15,31 @@ import { ProjectPicker } from "./ProjectPicker";
 type CodingAgentModel = { id: string; label: string; shortName: string; maker: string };
 type ProposalView = FileProposal & { applied: boolean; conflict: boolean };
 
+/** Fase 5F — espejo liviano del shape que devuelve
+ * `GET /api/provider-resilience/status` (`ProviderSnapshot`/
+ * `ProviderResilienceEvent` de `lib/provider-resilience/config.ts`/
+ * `events.ts`) — solo los campos que la UI realmente pinta, nunca el
+ * `value` de una credential (el endpoint ya no lo expone). La UI es
+ * consumidora pura de este shape, nunca dueña del estado: todo sale del
+ * snapshot real del pool en cada poll, sin lógica de negocio duplicada
+ * acá. */
+type ResilienceCredential = {
+  id: string;
+  status: "AVAILABLE" | "COOLDOWN" | "INVALID";
+  cooldownUntil: number | null;
+  consecutiveFailures: number;
+};
+type ResilienceProviderSnapshot = { provider: string; credentials: ResilienceCredential[] };
+type ResilienceEvent = {
+  id: string;
+  ts: number;
+  provider: string;
+  credentialId: string | null;
+  reason: string;
+  outcome: "rotated" | "stopped" | "exhausted";
+};
+type ProviderResilienceStatus = { providers: ResilienceProviderSnapshot[]; councilEvents: ResilienceEvent[] };
+
 /** Espejo del `TERMINAL_STATUSES` de `lib/agent/task-store.ts` — no se
  * puede importar ese array (es un valor en tiempo de ejecución, no un
  * tipo) sin arrastrar `lib/db.ts` (better-sqlite3) al bundle del cliente.
@@ -56,6 +81,11 @@ function formatEvent(event: AgentEvent): { text: string; kind: "err" | "ok" | "s
     if (p.status === "failed") return { text: `❌ commit git falló en ${p.branch}: ${p.error ?? "sin detalle"}`, kind: "err" };
     return { text: "↻ commit git: no se intentó", kind: "status" };
   }
+  if (p.type === "credential_failover") {
+    if (p.outcome === "rotated") return { text: `🔁 credential ${p.credentialId} (${p.provider}) falló (${p.reason}) — rotando a otra.`, kind: "status" };
+    if (p.outcome === "stopped") return { text: `⛔ credential ${p.credentialId} (${p.provider}) falló (${p.reason}) — no se rotó${p.note ? ` (${p.note})` : ""}.`, kind: "err" };
+    return { text: `⛔ ${p.provider}: sin ninguna credential disponible (${p.reason}).`, kind: "err" };
+  }
   return { text: JSON.stringify(p), kind: "text" };
 }
 
@@ -96,6 +126,18 @@ export default function AgentPage() {
   const [actionError, setActionError] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
+  const [deletingAll, setDeletingAll] = useState(false);
+  // Bug reportado: tras Aplicar/Descartar, los botones seguían apareciendo.
+  // Causa real: `useAgentTaskEvents` cierra su EventSource apenas la task
+  // deja QUEUED/RUNNING (correcto — ya no van a llegar más eventos) pero su
+  // `status` queda CONGELADO en ese último valor ("READY_FOR_REVIEW") para
+  // siempre, y `effectiveStatus` le daba prioridad a ese valor viejo por
+  // sobre `selectedTask.status` ya actualizado. Este estado guarda el
+  // status real apenas se confirma una acción, y gana por sobre el `status`
+  // stale del SSE — se limpia solo al cambiar de task seleccionada.
+  const [postActionStatus, setPostActionStatus] = useState<TaskStatus | null>(null);
+
+  const [resilienceStatus, setResilienceStatus] = useState<ProviderResilienceStatus | null>(null);
 
   const selectedTask = useMemo(() => tasks.find((t) => t.id === selectedTaskId) ?? null, [tasks, selectedTaskId]);
   const selectedProject = useMemo(() => projects.find((p) => p.id === selectedProjectId) ?? null, [projects, selectedProjectId]);
@@ -135,8 +177,35 @@ export default function AgentPage() {
     };
   }, [selectedProjectId]);
 
-  // --- El status más fresco es el que viene del SSE mientras hay conexión viva ---
-  const effectiveStatus: TaskStatus | null = liveStatus ?? selectedTask?.status ?? null;
+  useEffect(() => {
+    setPostActionStatus(null);
+  }, [selectedTaskId]);
+
+  // --- Fase 5F: estado de Provider Resilience, independiente del proyecto
+  // seleccionado (es global al proceso, no por proyecto). Polling propio,
+  // más espaciado que el de tasks (5s vs 3s) — es información de fondo, no
+  // algo que el usuario esté mirando fijo esperando un cambio. ---
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      fetchJson<ProviderResilienceStatus>("/api/provider-resilience/status")
+        .then((r) => {
+          if (!cancelled) setResilienceStatus(r);
+        })
+        .catch(() => {});
+    load();
+    const interval = setInterval(load, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  // --- El status más fresco es el que viene del SSE mientras hay conexión
+  // viva — PERO una acción explícita del usuario (Aplicar/Descartar) es más
+  // fresca todavía que cualquier snapshot del SSE, que ya dejó de recibir
+  // eventos apenas la task salió de QUEUED/RUNNING.
+  const effectiveStatus: TaskStatus | null = postActionStatus ?? liveStatus ?? selectedTask?.status ?? null;
   const effectiveConflictedPaths = liveConflictedPaths ?? selectedTask?.conflictedPaths ?? null;
 
   // --- Cargar proposals cuando la task queda lista para revisar ---
@@ -196,6 +265,7 @@ export default function AgentPage() {
     try {
       const r = await fetchJson<{ task: CodingTask }>(`/api/agent/tasks/${selectedTaskId}`);
       setTasks((current) => current.map((t) => (t.id === r.task.id ? r.task : t)));
+      setPostActionStatus(r.task.status);
     } catch {
       // best-effort — el SSE ya cubre el caso normal.
     }
@@ -259,6 +329,31 @@ export default function AgentPage() {
     }
   }
 
+  /** Borra en lote todas las tasks TERMINADAS del proyecto actual (mismo
+   * criterio que el botón individual — QUEUED/RUNNING nunca se pueden
+   * borrar, el propio endpoint ya lo rechaza con 409). Reusa el mismo
+   * `DELETE /api/agent/tasks/[id]` de siempre, una por una — sin ningún
+   * endpoint ni lógica de borrado nueva del lado del servidor. Si una
+   * falla en el medio, sigue con el resto en vez de cortar todo. */
+  async function handleDeleteAllTasks() {
+    const deletableIds = tasks.filter((t) => TERMINAL_TASK_STATUSES.includes(t.status)).map((t) => t.id);
+    if (deletableIds.length === 0) return;
+    if (!window.confirm(`¿Eliminar las ${deletableIds.length} task(s) terminada(s) de este proyecto para siempre? No se puede deshacer.`)) return;
+    setDeletingAll(true);
+    const failedIds = new Set<string>();
+    for (const id of deletableIds) {
+      try {
+        await fetchJson(`/api/agent/tasks/${id}`, { method: "DELETE" });
+      } catch {
+        failedIds.add(id); // seguir con las demás aunque esta falle
+      }
+    }
+    setTasks((current) => current.filter((t) => !deletableIds.includes(t.id) || failedIds.has(t.id)));
+    if (selectedTaskId && deletableIds.includes(selectedTaskId) && !failedIds.has(selectedTaskId)) setSelectedTaskId(null);
+    if (failedIds.size > 0) setTaskFormError(`No se pudieron borrar ${failedIds.size} de ${deletableIds.length} task(s) — probá de nuevo.`);
+    setDeletingAll(false);
+  }
+
   return (
     <div className="agentPage">
       <aside className="agentSidebar">
@@ -306,7 +401,14 @@ export default function AgentPage() {
 
         {selectedProjectId && (
           <div>
-            <div className="agentSectionTitle">Tasks</div>
+            <div className="agentSectionTitleRow">
+              <div className="agentSectionTitle">Tasks</div>
+              {tasks.some((t) => TERMINAL_TASK_STATUSES.includes(t.status)) && (
+                <button type="button" className="agentDeleteAllBtn" onClick={handleDeleteAllTasks} disabled={deletingAll} title="Borrar todas las tasks terminadas de este proyecto">
+                  {deletingAll ? "Borrando…" : "Borrar todas"}
+                </button>
+              )}
+            </div>
             <div className="agentList">
               {tasks.map((task) => (
                 <button
@@ -367,6 +469,43 @@ export default function AgentPage() {
             )}
             {taskFormError && <div className="agentError">{taskFormError}</div>}
           </form>
+        )}
+
+        {resilienceStatus && (
+          <div className="agentResilienceSection">
+            <div className="agentSectionTitle">Provider Resilience</div>
+            {resilienceStatus.providers.map((p) => (
+              <div key={p.provider} className="agentResilienceProvider">
+                <span className="agentResilienceProviderName">{p.provider}</span>
+                <div className="agentResilienceCreds">
+                  {p.credentials.length === 0 && <span className="agentEmpty">sin credentials</span>}
+                  {p.credentials.map((c) => (
+                    <span
+                      key={c.id}
+                      className={`agentInspectBadge ${c.status === "AVAILABLE" ? "yes" : c.status === "INVALID" ? "no" : "neutral"}`}
+                      title={`fallos consecutivos: ${c.consecutiveFailures}${c.cooldownUntil ? ` · cooldown hasta ${new Date(c.cooldownUntil).toLocaleTimeString()}` : ""}`}
+                    >
+                      {c.id}: {c.status}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {resilienceStatus.councilEvents.length > 0 && (
+              <div className="agentResilienceEvents">
+                <small>Últimos failovers del Council:</small>
+                {resilienceStatus.councilEvents
+                  .slice(-5)
+                  .reverse()
+                  .map((e) => (
+                    <div key={e.id} className={`agentEventLine ${e.outcome === "rotated" ? "status" : "err"}`}>
+                      {e.outcome === "rotated" ? "🔁" : "⛔"} {e.provider}
+                      {e.credentialId ? ` (${e.credentialId})` : ""} — {e.reason}
+                    </div>
+                  ))}
+              </div>
+            )}
+          </div>
         )}
       </aside>
 

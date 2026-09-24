@@ -31,14 +31,17 @@ import {
   tallyVotes,
 } from "@/lib/council-consensus";
 import {
-  createFusionJudgeReport,
+  createFusionJudgeReportResilient,
   delay,
   logStep,
   runDebate,
   runDraft,
-  runVote,
+  runVoteResilient,
+  withCredentialFailover,
   withWatchdog,
 } from "@/lib/council-run";
+import { registerSecret, redactSecrets } from "@/lib/provider-resilience/redact";
+import { resolveCredentials } from "@/lib/provider-resilience/config";
 
 export const maxDuration = 300;
 
@@ -68,7 +71,13 @@ export async function POST(request: Request) {
       try {
         const body = (await request.json()) as StreamRequest;
         const prompt = body.prompt?.trim();
-        const apiKey = body.apiKey?.trim() || process.env.OPENROUTER_API_KEY;
+        // Fase 5E: `explicitOpenRouterKey` es el override de `body.apiKey`
+        // — bypassea el pool de credentials por completo (5C, ya
+        // aprobado), solo para llamadas OpenRouter (drafts/debate/vote/
+        // judge/synthesis). `apiKey` (legado) sigue existiendo tal cual
+        // para los dos usos que 5E deliberadamente deja afuera de alcance
+        // (generación de imágenes y follow-ups) — nunca pasan por el pool.
+        const explicitOpenRouterKey = body.apiKey?.trim() || null;
         const fusionPanelId = typeof body.fusionPanelId === "string" ? body.fusionPanelId : undefined;
         const selectedModels = normalizeSelection(body.selectedModels, fusionPanelId);
         const attachments = await extractAttachmentText(normalizeAttachments(body.attachments));
@@ -113,7 +122,26 @@ export async function POST(request: Request) {
           return;
         }
 
-        if (!apiKey || apiKey.includes("your-key")) {
+        // Fase 5E: antes, "hay alguna credential utilizable" se reducía a
+        // un único string. Ahora, sin key explícita, hay que preguntarle
+        // al mismo mecanismo de descubrimiento que usa el pool (5C) si
+        // existe AL MENOS una — evita arrancar todo el run para recién
+        // fallar adentro del primer draft si `.env` no tiene ninguna.
+        if (explicitOpenRouterKey) {
+          if (explicitOpenRouterKey.includes("your-key")) {
+            send({
+              type: "error",
+              error: "Set OPENROUTER_API_KEY in .env or enter a valid OpenRouter key before running.",
+            });
+            controller.close();
+            return;
+          }
+          // Se registra ANTES de cualquier llamada — para que quede
+          // cubierta por `redactSecrets`/`redactError` (5C) desde el
+          // primer instante en que existe, igual que las credentials del
+          // pool ya quedan registradas al construirse (`createProviderPool`).
+          registerSecret(explicitOpenRouterKey);
+        } else if (resolveCredentials("OPENROUTER_API_KEY").length === 0) {
           send({
             type: "error",
             error: "Set OPENROUTER_API_KEY in .env or enter a valid OpenRouter key before running.",
@@ -121,6 +149,13 @@ export async function POST(request: Request) {
           controller.close();
           return;
         }
+
+        // Fase 5E: `apiKey` (legado) — solo para los dos usos que quedan
+        // deliberadamente fuera del pool en esta fase (generación de
+        // imágenes y follow-ups, ver sección de riesgos del informe de
+        // cierre). Para acá abajo ya está garantizado por la validación de
+        // arriba que existe al menos una de las dos fuentes.
+        const apiKey = explicitOpenRouterKey ?? resolveCredentials("OPENROUTER_API_KEY")[0]!;
 
         send({ type: "run_started", prompt, selectedModels, fusionPanelId });
         logStep("▶▶ RUN START", { promptLength: prompt.length, selectedModels, fusionPanelId, webGrounding });
@@ -152,7 +187,7 @@ export async function POST(request: Request) {
               prompt,
               attachments,
               history,
-              apiKey,
+              explicitOpenRouterKey,
               send,
               offset: index,
               signal,
@@ -214,7 +249,7 @@ export async function POST(request: Request) {
                   others: currentAnswers.filter((other) => other.modelId !== self.modelId),
                   prompt,
                   history,
-                  apiKey,
+                  explicitOpenRouterKey,
                   send,
                   offset: index,
                   signal,
@@ -276,7 +311,7 @@ export async function POST(request: Request) {
           if (isAborted()) return;
           send({ type: "synthesis_started", step: "Council casting final votes on the strongest answer" });
           const votes = await Promise.all(
-            currentAnswers.map((self) => runVote({ self, candidates: currentAnswers, prompt, apiKey, send, signal })),
+            currentAnswers.map((self) => runVoteResilient({ self, candidates: currentAnswers, prompt, send, signal, explicitOpenRouterKey })),
           );
           const { tally, winner, totalVotes } = tallyVotes(votes, currentAnswers);
           if (isAborted()) return;
@@ -304,12 +339,12 @@ export async function POST(request: Request) {
         logStep("→ fusion judge START");
         const judgeStartedAt = Date.now();
         const fusionJudge = await withWatchdog(
-          createFusionJudgeReport({
+          createFusionJudgeReportResilient({
             prompt,
             drafts: successfulDrafts,
             debates: debateResults,
-            apiKey,
             signal,
+            explicitOpenRouterKey,
           }),
           FUSION_JUDGE_WATCHDOG_MS,
           "Fusion judge",
@@ -334,13 +369,19 @@ export async function POST(request: Request) {
         // hardcoded fallback identical to the primary: both attempts hit
         // the same saturated free-tier model back to back, ~30 minutes lost
         // for nothing.
+        // 2026-09-18: openai/gpt-oss-20b:free y google/gemma-4-26b-a4b-it:free
+        // (los dos candidatos originales) quedaron CONFIRMED DEAD/saturados
+        // (ver notas en lib/models.ts) — con el default de SYNTHESIS_MODEL,
+        // el fallback real terminaba siendo un modelo muerto, o sea NUNCA
+        // servía. Reemplazados por los 2 modelos que sí anduvieron limpios
+        // en la misma corrida real (nemotron-3-super-120b, gemini-3.5-flash).
         const SYNTHESIS_FALLBACK_CANDIDATES = [
           "nvidia/nemotron-3.5-lightning:free",
-          "openai/gpt-oss-20b:free",
-          "google/gemma-4-26b-a4b-it:free",
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "gemini-3.5-flash",
         ];
         const SYNTHESIS_FALLBACK_MODEL =
-          SYNTHESIS_FALLBACK_CANDIDATES.find((id) => id !== SYNTHESIS_PRIMARY_MODEL) ?? "openai/gpt-oss-20b:free";
+          SYNTHESIS_FALLBACK_CANDIDATES.find((id) => id !== SYNTHESIS_PRIMARY_MODEL) ?? "gemini-3.5-flash";
 
         function runSynthesis(modelId: string, apiKeyValue: string, promptValue: string) {
           return createAgentCompletion({
@@ -375,10 +416,16 @@ export async function POST(request: Request) {
         let synthesis: Awaited<ReturnType<typeof createAgentCompletion>>;
         const primaryStartedAt = Date.now();
         try {
-          synthesis = await withWatchdog(runSynthesis(SYNTHESIS_PRIMARY_MODEL, apiKey, prompt), SYNTHESIS_WATCHDOG_MS, "Synthesis");
+          synthesis = await withWatchdog(
+            withCredentialFailover("openrouter", signal, (synthesisApiKey) => runSynthesis(SYNTHESIS_PRIMARY_MODEL, synthesisApiKey, prompt), {
+              explicitApiKey: explicitOpenRouterKey,
+            }),
+            SYNTHESIS_WATCHDOG_MS,
+            "Synthesis",
+          );
           logStep("✓ synthesis DONE (primary)", { ms: Date.now() - primaryStartedAt, tokens: synthesis.usage });
         } catch (primaryError) {
-          const primaryMessage = primaryError instanceof Error ? primaryError.message : "Synthesis failed.";
+          const primaryMessage = redactSecrets(primaryError instanceof Error ? primaryError.message : "Synthesis failed.");
           logStep("✗ synthesis FAILED (primary) — trying fallback model", {
             ms: Date.now() - primaryStartedAt,
             error: primaryMessage,
@@ -390,10 +437,16 @@ export async function POST(request: Request) {
           });
           const fallbackStartedAt = Date.now();
           try {
-            synthesis = await withWatchdog(runSynthesis(SYNTHESIS_FALLBACK_MODEL, apiKey, prompt), SYNTHESIS_WATCHDOG_MS, "Synthesis (fallback)");
+            synthesis = await withWatchdog(
+              withCredentialFailover("openrouter", signal, (synthesisApiKey) => runSynthesis(SYNTHESIS_FALLBACK_MODEL, synthesisApiKey, prompt), {
+                explicitApiKey: explicitOpenRouterKey,
+              }),
+              SYNTHESIS_WATCHDOG_MS,
+              "Synthesis (fallback)",
+            );
             logStep("✓ synthesis DONE (fallback)", { ms: Date.now() - fallbackStartedAt, tokens: synthesis.usage });
           } catch (fallbackError) {
-            const message = fallbackError instanceof Error ? fallbackError.message : "Synthesis failed.";
+            const message = redactSecrets(fallbackError instanceof Error ? fallbackError.message : "Synthesis failed.");
             logStep("✗ synthesis FAILED (fallback too)", { ms: Date.now() - fallbackStartedAt, error: message });
             throw fallbackError;
           }
@@ -423,8 +476,9 @@ export async function POST(request: Request) {
             });
           } catch (error) {
             if (isAborted()) return;
-            logStep("✗ image generation FAILED", { error: error instanceof Error ? error.message : String(error) });
-            send({ type: "image_error", error: error instanceof Error ? error.message : "Image generation failed." });
+            const message = redactSecrets(error instanceof Error ? error.message : String(error));
+            logStep("✗ image generation FAILED", { error: message });
+            send({ type: "image_error", error: error instanceof Error ? message : "Image generation failed." });
           }
         }
 
@@ -453,7 +507,8 @@ export async function POST(request: Request) {
           });
         } catch (error) {
           if (isAborted()) return;
-          logStep("✗ follow-ups FAILED (non-fatal, continuing)", { error: error instanceof Error ? error.message : String(error) });
+          const message = redactSecrets(error instanceof Error ? error.message : String(error));
+          logStep("✗ follow-ups FAILED (non-fatal, continuing)", { error: message });
           send({ type: "followups_complete", questions: [] });
         }
 
@@ -465,8 +520,8 @@ export async function POST(request: Request) {
           logStep("⏹ RUN ABORTED (client cancelled)");
           // client cancelled; quietly close
         } else {
-          const message = error instanceof Error ? error.message : "Council stream failed.";
-          logStep("✗✗ RUN FAILED", { error: message, stack: error instanceof Error ? error.stack : undefined });
+          const message = redactSecrets(error instanceof Error ? error.message : "Council stream failed.");
+          logStep("✗✗ RUN FAILED", { error: message, stack: error instanceof Error ? redactSecrets(error.stack ?? "") : undefined });
           send({ type: "error", error: message });
         }
       } finally {

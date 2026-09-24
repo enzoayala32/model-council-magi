@@ -8,6 +8,21 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createAgentTools, type AgentToolEvent } from "./tools";
 import { getCouncilModel } from "../models";
 import { appendEvent } from "./event-log";
+import { type ProviderName } from "../provider-resilience/config";
+import { classifyProviderError, type ProviderErrorInput } from "../provider-resilience/classify";
+import { computeCooldownMs } from "../provider-resilience/cooldown";
+import { redactSecrets } from "../provider-resilience/redact";
+import { classifyExhaustion, describeExhaustion } from "../provider-resilience/events";
+/** Fase 5E: el pool singleton pasó a vivir en `registry.ts`, compartido con
+ * Model Council — acá solo se importa. `ENV_PREFIX_BY_PROVIDER`/
+ * `getProviderPool` se re-usan tal cual, sin ningún cambio de
+ * comportamiento respecto a 5D. Las 2 funciones de test se RE-EXPORTAN acá
+ * mismo para que `test-provider-resilience.ts` siga funcionando con el
+ * mismo `import ... from "./loop"` de siempre, sin tener que saber que el
+ * registry existe. */
+import { getProviderPool, ENV_PREFIX_BY_PROVIDER, __resetProviderPoolsForTests, __getProviderPoolForTests } from "../provider-resilience/registry";
+
+export { __resetProviderPoolsForTests, __getProviderPoolForTests };
 
 const execFileAsync = promisify(execFile);
 
@@ -63,6 +78,15 @@ export type RunAgentLoopOptions = {
    * ningún consumidor existente — `test-run.ts`/`stress-test.ts` no pasan
    * `taskId` y siguen funcionando idéntico, sin tocar SQLite). */
   taskId?: string;
+  /** Fase 5D: inyectable SOLO para pruebas — el default es `generateText`
+   * real de "ai". Correr una task de verdad SIEMPRE debe usar el default;
+   * nunca se pasa este parámetro fuera de un test (mismo patrón exacto que
+   * `loopRunner` en `runner.ts`/`RunTaskOptions`). Tipado contra el primer
+   * parámetro real de `generateText` (no se re-declara la firma a mano) —
+   * el código de `runAgentLoop` nunca lee el valor resuelto de esta
+   * llamada, solo le importa si resuelve o rechaza y lo que pasa por
+   * `onStepFinish`, así que un fake solo necesita imitar eso. */
+  generateTextImpl?: (options: Parameters<typeof generateText>[0]) => Promise<unknown>;
 };
 
 const DEFAULT_CODING_MODEL = "nvidia/nemotron-3.5-lightning:free";
@@ -138,9 +162,13 @@ Reglas:
 - Cuando termines, respondé con un resumen breve en texto de qué cambiaste y por qué — sin volver a llamar ninguna tool.`;
 }
 
-function buildOpenRouterModel(modelId: string) {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) throw new Error("Falta OPENROUTER_API_KEY en .env.");
+/** Fase 5D: recibe `apiKey` explícito (el `value` de un `CredentialLease`
+ * ya entregado por el pool) en vez de leer `process.env` acá adentro — el
+ * pool ya garantizó que existe una credential real antes de llegar a esta
+ * función, así que ya no hace falta el `if (!apiKey) throw` que había
+ * antes (esa validación ahora vive en `cursor.next()` devolviendo
+ * `NO_CREDENTIALS`, con un mensaje más específico — ver `runAgentLoop`). */
+function buildOpenRouterModel(modelId: string, apiKey: string) {
   const provider = createOpenAI({
     baseURL: "https://openrouter.ai/api/v1",
     apiKey,
@@ -156,9 +184,7 @@ function buildOpenRouterModel(modelId: string) {
  * mecanismo que OpenRouter, distinta base URL/key. Mismo endpoint que ya
  * usa `lib/nvidia.ts` para el Council, solo que acá se le pasa el AI SDK
  * en vez de un fetch a mano. */
-function buildNvidiaModel(modelId: string) {
-  const apiKey = process.env.NVIDIA_API_KEY;
-  if (!apiKey) throw new Error("Falta NVIDIA_API_KEY en .env (conseguí una gratis en build.nvidia.com).");
+function buildNvidiaModel(modelId: string, apiKey: string) {
   const provider = createOpenAI({ baseURL: "https://integrate.api.nvidia.com/v1", apiKey });
   return provider.chat(modelId);
 }
@@ -179,25 +205,85 @@ function buildNvidiaModel(modelId: string) {
  * tool-calling multi-paso) — recién con el Coding Agent (multi-step) se
  * vuelve un problema real. El provider nativo maneja el signature
  * correctamente sin que el código de acá tenga que tocarlo. */
-function buildGoogleModel(modelId: string) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("Falta GEMINI_API_KEY en .env (conseguí una gratis en aistudio.google.com/apikey).");
+function buildGoogleModel(modelId: string, apiKey: string) {
   const google = createGoogleGenerativeAI({ apiKey });
   return google.chat(modelId);
 }
 
-/** Dispatcher multi-proveedor del Coding Agent Model Registry (ver diseño
- * de Fase 2, sección 15) — mismo criterio de ruteo por `provider` que ya
- * usa `runCouncilCompletion` en `lib/council-run.ts` para el Council, pero
- * devolviendo un `LanguageModel` de AI SDK en vez de una completion cruda.
- * Reemplaza el `buildOpenRouterModel` fijo que tenía el loop hasta Fase 2D
- * — todo modelo sigue siendo OpenRouter por default (el campo `provider`
- * solo está seteado en los entries NVIDIA/Google nativos de `models.ts`). */
-function buildModelForId(modelId: string) {
+/** A qué provider corresponde un modelId — mismo criterio de ruteo que ya
+ * usaba `buildModelForId` (y que usa `runCouncilCompletion` en
+ * `lib/council-run.ts` para el Council): todo modelo es OpenRouter por
+ * default, salvo que `models.ts` lo tenga marcado como `"nvidia"`/`"google"`. */
+function resolveProviderName(modelId: string): ProviderName {
   const councilModel = getCouncilModel(modelId);
-  if (councilModel?.provider === "nvidia") return buildNvidiaModel(modelId);
-  if (councilModel?.provider === "google") return buildGoogleModel(modelId);
-  return buildOpenRouterModel(modelId);
+  if (councilModel?.provider === "nvidia") return "nvidia";
+  if (councilModel?.provider === "google") return "google";
+  return "openrouter";
+}
+
+/** Dispatcher multi-proveedor del Coding Agent Model Registry (ver diseño
+ * de Fase 2, sección 15) — ahora recibe el `provider` ya resuelto (Fase 5D
+ * lo resuelve una sola vez en `runAgentLoop`, para elegir el pool correcto
+ * ANTES de pedir una credential) y la `apiKey` de la credential que el
+ * pool ya entregó. */
+function buildModelForId(providerName: ProviderName, modelId: string, apiKey: string) {
+  if (providerName === "nvidia") return buildNvidiaModel(modelId, apiKey);
+  if (providerName === "google") return buildGoogleModel(modelId, apiKey);
+  return buildOpenRouterModel(modelId, apiKey);
+}
+
+/** Fase 5D: adapta un error real (lo que puede tirar `generateText`) al
+ * `ProviderErrorInput` que espera `classifyProviderError()` (5B) — sin
+ * tocar `classify.ts`. Reusa el mismo duck-typing que ya usaba este
+ * archivo para reconocer un `APICallError` (chequear `"statusCode" in
+ * error"`, ver el manejo de `responseBody` más abajo), en vez de importar
+ * `APICallError.isInstance` de `@ai-sdk/provider` — ninguna otra parte de
+ * este archivo depende de ese paquete directamente hoy.
+ *
+ * Cuando no hay `statusCode` reconocible, cae en una heurística BEST-EFFORT
+ * sobre el texto del error — esto NO es un contrato garantizado del AI
+ * SDK (no se pudo verificar contra el paquete real instalado en esta
+ * ronda de diseño, ver informe de cierre de 5D): busca "timeout"/"timed
+ * out" para clasificar como `timeout`, y "network"/"ECONNRESET"/
+ * "ENOTFOUND"/"fetch failed" para `network`. Cualquier otro caso sin
+ * `statusCode` cae en `unknown` (conservador: 1 reintento conservador,
+ * sin tocar el pool, sin failover automático — ya definido así en
+ * `classify.ts`, sin necesidad de tocarlo). */
+function toProviderErrorInput(error: unknown): ProviderErrorInput {
+  if (error && typeof error === "object" && "statusCode" in error) {
+    const statusCode = (error as { statusCode?: unknown }).statusCode;
+    if (typeof statusCode === "number") {
+      const responseHeaders = (error as { responseHeaders?: Record<string, string> }).responseHeaders;
+      const responseBody = (error as { responseBody?: unknown }).responseBody;
+      const message = typeof responseBody === "string" ? responseBody : error instanceof Error ? error.message : undefined;
+      return {
+        kind: "http",
+        status: statusCode,
+        retryAfterHeader: responseHeaders?.["retry-after"] ?? null,
+        message,
+      };
+    }
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  if (/timeout|timed out/i.test(message)) return { kind: "timeout" };
+  if (/network|ECONNRESET|ENOTFOUND|fetch failed/i.test(message)) return { kind: "network" };
+  return { kind: "unknown", message };
+}
+
+/** Arma el mensaje de error final, enriquecido con `responseBody` cuando
+ * está disponible (un `APICallError` trae el texto HTTP genérico en
+ * `.message` — el motivo real casi siempre está en `.responseBody`, que sí
+ * manda el proveedor). Devuelve el string SIN redactar a propósito — el
+ * caller aplica `redactSecrets()` (5C) sobre el resultado antes de
+ * guardarlo en cualquier lado. No se usa `redactError()` de 5C acá porque
+ * su contrato (ya aprobado) descarta propiedades como `.responseBody` al
+ * envolver el error — perdería justo el enriquecimiento que este helper
+ * existe para preservar. */
+function buildErrorMessage(error: unknown): string {
+  const responseBody = error && typeof error === "object" && "responseBody" in error ? String((error as { responseBody?: unknown }).responseBody ?? "").slice(0, 2000) : null;
+  const baseMessage = error instanceof Error ? error.message : "Error desconocido en el loop del agente.";
+  return responseBody ? `${baseMessage} — respuesta del proveedor: ${responseBody}` : baseMessage;
 }
 
 /** Stop condition custom: si pasaron `limit` pasos sin que ninguna tool
@@ -230,103 +316,205 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
 
   const allowedScripts = await detectAllowedScripts(workspaceRoot);
   const tools = createAgentTools(workspaceRoot, onEvent, allowedScripts);
-  const model = buildModelForId(modelId);
+  const generateTextImpl = options.generateTextImpl ?? generateText;
 
   const controller = new AbortController();
   const timeoutTimer = setTimeout(() => controller.abort(), timeoutMs);
   // La cancelación externa (usuario cancela la task) se combina con el
-  // timeout interno — el que dispare primero corta el loop igual.
+  // timeout interno — el que dispare primero corta el loop igual. Este
+  // mismo controller/timeout es COMPARTIDO por todos los intentos de
+  // credential de abajo — no se reinicia por cada failover, así que el
+  // presupuesto total de tiempo de una task sigue siendo `timeoutMs` sin
+  // importar cuántas credentials se prueben (nunca `timeoutMs × N`).
   if (options.abortSignal) {
     if (options.abortSignal.aborted) controller.abort();
     else options.abortSignal.addEventListener("abort", () => controller.abort(), { once: true });
   }
 
+  // Fase 5D: un `OperationCursor` por cada corrida de `runAgentLoop()` (una
+  // task) — nunca por request/credential individual. `pool` es el
+  // singleton del provider correspondiente (persiste entre tasks, ver
+  // `getProviderPool`); `cursor` es privado de ESTA task (ver `pool.ts`,
+  // 5A) y garantiza que nunca se repita una credential dentro de la misma
+  // corrida, aunque su cooldown expire o se libere entre medio.
+  const providerName = resolveProviderName(modelId);
+  const pool = getProviderPool(providerName);
+  const cursor = pool.beginOperation();
+
   let stopReason: AgentLoopResult["stopReason"] = "completed";
   let errorMessage: string | undefined;
 
-  try {
-    await generateText({
-      model,
-      system: buildSystemPrompt(allowedScripts),
-      prompt: task,
-      tools,
-      abortSignal: controller.signal,
-      stopWhen: [stepCountIs(maxSteps), noProgressFor(NO_PROGRESS_STEP_LIMIT, lastProgressStepRef)],
-      onStepFinish: (step) => {
-        currentStepIndex.current += 1;
-        if (step.text) {
-          transcript.push(`💬 ${step.text.slice(0, 300)}`);
-          if (options.taskId) appendEvent(options.taskId, { type: "text", text: step.text.slice(0, 300) });
-        }
-        for (const part of step.content) {
-          if (part.type === "tool-call") {
-            transcript.push(`🔧 ${part.toolName}(${JSON.stringify(part.input).slice(0, 200)})`);
-            if (options.taskId) appendEvent(options.taskId, { type: "tool_call", toolName: part.toolName, input: part.input });
-          }
-          if (part.type === "tool-result") {
-            const output = part.output as { ok?: boolean; error?: string; success?: boolean; output?: string; name?: string } | undefined;
-            if (part.toolName === "run_typecheck" && output && typeof output.success === "boolean") {
-              lastTypeCheckOk = output.success;
-              // `run_typecheck` siempre devuelve ok:true (la llamada en sí no
-              // "falla"), así que sin esto nunca se ve SI tsc pasó o no, ni
-              // por qué — quedaba igual de invisible que el bug de edit_file
-              // que motivó el logueo de errores de más arriba.
-              const excerpt = (output.output ?? "").split("\n").slice(0, 15).join("\n");
-              transcript.push(output.success ? "✅ run_typecheck: compila limpio" : `❌ run_typecheck: hay errores —\n${excerpt}`);
-              if (options.taskId) {
-                appendEvent(options.taskId, { type: "typecheck_result", success: output.success, outputExcerpt: output.success ? undefined : excerpt });
-              }
-            }
-            // Fase 4B: mismo patrón que run_typecheck de arriba — run_script
-            // también devuelve siempre ok:true (la LLAMADA no falla), solo
-            // `success` dice si el script en sí pasó o no. `name` viaja en
-            // el output porque una sola tool puede correr cualquiera de los
-            // 3 scripts permitidos — sin esto, el transcript/evento no
-            // podría decir CUÁL de ellos se corrió.
-            if (part.toolName === "run_script" && output && typeof output.success === "boolean") {
-              const name = output.name ?? "?";
-              const excerpt = (output.output ?? "").split("\n").slice(0, 15).join("\n");
-              transcript.push(output.success ? `✅ run_script(${name}): OK` : `❌ run_script(${name}): falló —\n${excerpt}`);
-              if (options.taskId) {
-                appendEvent(options.taskId, { type: "run_script_result", name, success: output.success, outputExcerpt: output.success ? undefined : excerpt });
-              }
-            }
-            // Sin esto, una tool que falla de forma "prolija" (ok: false, con
-            // error legible) queda invisible en el transcript — solo se ve
-            // la llamada, nunca por qué no funcionó. Esto es justamente lo
-            // que hacía imposible diagnosticar un edit_file fallido a
-            // distancia con solo el log del usuario.
-            if (output && output.ok === false) {
-              transcript.push(`❌ ${part.toolName} falló: ${output.error ?? "sin detalle"}`);
-              if (options.taskId) {
-                appendEvent(options.taskId, { type: "tool_result", toolName: part.toolName, ok: false, error: output.error, summary: output.error ?? "sin detalle" });
-              }
-            } else if (output && output.ok === true && part.toolName !== "run_typecheck" && part.toolName !== "run_script" && options.taskId) {
-              appendEvent(options.taskId, { type: "tool_result", toolName: part.toolName, ok: true, summary: `${part.toolName} OK` });
-            }
-          }
-        }
-      },
-    });
-  } catch (error) {
-    if (controller.signal.aborted) {
-      stopReason = "timeout";
-    } else {
+  attempts: while (true) {
+    const acquireResult = cursor.next();
+    if (acquireResult.status !== "AVAILABLE") {
       stopReason = "error";
-      // Un `APICallError` de AI SDK (fetch a un proveedor real fallido) trae
-      // `.message` == solo el texto HTTP genérico ("Bad Request") — el
-      // motivo real está en `.responseBody`, que el proveedor sí manda
-      // (ej. Google explica ahí por qué exactamente rechazó el request).
-      // Sin esto, un 400/404/403 real queda indistinguible de cualquier
-      // otro error, y depurar un proveedor nuevo (NVIDIA/Google nativos,
-      // Fase 2E) a ciegas es prácticamente imposible.
-      const responseBody = error && typeof error === "object" && "responseBody" in error ? String((error as { responseBody?: unknown }).responseBody ?? "").slice(0, 2000) : null;
-      const baseMessage = error instanceof Error ? error.message : "Error desconocido en el loop del agente.";
-      errorMessage = responseBody ? `${baseMessage} — respuesta del proveedor: ${responseBody}` : baseMessage;
+      // Fase 5F: antes acá había un único mensaje ("...o todas las
+      // configuradas quedaron INVALID") para TODO caso de NO_CREDENTIALS —
+      // conflaba "no hay ninguna configurada", "todas INVALID" y "esta
+      // operación ya las probó todas y están en COOLDOWN" (el caso más
+      // común en producción) bajo el mismo texto engañoso. Ahora se arma a
+      // partir del snapshot REAL del pool en este instante — sin tocar
+      // `_acquireExcluding`/el algoritmo de adquisición, solo el texto.
+      let exhaustionReason: string;
+      if (acquireResult.status === "NO_CREDENTIALS") {
+        const classified = classifyExhaustion(pool.snapshot());
+        exhaustionReason = classified.reason;
+        errorMessage = describeExhaustion(providerName, ENV_PREFIX_BY_PROVIDER[providerName], classified);
+      } else {
+        exhaustionReason = "all_cooldown";
+        errorMessage = `Todas las credentials de ${providerName} están en cooldown ahora mismo — la próxima estará libre en ${new Date(acquireResult.retryAt).toISOString()}.`;
+      }
+      if (options.taskId) {
+        appendEvent(options.taskId, {
+          type: "credential_failover",
+          provider: providerName,
+          credentialId: null,
+          reason: exhaustionReason,
+          poolAction: null,
+          outcome: "exhausted",
+        });
+      }
+      break;
     }
-  } finally {
-    clearTimeout(timeoutTimer);
+
+    const { id: credentialId, value: apiKey, healthGeneration } = acquireResult.lease;
+    const model = buildModelForId(providerName, modelId, apiKey);
+
+    try {
+      await generateTextImpl({
+        model,
+        system: buildSystemPrompt(allowedScripts),
+        prompt: task,
+        tools,
+        abortSignal: controller.signal,
+        stopWhen: [stepCountIs(maxSteps), noProgressFor(NO_PROGRESS_STEP_LIMIT, lastProgressStepRef)],
+        onStepFinish: (step) => {
+          currentStepIndex.current += 1;
+          if (step.text) {
+            transcript.push(`💬 ${step.text.slice(0, 300)}`);
+            if (options.taskId) appendEvent(options.taskId, { type: "text", text: step.text.slice(0, 300) });
+          }
+          for (const part of step.content) {
+            if (part.type === "tool-call") {
+              transcript.push(`🔧 ${part.toolName}(${JSON.stringify(part.input).slice(0, 200)})`);
+              if (options.taskId) appendEvent(options.taskId, { type: "tool_call", toolName: part.toolName, input: part.input });
+            }
+            if (part.type === "tool-result") {
+              const output = part.output as { ok?: boolean; error?: string; success?: boolean; output?: string; name?: string } | undefined;
+              if (part.toolName === "run_typecheck" && output && typeof output.success === "boolean") {
+                lastTypeCheckOk = output.success;
+                // `run_typecheck` siempre devuelve ok:true (la llamada en sí no
+                // "falla"), así que sin esto nunca se ve SI tsc pasó o no, ni
+                // por qué — quedaba igual de invisible que el bug de edit_file
+                // que motivó el logueo de errores de más arriba.
+                const excerpt = (output.output ?? "").split("\n").slice(0, 15).join("\n");
+                transcript.push(output.success ? "✅ run_typecheck: compila limpio" : `❌ run_typecheck: hay errores —\n${excerpt}`);
+                if (options.taskId) {
+                  appendEvent(options.taskId, { type: "typecheck_result", success: output.success, outputExcerpt: output.success ? undefined : excerpt });
+                }
+              }
+              // Fase 4B: mismo patrón que run_typecheck de arriba — run_script
+              // también devuelve siempre ok:true (la LLAMADA no falla), solo
+              // `success` dice si el script en sí pasó o no. `name` viaja en
+              // el output porque una sola tool puede correr cualquiera de los
+              // 3 scripts permitidos — sin esto, el transcript/evento no
+              // podría decir CUÁL de ellos se corrió.
+              if (part.toolName === "run_script" && output && typeof output.success === "boolean") {
+                const name = output.name ?? "?";
+                const excerpt = (output.output ?? "").split("\n").slice(0, 15).join("\n");
+                transcript.push(output.success ? `✅ run_script(${name}): OK` : `❌ run_script(${name}): falló —\n${excerpt}`);
+                if (options.taskId) {
+                  appendEvent(options.taskId, { type: "run_script_result", name, success: output.success, outputExcerpt: output.success ? undefined : excerpt });
+                }
+              }
+              // Sin esto, una tool que falla de forma "prolija" (ok: false, con
+              // error legible) queda invisible en el transcript — solo se ve
+              // la llamada, nunca por qué no funcionó. Esto es justamente lo
+              // que hacía imposible diagnosticar un edit_file fallido a
+              // distancia con solo el log del usuario.
+              if (output && output.ok === false) {
+                transcript.push(`❌ ${part.toolName} falló: ${output.error ?? "sin detalle"}`);
+                if (options.taskId) {
+                  appendEvent(options.taskId, { type: "tool_result", toolName: part.toolName, ok: false, error: output.error, summary: output.error ?? "sin detalle" });
+                }
+              } else if (output && output.ok === true && part.toolName !== "run_typecheck" && part.toolName !== "run_script" && options.taskId) {
+                appendEvent(options.taskId, { type: "tool_result", toolName: part.toolName, ok: true, summary: `${part.toolName} OK` });
+              }
+            }
+          }
+        },
+      });
+      pool.release(credentialId, "success", Date.now(), undefined, healthGeneration);
+      stopReason = "completed";
+      break;
+    } catch (error) {
+      if (controller.signal.aborted) {
+        stopReason = "timeout";
+        break;
+      }
+
+      const classified = classifyProviderError(toProviderErrorInput(error));
+
+      // `classified.retrySameKey` se ignora A PROPÓSITO acá — el AI SDK ya
+      // consumió su propio `maxRetries:2` internamente para el step que
+      // falló, antes de que este `catch` viera el error. 5D nunca reintenta
+      // la misma credential por su cuenta (ver revisión final de diseño,
+      // punto 2) — la única decisión que toma este código es si ROTAR de
+      // credential (`failoverCredential`) o terminar.
+      if (classified.poolAction === "COOLDOWN") {
+        const currentState = pool.snapshot().find((s) => s.id === credentialId);
+        const nextFailures = (currentState?.consecutiveFailures ?? 0) + 1;
+        pool.release(credentialId, "cooldown", Date.now(), computeCooldownMs(nextFailures));
+      } else if (classified.poolAction === "INVALID") {
+        pool.release(credentialId, "invalid");
+      }
+      // poolAction === "NONE" (500/502/503/timeout/network): a propósito NO
+      // se llama pool.release() acá — confirmado contra el contrato real de
+      // 5A en la revisión final: la credential sigue AVAILABLE globalmente
+      // sin que haga falta ninguna llamada, y `cursor.next()` ya la excluyó
+      // para ESTA operación de todos modos (no se puede repetir igual).
+
+      errorMessage = redactSecrets(buildErrorMessage(error));
+
+      // Regla de seguridad de Step 0 (diseño + revisión final de 5D): la
+      // ejecución de una tool (archivos reales tocados en el worktree) solo
+      // puede pasar como parte de un step ya COMPLETADO — un step no cuenta
+      // como completo hasta que `onStepFinish` corre, así que un fallo HTTP
+      // en cualquier step, por definición, ocurre ANTES de que ese step
+      // pueda haber ejecutado ninguna tool. `currentStepIndex.current === 0`
+      // es entonces una garantía real de "cero archivos tocados todavía" —
+      // no una aproximación — y es la ÚNICA condición bajo la cual se
+      // permite reiniciar la conversación entera con otra credential. Pasado
+      // ese punto, NUNCA se hace failover — la task termina FAILED, para no
+      // arriesgar confundir al modelo o duplicar trabajo ya hecho.
+      const willRotate = classified.failoverCredential && currentStepIndex.current === 0;
+
+      // Fase 5F: un evento por cada credential que falló, sin importar si
+      // termina rotando o no — "stopped" es tan observable como "rotated".
+      // No cambia ninguna decisión de arriba, solo la registra.
+      if (options.taskId) {
+        appendEvent(options.taskId, {
+          type: "credential_failover",
+          provider: providerName,
+          credentialId,
+          reason: classified.reason,
+          poolAction: classified.poolAction,
+          outcome: willRotate ? "rotated" : "stopped",
+          note: classified.failoverCredential && !willRotate ? "no se rotó: ya se ejecutaron pasos en este intento (regla de Step 0)" : undefined,
+        });
+      }
+
+      if (willRotate) {
+        transcript.push(`🔁 credential ${credentialId} falló (${classified.reason}) — reintentando con otra credential de ${providerName}.`);
+        continue attempts;
+      }
+
+      stopReason = "error";
+      break;
+    }
   }
+
+  clearTimeout(timeoutTimer);
 
   if (stopReason === "completed" && currentStepIndex.current >= maxSteps) stopReason = "max_steps";
   if (stopReason === "completed" && currentStepIndex.current - lastProgressStepRef.current >= NO_PROGRESS_STEP_LIMIT) {

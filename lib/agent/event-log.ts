@@ -1,12 +1,13 @@
 import crypto from "node:crypto";
 import { getDb } from "../db";
+import type { ProviderName } from "../provider-resilience/config";
 
-/** Los 5 tipos mínimos para reconstruir el timeline completo de una task
+/** Los 6 tipos mínimos para reconstruir el timeline completo de una task
  * sin necesitar nada más que `agent_events` (ver diseño de Fase 2, sección
  * 12). No hay un tipo por cada `stopReason` — eso vive en
  * `agent_tasks.stop_reason` y se comunica acá con un único `status_change`
  * al estado final. */
-export type AgentEventType = "tool_call" | "tool_result" | "text" | "typecheck_result" | "run_script_result" | "status_change" | "git_commit_result";
+export type AgentEventType = "tool_call" | "tool_result" | "text" | "typecheck_result" | "run_script_result" | "status_change" | "git_commit_result" | "credential_failover";
 
 export type AgentEventPayload =
   | { type: "tool_call"; toolName: string; input: unknown }
@@ -19,7 +20,23 @@ export type AgentEventPayload =
    * separado por cada uno de los 3 posibles resultados) — "not_attempted"
    * cubre tanto "proyecto sin git" como "no hubo appliedPaths que
    * commitear". `sha`/`error` son mutuamente excluyentes según `status`. */
-  | { type: "git_commit_result"; status: "success" | "failed" | "not_attempted"; branch: string; files: string[]; sha?: string; error?: string };
+  | { type: "git_commit_result"; status: "success" | "failed" | "not_attempted"; branch: string; files: string[]; sha?: string; error?: string }
+  /** Fase 5F: un evento por decisión real de Provider Resilience dentro de
+   * `runAgentLoop` (`lib/agent/loop.ts`) — ver `ProviderResilienceEvent` en
+   * `lib/provider-resilience/events.ts` para el contrato completo de cada
+   * campo. `credentialId` es SIEMPRE el id sintético del pool (nunca la API
+   * key); `credentialId`/`poolAction` van en `null` únicamente cuando
+   * `outcome === "exhausted"` (no se pudo obtener ninguna credential en lo
+   * absoluto para este intento). */
+  | {
+      type: "credential_failover";
+      provider: ProviderName;
+      credentialId: string | null;
+      reason: string;
+      poolAction: "NONE" | "COOLDOWN" | "INVALID" | null;
+      outcome: "rotated" | "stopped" | "exhausted";
+      note?: string;
+    };
 
 export type AgentEvent = {
   id: string;
@@ -118,6 +135,10 @@ export function eventsToTranscript(events: AgentEvent[]): string[] {
       if (p.status === "success") lines.push(`✅ commit git en ${p.branch}: ${p.sha?.slice(0, 7)} (${p.files.length} archivo(s))`);
       else if (p.status === "failed") lines.push(`❌ commit git falló en ${p.branch}: ${p.error ?? "sin detalle"}`);
       else lines.push(`↻ commit git: no se intentó`);
+    } else if (p.type === "credential_failover") {
+      if (p.outcome === "rotated") lines.push(`🔁 credential ${p.credentialId} (${p.provider}) falló (${p.reason}) — rotando a otra.`);
+      else if (p.outcome === "stopped") lines.push(`⛔ credential ${p.credentialId} (${p.provider}) falló (${p.reason}) — no se rotó${p.note ? ` (${p.note})` : ""}.`);
+      else lines.push(`⛔ ${p.provider}: sin ninguna credential disponible (${p.reason}).`);
     }
   }
   return lines;
