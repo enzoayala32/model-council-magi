@@ -126,6 +126,8 @@ export default function AgentPage() {
   const [actionError, setActionError] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
+  const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
+  const [deletingAllProjects, setDeletingAllProjects] = useState(false);
   const [deletingAll, setDeletingAll] = useState(false);
   // Bug reportado: tras Aplicar/Descartar, los botones seguían apareciendo.
   // Causa real: `useAgentTaskEvents` cierra su EventSource apenas la task
@@ -354,6 +356,57 @@ export default function AgentPage() {
     setDeletingAll(false);
   }
 
+  /** Archiva un proyecto (botón 🗑 en "Proyectos") — nunca borra su
+   * historial, solo lo saca del listado (ver el endpoint). El servidor ya
+   * rechaza con 409 si tiene una task QUEUED/RUNNING; ese mensaje se
+   * muestra tal cual, sin duplicar la validación acá. */
+  async function handleArchiveProject(projectId: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!window.confirm("¿Archivar este proyecto? Deja de aparecer en la lista (no borra sus tasks).")) return;
+    setDeletingProjectId(projectId);
+    try {
+      await fetchJson(`/api/agent/projects/${projectId}`, { method: "DELETE" });
+      setProjects((current) => current.filter((p) => p.id !== projectId));
+      if (selectedProjectId === projectId) {
+        setSelectedProjectId(null);
+        setSelectedTaskId(null);
+      }
+    } catch (e) {
+      setProjectsError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeletingProjectId(null);
+    }
+  }
+
+  /** Archiva TODOS los proyectos listados de una — pensado para limpiar de
+   * un tirón la carga de proyectos de prueba (`caso1`, `caso2`, etc.) sin
+   * ir uno por uno. Reusa el mismo `DELETE /api/agent/projects/[id]` de
+   * siempre; los que tengan una task QUEUED/RUNNING el servidor los
+   * rechaza igual (409) — acá simplemente se saltean y se avisa cuántos
+   * quedaron sin archivar, en vez de cortar todo el lote. */
+  async function handleArchiveAllProjects() {
+    if (projects.length === 0) return;
+    if (!window.confirm(`¿Archivar los ${projects.length} proyecto(s) listados? Los que tengan una task en curso (QUEUED/RUNNING) quedan sin archivar. No borra ninguna task.`)) return;
+    setDeletingAllProjects(true);
+    const archivedIds = new Set<string>();
+    let skippedActive = 0;
+    for (const project of projects) {
+      try {
+        await fetchJson(`/api/agent/projects/${project.id}`, { method: "DELETE" });
+        archivedIds.add(project.id);
+      } catch {
+        skippedActive++; // probablemente un 409 por task activa — seguir con el resto
+      }
+    }
+    setProjects((current) => current.filter((p) => !archivedIds.has(p.id)));
+    if (selectedProjectId && archivedIds.has(selectedProjectId)) {
+      setSelectedProjectId(null);
+      setSelectedTaskId(null);
+    }
+    if (skippedActive > 0) setProjectsError(`${skippedActive} proyecto(s) quedaron sin archivar (tienen una task QUEUED/RUNNING en curso).`);
+    setDeletingAllProjects(false);
+  }
+
   return (
     <div className="agentPage">
       <aside className="agentSidebar">
@@ -362,7 +415,14 @@ export default function AgentPage() {
         </Link>
 
         <div>
-          <div className="agentSectionTitle">Proyectos</div>
+          <div className="agentSectionTitleRow">
+            <div className="agentSectionTitle">Proyectos</div>
+            {projects.length > 0 && (
+              <button type="button" className="agentDeleteAllBtn" onClick={handleArchiveAllProjects} disabled={deletingAllProjects} title="Archivar todos los proyectos listados (no borra sus tasks)">
+                {deletingAllProjects ? "Archivando…" : "Archivar todos"}
+              </button>
+            )}
+          </div>
           <div className="agentList">
             {projects.map((project) => (
               <button
@@ -374,7 +434,21 @@ export default function AgentPage() {
                   setSelectedTaskId(null);
                 }}
               >
-                {project.name}
+                <span className="agentTaskRowTop">
+                  <span>{project.name}</span>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    className="agentDeleteTaskBtn"
+                    title="Archivar proyecto (no borra sus tasks)"
+                    onClick={(e) => handleArchiveProject(project.id, e)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") handleArchiveProject(project.id, e as unknown as React.MouseEvent);
+                    }}
+                  >
+                    {deletingProjectId === project.id ? "…" : "🗑"}
+                  </span>
+                </span>
                 <small>
                   {project.localPath} · {project.isGitRepo ? "git" : "sin git"}
                 </small>

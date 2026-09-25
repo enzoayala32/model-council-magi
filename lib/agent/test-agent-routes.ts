@@ -25,6 +25,7 @@ import { appendEvent } from "./event-log";
 import { persistProposals, getProposalsForTask } from "./proposal-store";
 import { transitionAndLog } from "./runner";
 import { GET as listProjectsRoute, POST as createProjectRoute } from "../../app/api/agent/projects/route";
+import { DELETE as deleteProjectRoute } from "../../app/api/agent/projects/[id]/route";
 import { GET as listModelsRoute } from "../../app/api/agent/models/route";
 import { GET as listTasksRoute, POST as createTaskRoute } from "../../app/api/agent/tasks/route";
 import { GET as getTaskRoute } from "../../app/api/agent/tasks/[id]/route";
@@ -263,6 +264,33 @@ async function main() {
   const ok8 = listTasksBody.ok === true && listTasksBody.tasks.length >= 2 && listTasksBody.tasks.every((t: { projectId: string }) => t.projectId === projectId);
   console.log(ok8 ? `✅ GET tasks?projectId= devuelve ${listTasksBody.tasks.length} tasks, todas del proyecto correcto.` : `❌ Falló. ${JSON.stringify(listTasksBody)}`);
   results.push(ok8);
+
+  // --- Caso 9: DELETE /api/agent/projects/[id] (archivar) ---
+  console.log("\n--- Caso 9: DELETE /api/agent/projects/[id] (archivar proyecto) ---");
+  const dir9 = await makeGitProject("caso9");
+  const project9Res = await createProjectRoute(jsonRequest("http://localhost/api/agent/projects", "POST", { name: "Proyecto a archivar", localPath: dir9 }));
+  const project9Body = await readJson(project9Res);
+  const project9Id: string = project9Body.project.id;
+  const activeTask9 = createTask({ projectId: project9Id, modelId, prompt: "tarea todavía en curso" });
+
+  const deleteWhileActiveRes = await deleteProjectRoute(new Request("http://localhost", { method: "DELETE" }), { params: Promise.resolve({ id: project9Id }) });
+  const ok9a = deleteWhileActiveRes.status === 409;
+  console.log(ok9a ? "✅ Con una task QUEUED todavía activa → 409, no se archiva." : `❌ Falló. status=${deleteWhileActiveRes.status}`);
+  results.push(ok9a);
+
+  transitionAndLog(activeTask9.id, "RUNNING");
+  transitionAndLog(activeTask9.id, "FAILED", { error: "cancelada para el test" });
+  const deleteOkRes = await deleteProjectRoute(new Request("http://localhost", { method: "DELETE" }), { params: Promise.resolve({ id: project9Id }) });
+  const deleteOkBody = await readJson(deleteOkRes);
+  const listAfterDelete = await readJson(await listProjectsRoute());
+  const ok9b = deleteOkRes.status === 200 && deleteOkBody.ok === true && !listAfterDelete.projects.some((p: { id: string }) => p.id === project9Id);
+  console.log(ok9b ? "✅ Sin tasks activas → 200, y desaparece del listado (queda archivado, no borrado)." : `❌ Falló. ${JSON.stringify(deleteOkBody)}`);
+  results.push(ok9b);
+
+  const deleteMissingRes = await deleteProjectRoute(new Request("http://localhost", { method: "DELETE" }), { params: Promise.resolve({ id: "no-existe" }) });
+  const ok9c = deleteMissingRes.status === 404;
+  console.log(ok9c ? "✅ Proyecto inexistente → 404." : `❌ Falló. status=${deleteMissingRes.status}`);
+  results.push(ok9c);
 
   console.log(`\n${results.filter(Boolean).length}/${results.length} casos OK.`);
   if (results.some((r) => !r)) process.exit(1);
