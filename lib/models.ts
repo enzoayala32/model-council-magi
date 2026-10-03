@@ -35,6 +35,14 @@ export type CouncilModel = {
   codingAgent?: {
     enabled: boolean;
     reason?: string;
+    /** Fase 6C. Ausente o `true` = compatible con `web_search` (default
+     * optimista: los 3 modelos habilitados hoy ya corren con el set
+     * completo de tools sin problema — evidencia real, no una suposición).
+     * `false` explícito es la puerta de escape para el día que aparezca
+     * evidencia real de un modelo rompiendo con el schema de `web_search`
+     * — mismo criterio que ya usa `enabled` (campo anidado acá, nunca una
+     * lista separada). Ningún modelo la usa todavía. */
+    webSearchCompatible?: boolean;
   };
 };
 
