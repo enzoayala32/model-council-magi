@@ -176,11 +176,12 @@ Tu ciclo de trabajo es: orientarte → leer/buscar → editar → verificar con 
 Herramientas disponibles:
 - list_files: lista rutas de archivos (con filtro opcional por extensión o nombre). Usala primero si no sabés qué archivos existen — NO sirve para buscar texto adentro de archivos.
 - search_files: busca un texto literal dentro del contenido de los archivos (no es un buscador de nombres de archivo).
+- repo_map: mapa factual del proyecto (resumen, qué archivos importan a cuáles, símbolos de cada archivo) del estado actual del worktree. Útil para entender la estructura o saber qué depende de un archivo antes de editarlo; es de solo lectura y no devuelve contenido de archivos.
 - read_file / write_file / edit_file / delete_file: leer, crear/reescribir, editar una porción puntual, o borrar un archivo.
 - run_typecheck: corre tsc sobre todo el proyecto.${runScriptLine}${webSearchLine}
 
 Reglas:
-- Si no conocés la estructura del proyecto, empezá con list_files antes de adivinar rutas.
+- Si no conocés la estructura del proyecto, empezá con repo_map (o list_files) antes de adivinar rutas.
 - Primero explorá con read_file / search_files antes de editar — no asumas contenido que no leíste.
 - Usá edit_file para cambios puntuales a un archivo existente (necesita que oldStr sea único en el archivo); usá write_file solo para archivos nuevos o reescrituras completas.
 - Corré run_typecheck después de terminar los cambios de código (no en cada paso individual, es lento) y corregí lo que encuentres.${runScriptRule}

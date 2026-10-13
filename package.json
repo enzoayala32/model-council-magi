@@ -27,6 +27,15 @@
     "agent:test-search-provider": "tsx lib/agent/test-search-provider.ts",
     "agent:test-web-search-tool": "tsx lib/agent/test-web-search-tool.ts",
     "agent:test-web-search-compat": "tsx lib/agent/test-web-search-compat.ts",
+    "agent:test-repo-inventory": "tsx lib/agent/test-repo-inventory.ts",
+    "agent:test-repo-symbols": "tsx lib/agent/test-repo-symbols.ts",
+    "agent:test-repo-analysis": "tsx lib/agent/test-repo-analysis.ts",
+    "agent:test-resolution-config": "tsx lib/agent/test-resolution-config.ts",
+    "agent:test-dependency-graph": "tsx lib/agent/test-dependency-graph.ts",
+    "agent:test-dependency-graph-repo": "tsx lib/agent/test-dependency-graph-repo.ts",
+    "agent:test-repo-map-views": "tsx lib/agent/test-repo-map-views.ts",
+    "agent:test-repo-map-service": "tsx lib/agent/test-repo-map-service.ts",
+    "agent:test-repo-map-tool": "tsx lib/agent/test-repo-map-tool.ts",
     "agent:test-provider-resilience": "tsx lib/agent/test-provider-resilience.ts",
     "test-council-resilience": "tsx lib/test-council-resilience.ts",
     "agent:test-runner-real": "tsx lib/agent/test-runner-real.ts",
@@ -55,6 +64,7 @@
     "react-dom": "19.0.0",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
+    "typescript": "^5.9.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -64,7 +74,6 @@
     "@types/react-dom": "^19.0.2",
     "eslint": "^9.17.0",
     "eslint-config-next": "^16.2.4",
-    "tsx": "^4.23.12",
-    "typescript": "^5.9.3"
+    "tsx": "^4.23.12"
   }
 }

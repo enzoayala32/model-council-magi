@@ -6,6 +6,15 @@ import { wrapToolExecute, type ToolPolicy } from "./tool-policy";
 import { createSearchProviderFromEnv, MAX_WEB_SEARCH_RESULTS, type SearchProvider } from "./search-provider";
 import { redactSecrets } from "../provider-resilience/redact";
 import { execWithTreeKill } from "./exec-with-tree-kill";
+import { resolveSafePath, UnsafePathError } from "./safe-path";
+// Fase 7D: el tracker y las vistas son livianos (sin TypeScript). El service pesado se carga con
+// `import()` recién cuando se invoca `repo_map` — `import type` se borra al compilar, no lo carga.
+import { createRepoMapTracker, type MutationKind, type RepoMapTracker } from "./repo-map-tracker";
+import { REPO_MAP_LIMITS, repoMapError, repoMapInputSchema } from "./repo-map-views";
+import type { RepoMapService } from "./repo-map-service";
+
+// Re-export (Paso 0 de 7B): mismos nombres y misma clase que antes, ahora definidos en `safe-path.ts`.
+export { resolveSafePath, UnsafePathError } from "./safe-path";
 
 const MAX_READ_BYTES = 200_000;
 const MAX_SEARCH_RESULTS = 60;
@@ -27,6 +36,17 @@ const EXEC_POLICY: ToolPolicy = { timeoutMs: 150_000, maxOutputChars: 500_000 };
 // su propio timeout de red de 15_000ms; 20_000 acá es backstop, no lo
 // reemplaza (ver search-provider.ts).
 const SEARCH_POLICY: ToolPolicy = { timeoutMs: 20_000, maxOutputChars: 500_000 };
+// Fase 7D: `repo_map` tiene SU PROPIO presupuesto de salida (24.000 chars, aplicado por las vistas sobre el
+// JSON final) y SU PROPIO timeout interno (60 s, aborta el trabajo real). Esta política es solo backstop,
+// siempre más alta que ambos: nunca debe disparar antes que las protecciones propias del tool, y no depende
+// del límite genérico de 500.000 de los demás. Exportada para que los tests fijen esa relación.
+export const REPO_MAP_POLICY: ToolPolicy = { timeoutMs: REPO_MAP_LIMITS.policyTimeoutMs, maxOutputChars: REPO_MAP_LIMITS.policyMaxOutputChars };
+
+/** Mismas opciones mínimas que recibe cada `execute` (solo se usa `abortSignal`). */
+type ToolCallOptions = { abortSignal?: AbortSignal } | undefined;
+
+/** Fase 7D: inyección para tests — el tracker Y el service que lo usa (siempre juntos). */
+export type CreateAgentToolsRepoMapOptions = { tracker: RepoMapTracker; service: RepoMapService };
 
 /** Exportado (a diferencia del resto de los `inputSchema` de este
  * archivo, que quedan inline) específicamente para que los tests puedan
@@ -46,54 +66,6 @@ export const webSearchInputSchema = z.object({
  * compatible (default optimista); solo `false` explícito lo saca. */
 export function isWebSearchCompatible(codingAgent: { webSearchCompatible?: boolean } | undefined): boolean {
   return codingAgent?.webSearchCompatible !== false;
-}
-
-class UnsafePathError extends Error {}
-
-/**
- * Resuelve `relativePath` dentro de `root` y valida que no se escape —
- * ni por `..`, ni por un symlink que apunte afuera. A diferencia de
- * `resolveSafePath` en `lib/fs-tools.ts` (que documenta esta validación
- * pero no la hace), acá el `fs.realpath` se ejecuta y se compara de
- * verdad contra la raíz real.
- */
-export async function resolveSafePath(root: string, relativePath: string): Promise<string> {
-  if (path.isAbsolute(relativePath)) throw new UnsafePathError(`Ruta absoluta no permitida: ${relativePath}`);
-  const joined = path.resolve(root, relativePath);
-  const realRoot = await fs.realpath(root);
-  if (joined !== realRoot && !joined.startsWith(realRoot + path.sep)) {
-    throw new UnsafePathError(`La ruta se sale del workspace: ${relativePath}`);
-  }
-
-  // Si el archivo/directorio ya existe, resolvemos symlinks de verdad y
-  // confirmamos que el destino real sigue adentro de la raíz real.
-  try {
-    const real = await fs.realpath(joined);
-    if (real !== realRoot && !real.startsWith(realRoot + path.sep)) {
-      throw new UnsafePathError(`Symlink apunta afuera del workspace: ${relativePath}`);
-    }
-    return real;
-  } catch (error) {
-    if (error instanceof UnsafePathError) throw error;
-    // No existe todavía (caso típico de write_file con archivo nuevo) —
-    // validamos el ancestro existente más cercano en su lugar.
-    let dir = path.dirname(joined);
-    while (true) {
-      try {
-        const realDir = await fs.realpath(dir);
-        if (realDir !== realRoot && !realDir.startsWith(realRoot + path.sep)) {
-          throw new UnsafePathError(`Symlink de directorio apunta afuera del workspace: ${relativePath}`);
-        }
-        break;
-      } catch (dirError) {
-        if (dirError instanceof UnsafePathError) throw dirError;
-        const parent = path.dirname(dir);
-        if (parent === dir) break; // llegamos a la raíz del filesystem sin encontrar nada — dejamos que falle más adelante
-        dir = parent;
-      }
-    }
-    return joined;
-  }
 }
 
 async function walkFiles(root: string, dir: string, onFile: (absPath: string) => Promise<boolean>) {
@@ -137,7 +109,31 @@ export type AgentToolEvent =
  * `allowedScripts` vacío: el Agent sigue funcionando exactamente igual
  * que sin Fase 6B.
  */
-export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentToolEvent) => void, allowedScripts: string[] = [], searchProvider?: SearchProvider | null) {
+export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentToolEvent) => void, allowedScripts: string[] = [], searchProvider?: SearchProvider | null, repoMapOptions?: CreateAgentToolsRepoMapOptions) {
+  // Fase 7D — estado de `repo_map` POR INSTANCIA (nunca global): el tracker registra las mutaciones del
+  // worktree y el service (caché del mapa) se crea recién en la primera consulta.
+  const tracker = repoMapOptions?.tracker ?? createRepoMapTracker();
+  /** Los eventos existentes se conservan tal cual: solo se avisa también al tracker (invalida el mapa). */
+  const emit = (event: AgentToolEvent) => {
+    tracker.noteEvent(event);
+    onEvent(event);
+  };
+  /** Registra la operación como mutación DESDE SU INICIO y la cierra siempre (éxito, fallo o aborto). */
+  const mutating =
+    <INPUT, OUTPUT>(kind: MutationKind, execute: (input: INPUT, options: ToolCallOptions) => Promise<OUTPUT>) =>
+    (input: INPUT, options: ToolCallOptions): Promise<OUTPUT> =>
+      tracker.trackMutation(kind, () => execute(input, options));
+  let repoMapService: Promise<RepoMapService> | undefined = repoMapOptions ? Promise.resolve(repoMapOptions.service) : undefined;
+  const loadRepoMapService = (): Promise<RepoMapService> => {
+    if (!repoMapService) {
+      const loading = import("./repo-map-service").then((module) => module.createRepoMapService({ workspaceRoot, tracker }));
+      repoMapService = loading;
+      loading.catch(() => {
+        if (repoMapService === loading) repoMapService = undefined; // permite reintentar si la carga falló
+      });
+    }
+    return repoMapService;
+  };
   // `undefined` (nadie decidió nada — todos los callers previos a 6C) ⇒ se
   // resuelve solo desde el entorno, exactamente como en 6B. `null`
   // (Fase 6C, solo lo pasa el gate de compatibilidad de `loop.ts`) ⇒
@@ -209,17 +205,17 @@ export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentTo
       }),
       execute: wrapToolExecute(
         "write_file",
-        async ({ path: relPath, content }) => {
+        mutating("file", async ({ path: relPath, content }) => {
           try {
             const abs = await resolveSafePath(workspaceRoot, relPath);
             await fs.mkdir(path.dirname(abs), { recursive: true });
             await fs.writeFile(abs, content, "utf-8");
-            onEvent({ type: "file_written", relPath });
+            emit({ type: "file_written", relPath });
             return { ok: true, bytesWritten: Buffer.byteLength(content, "utf-8") };
           } catch (error) {
             return { ok: false, error: describeError(error, relPath) };
           }
-        },
+        }),
         DEFAULT_POLICY,
       ),
     }),
@@ -234,7 +230,7 @@ export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentTo
       }),
       execute: wrapToolExecute(
         "edit_file",
-        async ({ path: relPath, oldStr, newStr }) => {
+        mutating("file", async ({ path: relPath, oldStr, newStr }) => {
           try {
             const abs = await resolveSafePath(workspaceRoot, relPath);
             const original = await fs.readFile(abs, "utf-8");
@@ -261,12 +257,12 @@ export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentTo
             const normalizedUpdated = normalizedOriginal.replace(normalizedOldStr, normalizedNewStr);
             const updated = isCRLF ? normalizedUpdated.replace(/\n/g, "\r\n") : normalizedUpdated;
             await fs.writeFile(abs, updated, "utf-8");
-            onEvent({ type: "file_edited", relPath });
+            emit({ type: "file_edited", relPath });
             return { ok: true };
           } catch (error) {
             return { ok: false, error: describeError(error, relPath) };
           }
-        },
+        }),
         DEFAULT_POLICY,
       ),
     }),
@@ -279,19 +275,19 @@ export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentTo
       }),
       execute: wrapToolExecute(
         "delete_file",
-        async ({ path: relPath }) => {
+        mutating("file", async ({ path: relPath }) => {
           try {
             const abs = await resolveSafePath(workspaceRoot, relPath);
             const stat = await fs.stat(abs).catch(() => null);
             if (!stat) return { ok: false, error: `${relPath} no existe — no hay nada que borrar.` };
             if (!stat.isFile()) return { ok: false, error: `${relPath} no es un archivo (¿una carpeta?) — delete_file solo borra archivos.` };
             await fs.unlink(abs);
-            onEvent({ type: "file_deleted", relPath });
+            emit({ type: "file_deleted", relPath });
             return { ok: true };
           } catch (error) {
             return { ok: false, error: describeError(error, relPath) };
           }
-        },
+        }),
         DEFAULT_POLICY,
       ),
     }),
@@ -336,12 +332,32 @@ export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentTo
       ),
     }),
 
+    // Fase 7D: UN solo tool de solo lectura, bajo demanda. Sin gate por capacidad del modelo.
+    repo_map: tool({
+      description:
+        "Mapa factual del proyecto, calculado del estado ACTUAL del worktree (incluye tus ediciones): estructura, qué archivos importan a cuáles y qué símbolos define cada uno. detail='overview' (por defecto) resume el proyecto; 'files' lista los archivos con conteos de relaciones; 'symbols' da símbolos, exports e imports por archivo y quién importa a cada uno. subPath acota a un archivo o carpeta. Si la respuesta viene truncada (budget.truncated), seguí con after=budget.nextAfter. Es de solo lectura y no devuelve el contenido de los archivos — para eso usá read_file.",
+      inputSchema: repoMapInputSchema,
+      execute: wrapToolExecute(
+        "repo_map",
+        async (input, options) => {
+          try {
+            const service = await loadRepoMapService();
+            return (await service.query(input, { signal: options?.abortSignal })).result;
+          } catch {
+            // Mensaje fijo: el texto de la excepción podría traer rutas absolutas del sistema.
+            return repoMapError("build_failed", "No se pudo construir el mapa del proyecto.");
+          }
+        },
+        REPO_MAP_POLICY,
+      ),
+    }),
+
     run_typecheck: tool({
       description: "Corre `tsc --noEmit` sobre todo el workspace y devuelve si compila limpio o la lista de errores. Tarda unos segundos — usalo después de terminar los cambios, no en cada paso.",
       inputSchema: z.object({}),
       execute: wrapToolExecute(
         "run_typecheck",
-        async (_input, options) => {
+        mutating("exec", async (_input, options) => {
           try {
             // En Windows, npx en realidad es npx.cmd — sin shell:true no se
             // resuelve (falla con "spawn npx ENOENT"), aunque en Linux/Mac
@@ -362,7 +378,7 @@ export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentTo
             const output = errorOutput(error).slice(0, MAX_TYPECHECK_OUTPUT);
             return { ok: true, success: false, output };
           }
-        },
+        }),
         EXEC_POLICY,
       ),
     }),
@@ -389,7 +405,7 @@ export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentTo
             }),
             execute: wrapToolExecute(
               "run_script",
-              async ({ name }, options) => {
+              mutating("exec", async ({ name }, options) => {
                 if (!allowedScripts.includes(name)) {
                   return { ok: false, error: `El script "${name}" no está disponible en este proyecto (disponibles: ${allowedScripts.join(", ") || "ninguno"}).` };
                 }
@@ -408,7 +424,7 @@ export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentTo
                   const output = errorOutput(error).slice(0, MAX_TYPECHECK_OUTPUT);
                   return { ok: true, success: false, name, output };
                 }
-              },
+              }),
               EXEC_POLICY,
             ),
           }),

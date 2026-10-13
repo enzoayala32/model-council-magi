@@ -127,7 +127,8 @@ async function main(): Promise<void> {
     delete process.env.TAVILY_API_KEY;
     const seen = await toolNamesSeenByModel({ webSearchCompatibleOverride: true });
     check("web_search NO está", !seen.includes("web_search"), seen);
-    check("el set queda exactamente en las 7 tools base (sin web_search, sin run_script porque el workspace no tiene package.json)", seen.length === 7 && seen.includes("run_typecheck"), seen);
+    // Fase 7D: el set base pasó de 7 a 8 tools (se sumó `repo_map`, siempre disponible y sin gate): las 7 de siempre + repo_map.
+    check("el set queda exactamente en las 7 tools de siempre + repo_map (sin web_search, sin run_script porque el workspace no tiene package.json)", seen.length === 8 && seen.includes("run_typecheck") && seen.includes("repo_map"), seen);
   }
 
   console.log("\n--- Caso 5: searchProvider inyectado explícitamente + override false → el provider explícito gana ---");
