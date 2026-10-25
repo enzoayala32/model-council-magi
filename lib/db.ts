@@ -193,6 +193,118 @@ function createConnection(): Database.Database {
       conflict INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_agent_proposals_task ON agent_proposals(task_id);
+
+    -- Fase 9A: ledger del Autonomous Loop. Son tablas NUEVAS y aditivas
+    -- (CREATE TABLE IF NOT EXISTS), por eso SCHEMA_VERSION no se sube: no
+    -- hay ninguna forma incompatible con una DB existente. La máquina de
+    -- estados de la task (agent_tasks.status) queda intacta; el estado
+    -- autónomo vive en agent_runs.state (ver contract.ts).
+    CREATE TABLE IF NOT EXISTS agent_runs (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES agent_tasks(id),
+      attempt INTEGER NOT NULL,
+      state TEXT NOT NULL,
+      stop_reason TEXT,
+      resume_of_run_id TEXT REFERENCES agent_runs(id),
+      workspace_id TEXT,
+      base_commit TEXT,
+      head_commit TEXT,
+      plan_version INTEGER NOT NULL DEFAULT 0,
+      budget_json TEXT NOT NULL,
+      last_event_seq INTEGER,
+      error TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      finished_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_task ON agent_runs(task_id, created_at);
+
+    -- Invariante 1 del contrato: una sola corrida ACTIVA por task. Índice
+    -- único parcial sobre finished_at IS NULL — mismo patrón que
+    -- idx_agent_tasks_one_running_per_project. Una corrida terminada deja
+    -- libre el slot para una reanudación.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runs_one_active
+      ON agent_runs(task_id) WHERE finished_at IS NULL;
+
+    CREATE TABLE IF NOT EXISTS agent_plans (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES agent_tasks(id),
+      version INTEGER NOT NULL,
+      objective TEXT NOT NULL,
+      constraints_json TEXT NOT NULL,
+      acceptance_json TEXT NOT NULL,
+      status TEXT NOT NULL,
+      source TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      UNIQUE(task_id, version)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_plans_task ON agent_plans(task_id, version);
+
+    CREATE TABLE IF NOT EXISTS agent_plan_items (
+      id TEXT PRIMARY KEY,
+      plan_id TEXT NOT NULL REFERENCES agent_plans(id),
+      seq INTEGER NOT NULL,
+      parent_id TEXT REFERENCES agent_plan_items(id),
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      status TEXT NOT NULL,
+      depends_on_json TEXT NOT NULL,
+      acceptance_json TEXT NOT NULL,
+      paths_json TEXT NOT NULL,
+      evidence_json TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      started_at INTEGER,
+      finished_at INTEGER,
+      UNIQUE(plan_id, seq)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_plan_items_plan ON agent_plan_items(plan_id, seq);
+
+    CREATE TABLE IF NOT EXISTS agent_steps (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES agent_runs(id),
+      step_index INTEGER NOT NULL,
+      phase TEXT NOT NULL,
+      ts INTEGER NOT NULL,
+      actions_json TEXT NOT NULL,
+      results_json TEXT NOT NULL,
+      progress_json TEXT NOT NULL,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      UNIQUE(run_id, step_index)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_steps_run ON agent_steps(run_id, step_index);
+
+    CREATE TABLE IF NOT EXISTS agent_file_checkpoints (
+      run_id TEXT NOT NULL REFERENCES agent_runs(id),
+      path TEXT NOT NULL,
+      sha256 TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      mtime_ms INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY(run_id, path)
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_verifications (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES agent_runs(id),
+      item_id TEXT,
+      criterion_json TEXT NOT NULL,
+      status TEXT NOT NULL,
+      evidence_json TEXT NOT NULL,
+      ts INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_verifications_run ON agent_verifications(run_id, ts);
+
+    CREATE TABLE IF NOT EXISTS agent_final_reports (
+      run_id TEXT PRIMARY KEY REFERENCES agent_runs(id),
+      task_id TEXT NOT NULL REFERENCES agent_tasks(id),
+      status TEXT NOT NULL,
+      stop_reason TEXT,
+      report_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_final_reports_task ON agent_final_reports(task_id, created_at);
   `);
 
   // `restart_retry_count` puede faltar en una DB creada por una versión
