@@ -85,6 +85,42 @@ export interface RepoMapService {
   query(input: RepoMapInput, options?: { signal?: AbortSignal }): Promise<RepoMapQueryOutcome>;
 }
 
+/**
+ * Fase 8D — Lectura del snapshot CRUDO para el Context Engine.
+ *
+ * Es una API SEPARADA de `query()` a propósito: `query` proyecta una vista
+ * con presupuesto de salida para el modelo, mientras que el motor necesita
+ * los datos completos para puntuar señales. Comparten la MISMA caché y la
+ * MISMA reconstrucción en vuelo, así que pedir el snapshot no duplica el
+ * trabajo de `repo_map` (ni al revés).
+ *
+ * `data` se publica CONGELADO en profundidad: es de solo lectura por
+ * contrato y ningún consumidor puede mutar la caché compartida.
+ */
+export type RepoMapSnapshotOutcome =
+  | {
+      ok: true;
+      data: RepoMapSnapshotData;
+      generation: number;
+      cache: "hit" | "rebuilt" | "joined";
+      attempts: number;
+    }
+  | {
+      ok: false;
+      code: RepoMapErrorCode;
+      error: string;
+      generation: number;
+      attempts: number;
+    };
+
+export type RepoMapSnapshotOptions = { signal?: AbortSignal };
+
+/** Intersección aditiva: quien solo conoce `RepoMapService` sigue compilando. */
+export type RepoMapServiceWithSnapshot = RepoMapService & {
+  /** Nunca lanza: todo problema vuelve como `{ ok: false, code, error }`. */
+  getSnapshot(options?: RepoMapSnapshotOptions): Promise<RepoMapSnapshotOutcome>;
+};
+
 /** Construcción real: 7A → 7B → configuración → 7C, todo con el mismo `AbortSignal`. */
 export const defaultRepoMapPipeline: RepoMapPipeline = async ({ workspaceRoot, signal }) => {
   try {
@@ -101,10 +137,11 @@ export const defaultRepoMapPipeline: RepoMapPipeline = async ({ workspaceRoot, s
 
 const realTimers: RepoMapTimers = {
   setTimeout(callback, ms) {
-    const handle = globalThis.setTimeout(callback, ms);
-    // Un timer pendiente jamás debe mantener vivo el proceso.
-    handle.unref?.();
-    return handle;
+    // NO se hace `unref()`: este timer es la garantía de que un build
+    // colgado termina en `build_timeout` (y de que el proceso que espera
+    // ese resultado no muera antes). Se limpia en el `finally` del build,
+    // así que nunca queda vivo de más.
+    return globalThis.setTimeout(callback, ms);
   },
   clearTimeout(handle) {
     globalThis.clearTimeout(handle as ReturnType<typeof globalThis.setTimeout>);
@@ -147,7 +184,30 @@ function classifyFailure(error: unknown): { code: RepoMapErrorCode; error: strin
   return { code: "build_failed", error: MESSAGES.buildFailed };
 }
 
-export function createRepoMapService(options: RepoMapServiceOptions): RepoMapService {
+/**
+ * Congela en profundidad el snapshot publicado. Es idempotente y tolera
+ * ciclos (no debería haberlos, pero un pipeline inyectado en tests podría
+ * construirlos). Se congelan arrays y objetos planos; los valores primitivos
+ * no se tocan. No usa `structuredClone` para no duplicar el mapa en memoria.
+ */
+export function freezeSnapshotData<T>(value: T): T {
+  const seen = new WeakSet<object>();
+  const walk = (current: unknown): void => {
+    if (current === null || typeof current !== "object") return;
+    if (seen.has(current)) return;
+    seen.add(current);
+    Object.freeze(current);
+    if (Array.isArray(current)) {
+      for (const item of current) walk(item);
+      return;
+    }
+    for (const item of Object.values(current)) walk(item);
+  };
+  walk(value);
+  return value;
+}
+
+export function createRepoMapService(options: RepoMapServiceOptions): RepoMapServiceWithSnapshot {
   const { workspaceRoot, tracker } = options;
   const pipeline = options.pipeline ?? defaultRepoMapPipeline;
   const timers = options.timers ?? realTimers;
@@ -160,6 +220,10 @@ export function createRepoMapService(options: RepoMapServiceOptions): RepoMapSer
 
   function failure(code: RepoMapErrorCode, message: string, attempts: number, cache: RepoMapQueryInfo["cache"] = "none"): RepoMapQueryOutcome {
     return { result: repoMapError(code, message), info: { cache, generation: tracker.generation, attempts } };
+  }
+
+  function snapshotFailure(code: RepoMapErrorCode, message: string, attempts: number): RepoMapSnapshotOutcome {
+    return { ok: false, code, error: message, generation: tracker.generation, attempts };
   }
 
   function outcomeOfAbort(build: Build): BuildOutcome {
@@ -175,8 +239,9 @@ export function createRepoMapService(options: RepoMapServiceOptions): RepoMapSer
       if (build.controller.signal.aborted) return outcomeOfAbort(build);
       // Validación de estabilidad: nada pudo mutar el worktree durante la construcción.
       if (build.superseded || tracker.generation !== build.generation || tracker.inFlight > 0) return { kind: "torn" };
-      snapshot = { generation: build.generation, data };
-      return { kind: "ok", data };
+      const frozen = freezeSnapshotData(data);
+      snapshot = { generation: build.generation, data: frozen };
+      return { kind: "ok", data: frozen };
     } catch (error) {
       if (build.controller.signal.aborted) return outcomeOfAbort(build);
       return { kind: "failed", ...classifyFailure(error) };
@@ -303,6 +368,42 @@ export function createRepoMapService(options: RepoMapServiceOptions): RepoMapSer
     return failure("unstable", MESSAGES.unstable, attempts);
   }
 
+  async function getSnapshot(snapshotOptions: RepoMapSnapshotOptions = {}): Promise<RepoMapSnapshotOutcome> {
+    const signal = snapshotOptions.signal;
+    let attempts = 0;
+
+    // Misma política de estabilidad que `query()`: nunca se construye sobre
+    // un worktree a medio escribir. El motor de contexto no debe bloquear la
+    // task por esto: recibe `busy` y sigue sin briefing.
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      attempts = attempt;
+      if (signal?.aborted) return snapshotFailure("cancelled", MESSAGES.cancelled, attempt - 1);
+      if (tracker.execInFlight > 0) return snapshotFailure("busy", MESSAGES.busyExec, attempt - 1);
+      if (tracker.inFlight > 0) {
+        const waited = await waitForQuiet(signal);
+        if (waited === "aborted") return snapshotFailure("cancelled", MESSAGES.cancelled, attempt - 1);
+        if (waited === "timeout") return snapshotFailure("busy", MESSAGES.busyFiles, attempt - 1);
+        if (tracker.inFlight > 0) continue;
+      }
+
+      const generation = tracker.generation;
+      if (snapshot && snapshot.generation === generation) {
+        return { ok: true, data: snapshot.data, generation, cache: "hit", attempts: attempt - 1 };
+      }
+
+      const reusable = building && building.generation === generation && !building.superseded && !building.controller.signal.aborted ? building : null;
+      const build = reusable ?? startBuild(generation);
+      const outcome = await waitForBuild(build, signal);
+      if (outcome.kind === "cancelled") return snapshotFailure("cancelled", MESSAGES.cancelled, attempt);
+      if (outcome.kind === "torn") continue;
+      if (outcome.kind === "failed") return snapshotFailure(outcome.code, outcome.error, attempt);
+      // `runBuild` solo publica si la generación no cambió: el snapshot
+      // corresponde exactamente a `build.generation`.
+      return { ok: true, data: outcome.data, generation: build.generation, cache: reusable ? "joined" : "rebuilt", attempts: attempt };
+    }
+    return snapshotFailure("unstable", MESSAGES.unstable, attempts);
+  }
+
   return {
     async query(input, queryOptions) {
       try {
@@ -310,6 +411,13 @@ export function createRepoMapService(options: RepoMapServiceOptions): RepoMapSer
       } catch {
         // Defensa en profundidad: ninguna excepción (ni su texto) llega al tool.
         return failure("build_failed", MESSAGES.buildFailed, 0);
+      }
+    },
+    async getSnapshot(snapshotOptions) {
+      try {
+        return await getSnapshot(snapshotOptions);
+      } catch {
+        return snapshotFailure("build_failed", MESSAGES.buildFailed, 0);
       }
     },
   };

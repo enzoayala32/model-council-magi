@@ -7,6 +7,7 @@ import { createSearchProviderFromEnv, MAX_WEB_SEARCH_RESULTS, type SearchProvide
 import { redactSecrets } from "../provider-resilience/redact";
 import { execWithTreeKill } from "./exec-with-tree-kill";
 import { resolveSafePath, UnsafePathError } from "./safe-path";
+import { decodeUtf8, describeDecodeFailure, hashBuffer, READ_RANGE_LIMITS, sliceLines } from "./read-range";
 // Fase 7D: el tracker y las vistas son livianos (sin TypeScript). El service pesado se carga con
 // `import()` recién cuando se invoca `repo_map` — `import type` se borra al compilar, no lo carga.
 import { createRepoMapTracker, type MutationKind, type RepoMapTracker } from "./repo-map-tracker";
@@ -21,6 +22,22 @@ const MAX_SEARCH_RESULTS = 60;
 const MAX_LIST_RESULTS = 300;
 const MAX_TYPECHECK_OUTPUT = 20_000;
 const SKIP_DIRS = new Set(["node_modules", ".git", ".next", "dist", "build"]);
+
+/** Fase 8F — lee como máximo `maxBytes` desde el inicio, sin cargar un
+ * archivo gigante entero en memoria. `truncated` se decide por el tamaño
+ * real, no por lo leído. */
+async function readFilePrefix(absPath: string, maxBytes: number): Promise<{ buffer: Buffer; truncated: boolean; sizeBytes: number }> {
+  const handle = await fs.open(absPath, "r");
+  try {
+    const stat = await handle.stat();
+    const toRead = Math.min(stat.size, maxBytes);
+    const buffer = Buffer.alloc(toRead);
+    const { bytesRead } = await handle.read(buffer, 0, toRead, 0);
+    return { buffer: buffer.subarray(0, bytesRead), truncated: stat.size > maxBytes, sizeBytes: stat.size };
+  } finally {
+    await handle.close();
+  }
+}
 
 // Fase 6A: políticas de la capa de `wrapToolExecute` — ver
 // `tool-policy.ts` para el porqué completo. `DEFAULT_POLICY` es para las
@@ -174,7 +191,8 @@ export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentTo
     }),
 
     read_file: tool({
-      description: "Lee el contenido de un archivo de texto dentro del workspace. Devuelve un error legible si el archivo no existe.",
+      description:
+        "Lee el contenido de un archivo de texto dentro del workspace. Devuelve un error legible si el archivo no existe. Para archivos grandes usá read_file_range y pedí solo el fragmento que necesitás. No devuelve binarios ni UTF-8 inválido.",
       inputSchema: z.object({
         path: z.string().describe("Ruta relativa al workspace, por ejemplo 'lib/models.ts'."),
       }),
@@ -185,10 +203,73 @@ export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentTo
             const abs = await resolveSafePath(workspaceRoot, relPath);
             const stat = await fs.stat(abs);
             if (!stat.isFile()) return { ok: false, error: `${relPath} no es un archivo.` };
-            const buf = await fs.readFile(abs);
-            const truncated = buf.length > MAX_READ_BYTES;
-            const content = buf.subarray(0, MAX_READ_BYTES).toString("utf-8");
-            return { ok: true, content, truncated, sizeBytes: buf.length };
+            const { buffer, truncated, sizeBytes } = await readFilePrefix(abs, MAX_READ_BYTES);
+            const decoded = decodeUtf8(buffer, { truncatedPrefix: truncated });
+            if (!decoded.ok) return { ok: false, error: `${relPath}: ${describeDecodeFailure(decoded.reason)}`, code: decoded.reason };
+            return {
+              ok: true,
+              content: decoded.text,
+              truncated,
+              sizeBytes,
+              encoding: "utf-8",
+              hash: truncated ? null : hashBuffer(buffer),
+              hashAlgorithm: "sha256",
+            };
+          } catch (error) {
+            return { ok: false, error: describeError(error, relPath) };
+          }
+        },
+        DEFAULT_POLICY,
+      ),
+    }),
+
+    read_file_range: tool({
+      description:
+        "Lee un rango acotado de líneas de un archivo de texto (1-based, inclusivo). Es la forma recomendada para archivos grandes: evita mandar el archivo entero. Devuelve el hash SHA-256 del archivo completo para detectar cambios entre lecturas. No devuelve binarios ni UTF-8 inválido.",
+      inputSchema: z.object({
+        path: z.string().describe("Ruta relativa al workspace."),
+        startLine: z.number().int().min(1).optional().describe(`Primera línea (1-based). Default 1.`),
+        endLine: z.number().int().min(1).optional().describe("Última línea (inclusiva). Se acota a maxLines."),
+        maxLines: z.number().int().min(1).max(READ_RANGE_LIMITS.maxLines).optional().describe(`Máximo de líneas a devolver (default ${READ_RANGE_LIMITS.defaultLines}, tope ${READ_RANGE_LIMITS.maxLines}).`),
+        maxBytes: z.number().int().min(1).max(READ_RANGE_LIMITS.maxBytes).optional().describe(`Máximo de bytes de contenido (default y tope ${READ_RANGE_LIMITS.maxBytes}).`),
+      }),
+      execute: wrapToolExecute(
+        "read_file_range",
+        async ({ path: relPath, startLine, endLine, maxLines, maxBytes }) => {
+          try {
+            // Revalidación JUSTO antes de leer: resolveSafePath resuelve
+            // symlinks y confirma que el destino real sigue dentro del
+            // workspace, incluso si el archivo cambió desde el inventario.
+            const abs = await resolveSafePath(workspaceRoot, relPath);
+            const stat = await fs.stat(abs);
+            if (!stat.isFile()) return { ok: false, error: `${relPath} no es un archivo.` };
+            if (stat.size > READ_RANGE_LIMITS.maxFileBytes) {
+              return {
+                ok: false,
+                code: "file_too_large",
+                error: `${relPath} pesa ${stat.size} bytes, más que el tope de ${READ_RANGE_LIMITS.maxFileBytes} para lectura por rangos. Usá search_files para localizar el fragmento y luego leelo con un rango más chico.`,
+              };
+            }
+            const buffer = await fs.readFile(abs);
+            const decoded = decodeUtf8(buffer);
+            if (!decoded.ok) return { ok: false, error: `${relPath}: ${describeDecodeFailure(decoded.reason)}`, code: decoded.reason };
+            const slice = sliceLines(decoded.text, { startLine, endLine, maxLines, maxBytes });
+            if ("ok" in slice) return { ok: false, code: "invalid_range", error: `${relPath}: ${slice.error}` };
+            return {
+              ok: true,
+              path: relPath,
+              content: slice.content,
+              startLine: slice.startLine,
+              endLine: slice.endLine,
+              totalLines: slice.totalLines,
+              truncated: slice.truncated,
+              lineTruncated: slice.lineTruncated,
+              nextStartLine: slice.nextStartLine,
+              sizeBytes: buffer.length,
+              encoding: "utf-8",
+              hash: hashBuffer(buffer),
+              hashAlgorithm: "sha256",
+            };
           } catch (error) {
             return { ok: false, error: describeError(error, relPath) };
           }

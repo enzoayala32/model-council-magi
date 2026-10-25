@@ -1,13 +1,14 @@
 import crypto from "node:crypto";
 import { getDb } from "../db";
 import type { ProviderName } from "../provider-resilience/config";
+import type { ContextUsagePayload } from "./context/usage";
 
 /** Los 6 tipos mínimos para reconstruir el timeline completo de una task
  * sin necesitar nada más que `agent_events` (ver diseño de Fase 2, sección
  * 12). No hay un tipo por cada `stopReason` — eso vive en
  * `agent_tasks.stop_reason` y se comunica acá con un único `status_change`
  * al estado final. */
-export type AgentEventType = "tool_call" | "tool_result" | "text" | "typecheck_result" | "run_script_result" | "status_change" | "git_commit_result" | "credential_failover";
+export type AgentEventType = "tool_call" | "tool_result" | "text" | "typecheck_result" | "run_script_result" | "status_change" | "git_commit_result" | "credential_failover" | "context_usage";
 
 export type AgentEventPayload =
   | { type: "tool_call"; toolName: string; input: unknown }
@@ -36,7 +37,10 @@ export type AgentEventPayload =
       poolAction: "NONE" | "COOLDOWN" | "INVALID" | null;
       outcome: "rotated" | "stopped" | "exhausted";
       note?: string;
-    };
+    }
+  /** Fase 8A — telemetría numérica por paso. Ver `ContextUsagePayload`:
+   * nunca contiene prompts, mensajes, código ni nombres de archivos. */
+  | ContextUsagePayload;
 
 export type AgentEvent = {
   id: string;

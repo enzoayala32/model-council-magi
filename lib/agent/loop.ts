@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import crypto from "node:crypto";
 import path from "node:path";
-import { generateText, stepCountIs, type StopCondition, type ToolSet } from "ai";
+import { generateText, stepCountIs, type ModelMessage, type StopCondition, type ToolSet } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createAgentTools, isWebSearchCompatible, type AgentToolEvent } from "./tools";
@@ -14,6 +14,14 @@ import { classifyProviderError, type ProviderErrorInput } from "../provider-resi
 import { computeCooldownMs } from "../provider-resilience/cooldown";
 import { redactSecrets } from "../provider-resilience/redact";
 import { classifyExhaustion, describeExhaustion } from "../provider-resilience/events";
+import { createRepoMapTracker, type RepoMapTracker } from "./repo-map-tracker";
+import type { RepoMapServiceWithSnapshot } from "./repo-map-service";
+import { createContextEngine, type ContextEngine } from "./context/engine";
+import { measureContext, type ContextEstimate } from "./context/estimate";
+import { computeContextBudget } from "./context/budget";
+import { extractProviderUsage } from "./context/provider-usage";
+import { buildContextUsagePayload, type ContextSelectionSummary, type ContextUsagePayload, type GovernorUsageSummary } from "./context/usage";
+import { DEFAULT_HISTORY_GOVERNOR_CONFIG, planHistoryCompaction, type HistoryGovernorConfig } from "./context/history-governor";
 /** Fase 5E: el pool singleton pasó a vivir en `registry.ts`, compartido con
  * Model Council — acá solo se importa. `ENV_PREFIX_BY_PROVIDER`/
  * `getProviderPool` se re-usan tal cual, sin ningún cambio de
@@ -59,6 +67,10 @@ export type AgentLoopResult = {
    * campo es la fuente de verdad de "¿la tool realmente actuó?". */
   touchedFiles: string[];
   error?: string;
+  /** Fase 8A/8D — telemetría de contexto por paso. Solo longitudes,
+   * conteos, tokens informados por el proveedor y estado del presupuesto:
+   * NUNCA prompts, mensajes, código ni contenido de archivos. */
+  contextUsage?: ContextUsagePayload[];
 };
 
 export type RunAgentLoopOptions = {
@@ -106,6 +118,24 @@ export type RunAgentLoopOptions = {
    * capacidad del modelo (provider, selección de credential, etc.) — solo
    * la decisión puntual de ofrecer o no `web_search`. */
   webSearchCompatibleOverride?: boolean;
+  /** Fase 8D — motor de contexto. APAGADO por defecto: una llamada directa
+   * a `runAgentLoop` (tests, scripts, consumidores viejos) se comporta
+   * exactamente como antes. `runner.ts` lo enciende en producción. */
+  contextEngine?: {
+    enabled?: boolean;
+    maxCandidates?: number;
+    briefingMaxChars?: number;
+    refreshLimit?: number;
+    startTimeoutMs?: number;
+    refreshTimeoutMs?: number;
+  };
+  /** Fase 8A — telemetría de contexto (evento `context_usage` + resultado
+   * `contextUsage`). Default `true`: solo mide, no altera el prompt ni el
+   * historial. Poner `false` para una corrida sin telemetría. */
+  contextTelemetry?: boolean;
+  /** Fase 8E — governor del historial. APAGADO por defecto; solo compacta
+   * si `enabled: true` explícito y el contexto supera el umbral blando. */
+  historyGovernor?: HistoryGovernorConfig;
 };
 
 const DEFAULT_CODING_MODEL = "nvidia/nemotron-3.5-lightning:free";
@@ -177,12 +207,12 @@ Herramientas disponibles:
 - list_files: lista rutas de archivos (con filtro opcional por extensión o nombre). Usala primero si no sabés qué archivos existen — NO sirve para buscar texto adentro de archivos.
 - search_files: busca un texto literal dentro del contenido de los archivos (no es un buscador de nombres de archivo).
 - repo_map: mapa factual del proyecto (resumen, qué archivos importan a cuáles, símbolos de cada archivo) del estado actual del worktree. Útil para entender la estructura o saber qué depende de un archivo antes de editarlo; es de solo lectura y no devuelve contenido de archivos.
-- read_file / write_file / edit_file / delete_file: leer, crear/reescribir, editar una porción puntual, o borrar un archivo.
+- read_file / read_file_range / write_file / edit_file / delete_file: leer un archivo entero o un rango acotado de líneas, crear/reescribir, editar una porción puntual, o borrar un archivo.
 - run_typecheck: corre tsc sobre todo el proyecto.${runScriptLine}${webSearchLine}
 
 Reglas:
 - Si no conocés la estructura del proyecto, empezá con repo_map (o list_files) antes de adivinar rutas.
-- Primero explorá con read_file / search_files antes de editar — no asumas contenido que no leíste.
+- Primero explorá con read_file / search_files antes de editar — no asumas contenido que no leíste. Para archivos grandes usá read_file_range (startLine/endLine) y pedí más líneas solo si el fragmento no alcanza.
 - Usá edit_file para cambios puntuales a un archivo existente (necesita que oldStr sea único en el archivo); usá write_file solo para archivos nuevos o reescrituras completas.
 - Corré run_typecheck después de terminar los cambios de código (no en cada paso individual, es lento) y corregí lo que encuentres.${runScriptRule}
 - No hagas cambios fuera del alcance de la tarea pedida.
@@ -333,11 +363,15 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
   const lastProgressStepRef = { current: 0 };
   let lastTypeCheckOk: boolean | null = null;
   const touchedFiles = new Set<string>();
+  let contextEngine: ContextEngine | undefined;
 
   const onEvent = (event: AgentToolEvent) => {
     lastProgressStepRef.current = currentStepIndex.current;
     touchedFiles.add(event.relPath);
     transcript.push(event.type === "file_written" ? `✏️  Escribió ${event.relPath}` : `✏️  Editó ${event.relPath}`);
+    // Fase 8D: el briefing puede reflejar los archivos tocados sin esperar
+    // a que termine el paso ni a que se reconstruya el mapa.
+    contextEngine?.noteTouched([event.relPath]);
   };
   const currentStepIndex = { current: 0 };
 
@@ -353,9 +387,48 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
   const codingAgentCapabilities =
     options.webSearchCompatibleOverride !== undefined ? { webSearchCompatible: options.webSearchCompatibleOverride } : getCouncilModel(modelId)?.codingAgent;
   const searchProviderForTools: SearchProvider | null | undefined = options.searchProvider ?? (isWebSearchCompatible(codingAgentCapabilities) ? undefined : null);
-  const tools = createAgentTools(workspaceRoot, onEvent, allowedScripts, searchProviderForTools);
+
+  // Fase 8D — el service pesado (TypeScript vía 7A/7B/7C) se carga con
+  // `import()` SOLO si el engine está encendido. Una corrida con el engine
+  // apagado no paga ningún costo nuevo. Si la carga o la creación fallan,
+  // se sigue sin contexto automático: un fallo del engine nunca rompe la
+  // task.
+  let repoMapTracker: RepoMapTracker | undefined;
+  let repoMapService: RepoMapServiceWithSnapshot | undefined;
+  if (options.contextEngine?.enabled === true) {
+    try {
+      const { createRepoMapService } = await import("./repo-map-service");
+      repoMapTracker = createRepoMapTracker();
+      repoMapService = createRepoMapService({ workspaceRoot, tracker: repoMapTracker });
+      contextEngine = createContextEngine({
+        task,
+        workspaceRoot,
+        modelId,
+        tracker: repoMapTracker,
+        service: repoMapService,
+        maxCandidates: options.contextEngine.maxCandidates,
+        briefingMaxChars: options.contextEngine.briefingMaxChars,
+        refreshLimit: options.contextEngine.refreshLimit,
+        startTimeoutMs: options.contextEngine.startTimeoutMs,
+        refreshTimeoutMs: options.contextEngine.refreshTimeoutMs,
+      });
+    } catch {
+      contextEngine = undefined;
+      repoMapTracker = undefined;
+      repoMapService = undefined;
+    }
+  }
+
+  const tools = createAgentTools(
+    workspaceRoot,
+    onEvent,
+    allowedScripts,
+    searchProviderForTools,
+    repoMapTracker && repoMapService ? { tracker: repoMapTracker, service: repoMapService } : undefined,
+  );
   const searchEnabled = "web_search" in tools;
   const generateTextImpl = options.generateTextImpl ?? generateText;
+  const baseSystemPrompt = buildSystemPrompt(allowedScripts, searchEnabled);
 
   const controller = new AbortController();
   const timeoutTimer = setTimeout(() => controller.abort(), timeoutMs);
@@ -369,6 +442,51 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
     if (options.abortSignal.aborted) controller.abort();
     else options.abortSignal.addEventListener("abort", () => controller.abort(), { once: true });
   }
+
+  // La carga inicial del mapa se acota con su propio timeout (ver engine):
+  // si el proyecto es enorme o el worktree está inestable, la task arranca
+  // igual, sin briefing, en vez de esperar hasta 60 s.
+  if (contextEngine) {
+    try {
+      await contextEngine.start(controller.signal);
+    } catch {
+      // El engine ya tiene fallback interno; esto es defensa adicional.
+    }
+  }
+  let currentSystemPrompt = baseSystemPrompt + (contextEngine?.getSystemSuffix() ?? "");
+
+  // Fase 8A/8E — estado de telemetría y governor POR corrida. Los mapas se
+  // indexan por `stepNumber` (0-based) para que el `usage` que informa el
+  // proveedor en `onStepFinish` corresponda exactamente a los mensajes que
+  // se midieron en `prepareStep`.
+  const contextTelemetry = options.contextTelemetry !== false;
+  const contextUsage: ContextUsagePayload[] = [];
+  const stepMeasurements = new Map<number, ContextEstimate>();
+  const stepGovernor = new Map<number, GovernorUsageSummary>();
+  const governorConfig = { ...DEFAULT_HISTORY_GOVERNOR_CONFIG, ...options.historyGovernor };
+  const governorEnabled = options.historyGovernor?.enabled === true;
+  const disabledGovernor: GovernorUsageSummary = { enabled: false, applied: false, removedMessages: 0, summaryChars: 0, version: null };
+  const emptySignals: ContextSelectionSummary["signals"] = {
+    explicit_path: 0,
+    touched: 0,
+    symbol_mention: 0,
+    term_match: 0,
+    graph_neighbor: 0,
+    role: 0,
+    test_pair: 0,
+  };
+  const disabledSelection = (): ContextSelectionSummary => ({
+    enabled: false,
+    available: false,
+    candidates: 0,
+    included: 0,
+    truncated: false,
+    confidence: null,
+    generation: null,
+    refreshes: 0,
+    error: null,
+    signals: { ...emptySignals },
+  });
 
   // Fase 5D: un `OperationCursor` por cada corrida de `runAgentLoop()` (una
   // task) — nunca por request/credential individual. `pool` es el
@@ -422,11 +540,49 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
     try {
       await generateTextImpl({
         model,
-        system: buildSystemPrompt(allowedScripts, searchEnabled),
+        system: currentSystemPrompt,
         prompt: task,
         tools,
         abortSignal: controller.signal,
         stopWhen: [stepCountIs(maxSteps), noProgressFor(NO_PROGRESS_STEP_LIMIT, lastProgressStepRef)],
+        prepareStep: async ({ messages, stepNumber }) => {
+          // Fase 8D: como máximo `refreshLimit` reconstrucciones por task.
+          // El refresh tiene su propio timeout dentro del engine; si vence,
+          // se conserva el briefing anterior.
+          if (contextEngine) {
+            try {
+              await contextEngine.refreshIfNeeded(controller.signal);
+            } catch {
+              // Fallback: nunca romper el paso por el engine.
+            }
+            currentSystemPrompt = baseSystemPrompt + contextEngine.getSystemSuffix();
+          }
+
+          let effectiveMessages = messages;
+          if (governorEnabled) {
+            const preEstimate = measureContext({ system: currentSystemPrompt, messages: effectiveMessages, tools });
+            const preBudget = computeContextBudget({ modelId, estimate: preEstimate, providerUsage: null });
+            const plan = planHistoryCompaction({
+              messages: effectiveMessages,
+              estimatedTokens: preBudget.usedInputTokens,
+              softInputTokens: preBudget.softInputTokens,
+              config: governorConfig,
+            });
+            stepGovernor.set(stepNumber, {
+              enabled: true,
+              applied: plan.applied,
+              removedMessages: plan.removedMessages,
+              summaryChars: plan.summary?.length ?? 0,
+              version: plan.applied ? plan.version : null,
+            });
+            if (plan.applied) effectiveMessages = plan.messages;
+          } else {
+            stepGovernor.set(stepNumber, disabledGovernor);
+          }
+
+          stepMeasurements.set(stepNumber, measureContext({ system: currentSystemPrompt, messages: effectiveMessages, tools }));
+          return { system: currentSystemPrompt, messages: effectiveMessages };
+        },
         onStepFinish: (step) => {
           currentStepIndex.current += 1;
           if (step.text) {
@@ -480,6 +636,52 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
                 appendEvent(options.taskId, { type: "tool_result", toolName: part.toolName, ok: true, summary: `${part.toolName} OK` });
               }
             }
+          }
+
+          // Fase 8D — actividad reciente para el briefing, solo metadatos.
+          if (contextEngine) {
+            const pathByCallId = new Map<string, string>();
+            for (const call of step.toolCalls ?? []) {
+              const input = call.input;
+              if (input !== null && typeof input === "object") {
+                const record = input as Record<string, unknown>;
+                const candidate = typeof record.path === "string" ? record.path : typeof record.subPath === "string" ? record.subPath : null;
+                if (candidate) pathByCallId.set(call.toolCallId, candidate);
+              }
+            }
+            for (const result of step.toolResults ?? []) {
+              const output = result.output as { ok?: unknown } | undefined;
+              const pathForCall = pathByCallId.get(result.toolCallId);
+              contextEngine.noteRecentTool({
+                toolName: result.toolName,
+                ok: output?.ok !== false,
+                ...(pathForCall ? { path: pathForCall } : {}),
+              });
+            }
+          }
+
+          // Fase 8A — telemetría numérica del paso. El `usage` real del
+          // proveedor corresponde a los mensajes que se midieron en
+          // `prepareStep` para este mismo `stepNumber`.
+          if (contextTelemetry) {
+            const stepNumber = typeof step.stepNumber === "number" ? step.stepNumber : Math.max(0, currentStepIndex.current - 1);
+            const providerUsage = extractProviderUsage((step as { usage?: unknown }).usage);
+            const estimate =
+              stepMeasurements.get(stepNumber) ??
+              measureContext({ system: currentSystemPrompt, messages: [{ role: "user", content: task } as ModelMessage], tools });
+            const budget = computeContextBudget({ modelId, estimate, providerUsage });
+            const payload = buildContextUsagePayload({
+              step: stepNumber + 1,
+              modelId,
+              provider: providerName,
+              estimate,
+              providerUsage,
+              budget,
+              selection: contextEngine?.getSummary() ?? disabledSelection(),
+              governor: stepGovernor.get(stepNumber) ?? disabledGovernor,
+            });
+            contextUsage.push(payload);
+            if (options.taskId) appendEvent(options.taskId, payload);
           }
         },
       });
@@ -587,7 +789,15 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
     );
   }
 
-  return { stopReason, steps: currentStepIndex.current, transcript, proposals, touchedFiles: Array.from(touchedFiles), error: errorMessage };
+  return {
+    stopReason,
+    steps: currentStepIndex.current,
+    transcript,
+    proposals,
+    touchedFiles: Array.from(touchedFiles),
+    error: errorMessage,
+    ...(contextUsage.length > 0 ? { contextUsage } : {}),
+  };
 }
 
 /** Arma un `AgentFileProposal` por cada archivo tocado en el worktree,

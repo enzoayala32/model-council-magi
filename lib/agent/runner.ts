@@ -69,6 +69,17 @@ export type RunTaskOptions = {
   loopRunner?: LoopRunner;
 };
 
+/** Fase 8D — el motor de contexto se enciende en producción (tasks reales
+ * del Agent) y se puede apagar con `MAGI_CONTEXT_ENGINE_DISABLED=1` sin
+ * tocar código. Una llamada DIRECTA a `runAgentLoop` (tests, scripts,
+ * consumidores viejos) sigue apagada por defecto: solo `runner.ts` opta
+ * explícitamente por encenderla. El governor del historial (8E) NO se
+ * enciende acá: requiere aprobación explícita y sigue apagado. */
+function contextEngineEnabled(): boolean {
+  const raw = process.env.MAGI_CONTEXT_ENGINE_DISABLED?.trim().toLowerCase();
+  return !(raw === "1" || raw === "true" || raw === "yes" || raw === "on");
+}
+
 /**
  * Ejecuta una `CodingTask` de punta a punta: `QUEUED → RUNNING` → crea el
  * workspace → corre el loop del agente → decide el estado final según el
@@ -172,6 +183,10 @@ export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promis
       modelId: task.modelId,
       abortSignal: abortController.signal,
       taskId,
+      // Fase 8D: encendido para tasks reales; `MAGI_CONTEXT_ENGINE_DISABLED=1`
+      // restaura el comportamiento previo sin recompilar. El governor sigue
+      // apagado (8E) hasta que se apruebe explícitamente.
+      contextEngine: { enabled: contextEngineEnabled() },
     });
 
     if (abortController.signal.aborted) {

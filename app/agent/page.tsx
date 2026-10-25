@@ -6,6 +6,7 @@ import Link from "next/link";
 import type { AgentProject } from "@/lib/agent/project-store";
 import type { CodingTask, TaskStatus } from "@/lib/agent/task-store";
 import type { AgentEvent, AgentEventPayload } from "@/lib/agent/event-log";
+import { formatContextUsage } from "@/lib/agent/context/usage";
 import type { FileProposal } from "@/lib/fs-tools";
 import "./agent.css";
 
@@ -85,6 +86,9 @@ function formatEvent(event: AgentEvent): { text: string; kind: "err" | "ok" | "s
     if (p.outcome === "rotated") return { text: `🔁 credential ${p.credentialId} (${p.provider}) falló (${p.reason}) — rotando a otra.`, kind: "status" };
     if (p.outcome === "stopped") return { text: `⛔ credential ${p.credentialId} (${p.provider}) falló (${p.reason}) — no se rotó${p.note ? ` (${p.note})` : ""}.`, kind: "err" };
     return { text: `⛔ ${p.provider}: sin ninguna credential disponible (${p.reason}).`, kind: "err" };
+  }
+  if (p.type === "context_usage") {
+    return { text: formatContextUsage(p), kind: p.budget.status === "over_limit" || p.budget.status === "near_limit" ? "err" : "status" };
   }
   return { text: JSON.stringify(p), kind: "text" };
 }

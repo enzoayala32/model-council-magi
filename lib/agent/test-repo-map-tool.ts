@@ -106,9 +106,9 @@ async function main() {
   const baseDir = await makeRepo("base", { "src/a.ts": "export const a = 1;\nexport function f() { return a; }\n", "README.md": "# hola\nTODO: algo\n" });
   {
     const { tools } = makeTools(baseDir);
-    checkEq(Object.keys(tools).sort(), ["delete_file", "edit_file", "list_files", "read_file", "repo_map", "run_typecheck", "search_files", "write_file"], "el set de tools es EXACTAMENTE el de antes + repo_map (un único tool nuevo, sin gate por capacidad del modelo)");
+    checkEq(Object.keys(tools).sort(), ["delete_file", "edit_file", "list_files", "read_file", "read_file_range", "repo_map", "run_typecheck", "search_files", "write_file"], "el set de tools es EXACTAMENTE el de antes + repo_map + read_file_range (Fase 8F), sin gate por capacidad del modelo");
     const withScripts = makeTools(baseDir, { scripts: ["build"] }).tools;
-    check("run_script" in withScripts && "repo_map" in withScripts && Object.keys(withScripts).length === 9, "con scripts permitidos se suma run_script y repo_map sigue disponible", () => canon(Object.keys(withScripts)));
+    check("run_script" in withScripts && "repo_map" in withScripts && Object.keys(withScripts).length === 10, "con scripts permitidos se suma run_script y repo_map sigue disponible", () => canon(Object.keys(withScripts)));
     const raw = createAgentTools(baseDir, () => undefined, [], null) as unknown as Record<string, { inputSchema: unknown; description: string }>;
     check(raw.repo_map.inputSchema === repoMapInputSchema && ["overview", "files", "symbols", "subPath", "after"].every((word) => raw.repo_map.description.includes(word)), "el schema es el de las vistas y la descripción explica detail / subPath / after", () => raw.repo_map.description);
     check(repoMapInputSchema.safeParse({}).success, "repo_map acepta {} (todo opcional) — apto para modelos débiles", () => "schema");
