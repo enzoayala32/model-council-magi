@@ -90,6 +90,9 @@ function formatEvent(event: AgentEvent): { text: string; kind: "err" | "ok" | "s
   if (p.type === "context_usage") {
     return { text: formatContextUsage(p), kind: p.budget.status === "over_limit" || p.budget.status === "near_limit" ? "err" : "status" };
   }
+  if (p.type === "progress_warning") {
+    return { text: `⚠️ paso ${p.step + 1}: ${p.message} (${p.count}/${p.threshold})`, kind: "status" };
+  }
   return { text: JSON.stringify(p), kind: "text" };
 }
 

@@ -8,7 +8,7 @@ import type { ContextUsagePayload } from "./context/usage";
  * 12). No hay un tipo por cada `stopReason` — eso vive en
  * `agent_tasks.stop_reason` y se comunica acá con un único `status_change`
  * al estado final. */
-export type AgentEventType = "tool_call" | "tool_result" | "text" | "typecheck_result" | "run_script_result" | "status_change" | "git_commit_result" | "credential_failover" | "context_usage";
+export type AgentEventType = "tool_call" | "tool_result" | "text" | "typecheck_result" | "run_script_result" | "status_change" | "git_commit_result" | "credential_failover" | "context_usage" | "progress_warning";
 
 export type AgentEventPayload =
   | { type: "tool_call"; toolName: string; input: unknown }
@@ -40,7 +40,18 @@ export type AgentEventPayload =
     }
   /** Fase 8A — telemetría numérica por paso. Ver `ContextUsagePayload`:
    * nunca contiene prompts, mensajes, código ni nombres de archivos. */
-  | ContextUsagePayload;
+  | ContextUsagePayload
+  /** Fase 9D — advertencia accionable del detector de no-progreso. `message`
+   * es un texto fijo del detector: no contiene contenido de archivos,
+   * stdout/stderr ni prompts. `step` es el índice 0-based del paso. */
+  | {
+      type: "progress_warning";
+      detector: string;
+      count: number;
+      threshold: number;
+      message: string;
+      step: number;
+    };
 
 export type AgentEvent = {
   id: string;

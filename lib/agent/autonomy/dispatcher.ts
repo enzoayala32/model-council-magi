@@ -23,7 +23,7 @@
  *   de ESA llamada al modelo.
  */
 
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
@@ -107,6 +107,16 @@ import {
   type BriefingVerification,
 } from "./briefing";
 import { createAcceptanceVerifier, type VerifierExec } from "./verifier";
+import {
+  createProgressTracker,
+  hashProgressAction,
+  hashProgressError,
+  hashProgressResult,
+  type ProgressAction,
+  type ProgressDetectorKind,
+  type ProgressObservation,
+  type ProgressTracker,
+} from "./progress";
 
 const execFileAsync = promisify(execFile);
 
@@ -117,6 +127,27 @@ const MAX_ERROR_CHARS = 1_000;
 const MAX_EVENT_TEXT_CHARS = 500;
 
 const FILE_TOOLS = new Set(["write_file", "edit_file", "delete_file"]);
+
+/** Tools que pueden cambiar el workspace. El fingerprint de workspace solo
+ * se calcula después de un paso que usó alguna de ellas (9D). `run_typecheck`
+ * no debería mutar nada, pero se incluye para detectar efectos colaterales
+ * de configuración sin costo perceptible. */
+const MUTATING_TOOLS = new Set(["write_file", "edit_file", "delete_file", "run_script", "run_typecheck"]);
+
+/** `git status` es auxiliar: si el repo está bloqueado o tarda, el fingerprint
+ * cae a un marcador estable y el loop sigue. */
+const WORKSPACE_STATUS_TIMEOUT_MS = 2_000;
+
+/** Mensaje terminal por detector. Se combina con el mensaje accionable del
+ * tracker para que el cierre de la corrida explique qué pasó y qué hacer. */
+const STALL_SUMMARY: Record<ProgressDetectorKind, string> = {
+  repeated_action: "La corrida se estancó repitiendo la misma acción.",
+  repeated_error: "La corrida se estancó repitiendo el mismo error.",
+  identical_diff: "La corrida se estancó repitiendo el mismo diff.",
+  oscillation: "La corrida se estancó oscilando entre los mismos estados.",
+  no_progress: "La corrida se estancó sin progreso.",
+  plan_stalled: "La corrida se estancó replanificando al mismo plan.",
+};
 
 /** Claves de input que sí pueden viajar a `agent_events`. Todo lo demás
  * (`content`, `oldStr`, `newStr`, `patch`, `description`, `reason`, ...)
@@ -243,10 +274,15 @@ type LoopContext = {
   lastTypeCheckOk: boolean | null;
   lastVerification: BriefingVerification | null;
   lastEventSeq: number | null;
-  noProgressSteps: number;
-  lastActionFingerprint: string | null;
-  identicalActionCount: number;
-  stallReason: "no_progress" | "repeated_action" | "replans_exhausted" | null;
+  /** Fase 9D — detector de no-progreso. Reemplaza los contadores ad-hoc de
+   * 9C (`noProgressSteps`, `lastActionFingerprint`, `identicalActionCount`). */
+  progress: ProgressTracker;
+  stallReason: ProgressDetectorKind | "replans_exhausted" | null;
+  stallMessage: string | null;
+  /** Se enciende al emitir un warning de progreso. `executePhase` corta la
+   * llamada actual para que el próximo briefing incluya la advertencia y el
+   * modelo tenga una oportunidad real de cambiar de estrategia. */
+  progressWarningPending: boolean;
   warnings: string[];
   warningSet: Set<string>;
   transcript: string[];
@@ -355,15 +391,62 @@ function filesForTool(toolName: string, input: unknown): string[] {
   return relPath ? [relPath] : [];
 }
 
-function isProgressAction(toolName: string, output: Record<string, unknown> | undefined): boolean {
-  if (!output || output.ok !== true) return false;
-  if (FILE_TOOLS.has(toolName) || toolName === "update_plan") return true;
-  if (toolName === "update_plan_item") {
-    const item = isPlainObject(output.item) ? output.item : undefined;
-    const status = item && typeof item.status === "string" ? item.status : "";
-    return status === "DONE" || status === "BLOCKED" || status === "FAILED" || status === "SKIPPED";
+function planItemTransition(
+  toolName: string,
+  output: Record<string, unknown> | undefined,
+): { terminal: boolean; done: boolean } {
+  if (toolName !== "update_plan_item" || !output || output.ok !== true) return { terminal: false, done: false };
+  const item = isPlainObject(output.item) ? output.item : undefined;
+  const status = item && typeof item.status === "string" ? item.status : "";
+  const terminal = status === "DONE" || status === "BLOCKED" || status === "FAILED" || status === "SKIPPED";
+  return { terminal, done: status === "DONE" };
+}
+
+/** Estado de un archivo para los fingerprints de 9D. Nunca se persiste el
+ * contenido: solo su hash, o un marcador estable si no se puede leer. Un
+ * archivo por encima del tope de checkpoint se identifica por tamaño para no
+ * hashear megabytes en cada paso. */
+function fileStateFingerprint(ctx: LoopContext, relPath: string): string {
+  const absolute = resolveInsideWorkspace(ctx.workspaceRoot, relPath);
+  if (!absolute) return "outside";
+  try {
+    const stat = fs.statSync(absolute);
+    if (!stat.isFile()) return "not_file";
+    if (stat.size > CHECKPOINT_MAX_FILE_BYTES) return `large:${stat.size}`;
+    return crypto.createHash("sha256").update(fs.readFileSync(absolute)).digest("hex");
+  } catch {
+    return "missing";
   }
-  return false;
+}
+
+function hashFileStates(ctx: LoopContext, relPaths: string[]): string | null {
+  if (relPaths.length === 0) return null;
+  const entries: Record<string, string> = {};
+  for (const relPath of [...relPaths].sort()) entries[relPath] = fileStateFingerprint(ctx, relPath);
+  return hashJson(entries);
+}
+
+/** Fingerprint del workspace: hashes de los archivos tocados + `git status`.
+ * Incluye el status para detectar efectos de `run_script` sobre archivos que
+ * el modelo no nombró. Si git falla o tarda, el marcador es estable y el
+ * detector simplemente no ve progreso por esa vía. */
+function hashWorkspaceState(ctx: LoopContext, relPaths: string[]): string {
+  const files: Record<string, string> = {};
+  for (const relPath of [...relPaths].sort()) files[relPath] = fileStateFingerprint(ctx, relPath);
+
+  let status = "";
+  try {
+    status = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
+      cwd: ctx.workspaceRoot,
+      encoding: "utf8",
+      timeout: WORKSPACE_STATUS_TIMEOUT_MS,
+      maxBuffer: 8 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    status = "<git_status_unavailable>";
+  }
+  return hashJson({ files, status });
 }
 
 function describeToolResult(
@@ -577,6 +660,19 @@ function warn(ctx: LoopContext, message: string): void {
   }
 }
 
+/** Marca el primer motivo de estancamiento. Un detector posterior no pisa al
+ * primero: el estado terminal debe explicar la causa original. */
+function markStall(ctx: LoopContext, reason: ProgressDetectorKind | "replans_exhausted", detail?: string): void {
+  if (ctx.stallReason !== null) return;
+  ctx.stallReason = reason;
+  const summary = reason === "replans_exhausted" ? "Se agotaron las replanificaciones." : STALL_SUMMARY[reason];
+  ctx.stallMessage = detail ? `${summary} ${detail}` : summary;
+}
+
+function stallError(ctx: LoopContext): string {
+  return ctx.stallMessage ?? "La corrida se estancó sin progreso.";
+}
+
 function appendEventSafe(ctx: LoopContext, payload: AgentEventPayload): void {
   try {
     const event = appendEvent(ctx.taskId, payload);
@@ -678,6 +774,7 @@ function buildExecutingSystemPrompt(ctx: LoopContext, briefing: string): string 
 
 function handleModelStep(ctx: LoopContext, phase: ModelPhase, step: StepLike): void {
   const stepIndex = ctx.steps;
+  const planVersionBefore = ctx.lastPlanVersion;
   const content = Array.isArray(step.content) ? step.content : [];
   const calls: ToolCallLike[] = Array.isArray(step.toolCalls)
     ? step.toolCalls
@@ -709,7 +806,11 @@ function handleModelStep(ctx: LoopContext, phase: ModelPhase, step: StepLike): v
   const actions: AgentStepAction[] = [];
   const resultMetas: Array<Record<string, unknown>> = [];
   const checkpointPaths = new Set<string>();
-  let stepProgress = false;
+  const progressActions: ProgressAction[] = [];
+  const changedFiles = new Set<string>();
+  let mutatedWorkspace = false;
+  let ledgerChanged = false;
+  let doneItem = false;
 
   for (const result of results) {
     const output = isPlainObject(result.output) ? result.output : undefined;
@@ -735,6 +836,23 @@ function handleModelStep(ctx: LoopContext, phase: ModelPhase, step: StepLike): v
       ...(code ? { code } : {}),
       ...(errorText ? { summary: errorText } : {}),
     });
+
+    // Fase 9D — observación para el detector. El output completo se hashea
+    // en memoria y se descarta: solo el hash llega al tracker. Para errores
+    // se normaliza el mensaje antes de hashearlo (paths, números, secretos).
+    const errorForHash =
+      typeof output?.error === "string" ? output.error : typeof code === "string" ? code : "error";
+    progressActions.push({
+      toolName: result.toolName,
+      actionHash: hashProgressAction(result.toolName, input ?? null),
+      resultHash: hashProgressResult(result.toolName, ok, code, hashJson(output ?? null)),
+      ok,
+      errorHash: ok ? null : hashProgressError(result.toolName, errorForHash, { workspaceRoot: ctx.workspaceRoot }),
+    });
+    if (MUTATING_TOOLS.has(result.toolName)) mutatedWorkspace = true;
+    const transition = planItemTransition(result.toolName, output);
+    if (transition.terminal) ledgerChanged = true;
+    if (transition.done) doneItem = true;
 
     const summary = describeToolResult(result.toolName, input, output, ok);
     ctx.transcript.push(`${ok ? "🔧" : "❌"} ${summary}${!ok && errorText ? `: ${errorText}` : ""}`);
@@ -783,23 +901,38 @@ function handleModelStep(ctx: LoopContext, phase: ModelPhase, step: StepLike): v
       }
     }
 
-    if (isProgressAction(result.toolName, output)) stepProgress = true;
     if (ok && FILE_TOOLS.has(result.toolName)) {
       if (result.toolName === "write_file" || result.toolName === "edit_file") {
         for (const file of files) checkpointPaths.add(file);
       }
-      const fingerprint = `${result.toolName}:${hashJson(input ?? null)}`;
-      if (fingerprint === ctx.lastActionFingerprint) ctx.identicalActionCount += 1;
-      else {
-        ctx.lastActionFingerprint = fingerprint;
-        ctx.identicalActionCount = 1;
-      }
+      for (const file of files) changedFiles.add(file);
     }
   }
 
   if (checkpointPaths.size > 0 && shouldCheckpoint(ctx, stepIndex)) {
     for (const file of checkpointPaths) checkpointFile(ctx, file);
   }
+
+  const changed = Array.from(changedFiles).sort();
+  // Solo se calcula si el paso pudo mutar el workspace: leer o tocar el
+  // ledger no debe pagar un `git status` por paso.
+  const workspaceHash = mutatedWorkspace ? hashWorkspaceState(ctx, changed) : null;
+  const diffHash = hashFileStates(ctx, changed);
+  const planAfter = currentPlan(ctx);
+  const planChanged = planAfter !== null && planAfter.version > planVersionBefore;
+
+  const observation: ProgressObservation = {
+    stepIndex,
+    actions: progressActions,
+    workspaceHash,
+    diffHash,
+    ledgerChanged,
+    doneItem,
+    planHash: planAfter?.hash ?? "",
+    planChanged,
+  };
+  const verdict = ctx.progress.observe(observation);
+  const progressSnapshot = ctx.progress.snapshot();
 
   const usage = extractUsage(step);
   try {
@@ -812,8 +945,8 @@ function handleModelStep(ctx: LoopContext, phase: ModelPhase, step: StepLike): v
       progress: {
         toolCalls: calls.length,
         toolResults: results.length,
-        planVersion: ctx.lastPlanVersion,
-        noProgressSteps: stepProgress ? 0 : ctx.noProgressSteps + 1,
+        planVersion: planAfter?.version ?? ctx.lastPlanVersion,
+        noProgressSteps: progressSnapshot.noProgressSteps,
         replans: ctx.replans,
       },
       inputTokens: usage.inputTokens > 0 ? usage.inputTokens : null,
@@ -826,21 +959,36 @@ function handleModelStep(ctx: LoopContext, phase: ModelPhase, step: StepLike): v
   ctx.steps += 1;
   ctx.inputTokens += usage.inputTokens;
   ctx.outputTokens += usage.outputTokens;
-  if (stepProgress) ctx.noProgressSteps = 0;
-  else ctx.noProgressSteps += 1;
 
-  const plan = currentPlan(ctx);
-  if (plan && plan.version > ctx.lastPlanVersion) {
+  if (planAfter && planAfter.version > ctx.lastPlanVersion) {
     if (phase === "EXECUTING" && ctx.lastPlanVersion > 0) {
       ctx.replans += 1;
-      ctx.transcript.push(`🔁 El modelo replanificó (v${plan.version}, ${ctx.replans}/${ctx.limits.maxReplans}).`);
+      ctx.transcript.push(`🔁 El modelo replanificó (v${planAfter.version}, ${ctx.replans}/${ctx.limits.maxReplans}).`);
     }
-    ctx.lastPlanVersion = plan.version;
+    ctx.lastPlanVersion = planAfter.version;
   }
 
-  if (ctx.noProgressSteps >= ctx.limits.maxNoProgressSteps) ctx.stallReason = "no_progress";
-  if (ctx.identicalActionCount >= ctx.limits.maxIdenticalActions) ctx.stallReason = "repeated_action";
-  if (ctx.replans > ctx.limits.maxReplans) ctx.stallReason = "replans_exhausted";
+  if (ctx.replans > ctx.limits.maxReplans) markStall(ctx, "replans_exhausted");
+
+  if (verdict.level === "warning") {
+    // La fase actual se corta después de este paso (ver `executePhase`):
+    // el próximo briefing incluye la advertencia y el modelo tiene una
+    // oportunidad real de cambiar de estrategia antes de escalar.
+    ctx.progressWarningPending = true;
+    warn(ctx, `[paso ${stepIndex + 1}] ${verdict.message}`);
+    ctx.transcript.push(`⚠️ ${verdict.message}`);
+    appendEventSafe(ctx, {
+      type: "progress_warning",
+      detector: verdict.detector,
+      count: verdict.count,
+      threshold: verdict.threshold,
+      message: verdict.message,
+      step: stepIndex,
+    });
+  } else if (verdict.level === "stalled") {
+    markStall(ctx, verdict.detector, verdict.message);
+    ctx.transcript.push(`⛔ ${verdict.message}`);
+  }
 
   updateBudget(ctx);
 }
@@ -1143,6 +1291,10 @@ async function executePhase(ctx: LoopContext): Promise<ModelCallResult> {
   }
 
   const remainingPhase = Math.min(ctx.limits.maxStepsPerPhase, remainingGlobal);
+  // Un warning de progreso pendiente ya se emitió en el paso anterior: se
+  // limpia acá para que la nueva llamada arranque normalmente, pero queda en
+  // `ctx.warnings` y por lo tanto en el briefing.
+  ctx.progressWarningPending = false;
   const planBefore = plan;
   const briefing = buildBriefing(ctx, "EXECUTING", plan);
   const result = await callModel(ctx, {
@@ -1154,6 +1306,7 @@ async function executePhase(ctx: LoopContext): Promise<ModelCallResult> {
       stepCountIs(remainingPhase),
       () => checkBudget(ctx) !== null,
       () => ctx.stallReason !== null || ctx.replans > ctx.limits.maxReplans,
+      () => ctx.progressWarningPending,
       () => ctx.signal.aborted,
     ],
   });
@@ -1174,12 +1327,7 @@ async function executePhase(ctx: LoopContext): Promise<ModelCallResult> {
       terminal: {
         state: "STALLED",
         stopReason: "stalled",
-        error:
-          ctx.stallReason === "repeated_action"
-            ? "La corrida se estancó repitiendo la misma acción."
-            : ctx.stallReason === "replans_exhausted"
-              ? "Se agotaron las replanificaciones."
-              : "La corrida se estancó sin progreso.",
+        error: stallError(ctx),
       },
     };
   }
@@ -1486,10 +1634,10 @@ async function createLoopContext(options: RunAutonomousLoopOptions): Promise<Loo
     lastTypeCheckOk: null,
     lastVerification: null,
     lastEventSeq: null,
-    noProgressSteps: 0,
-    lastActionFingerprint: null,
-    identicalActionCount: 0,
+    progress: createProgressTracker(limits),
     stallReason: null,
+    stallMessage: null,
+    progressWarningPending: false,
     warnings: [],
     warningSet: new Set(),
     transcript,
@@ -1563,16 +1711,7 @@ async function runWithContext(ctx: LoopContext): Promise<AutonomousLoopResult> {
       return finalize(ctx, decision.state, decision.stopReason, decision.error);
     }
     if (ctx.stallReason) {
-      return finalize(
-        ctx,
-        "STALLED",
-        "stalled",
-        ctx.stallReason === "repeated_action"
-          ? "La corrida se estancó repitiendo la misma acción."
-          : ctx.stallReason === "replans_exhausted"
-            ? "Se agotaron las replanificaciones."
-            : "La corrida se estancó sin progreso.",
-      );
+      return finalize(ctx, "STALLED", "stalled", stallError(ctx));
     }
 
     const budget = checkBudget(ctx);

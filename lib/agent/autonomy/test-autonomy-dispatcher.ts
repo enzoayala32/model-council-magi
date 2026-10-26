@@ -1,5 +1,5 @@
 /**
- * Fase 9C — tests de integración del dispatcher autónomo.
+ * Fase 9C/9D — tests de integración del dispatcher autónomo.
  *
  * Usa un `generateTextImpl` falso (nunca red, nunca modelo real) que imita
  * al AI SDK: llama `prepareStep`, ejecuta las tools REALES de 9B y entrega
@@ -8,7 +8,9 @@
  *
  * Cubre: happy path con proposals, replanificación por acceptance
  * fallida, plan fallback, DONE sin evidencia, corte por presupuesto,
- * cancelación y la regla de Step-0 del failover de credenciales.
+ * cancelación, la regla de Step-0 del failover de credenciales y los
+ * detectores de no-progreso de 9D (warning → recuperación, acción
+ * repetida, no_progress y diff idéntico).
  *
  * Uso: npm run agent:test-autonomy-dispatcher
  */
@@ -114,7 +116,7 @@ function emit(call: FakeCall, stepNumber: number, toolCalls: EmittedCall[], tool
 }
 
 async function main(): Promise<void> {
-  console.log("== Fase 9C — dispatcher autónomo ==\n");
+  console.log("== Fase 9C/9D — dispatcher autónomo ==\n");
 
   const originalCwd = process.cwd();
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), "magi-autonomy-dispatcher-"));
@@ -612,6 +614,212 @@ async function main(): Promise<void> {
       checkEq(failover?.credentialId, "openrouter-1", "el evento usa el id sintético, no la key");
       check(!JSON.stringify(events).includes("fake-key-9c-rotate-a"), "el evento no filtra la API key A");
       check(!JSON.stringify(events).includes("fake-key-9c-rotate-b"), "el evento no filtra la API key B");
+    }
+
+    // -----------------------------------------------------------------------
+    console.log("\n--- 9D: warning por acción repetida → recuperación sin STALLED ---");
+      await resetWorkspace();
+    {
+      const taskId = newTask("Tarea con warning de acción repetida");
+      const plan = {
+        objective: "Implementar con warning",
+        acceptance: [],
+        items: [{ id: "t1", title: "Trabajo", acceptance: [{ kind: "manual", description: "revisar" }] }],
+      };
+      let executingCalls = 0;
+      let warningSeenInBriefing = false;
+      const fake = makeFake({
+        PLANNING: async (call) => {
+          const output = await callTool(call, "update_plan", plan);
+          emit(call, 0, [{ toolCallId: "plan-w", toolName: "update_plan", input: plan }], [{ toolCallId: "plan-w", toolName: "update_plan", input: plan, output }]);
+        },
+        EXECUTING: async (call) => {
+          executingCalls += 1;
+          if (executingCalls === 1) {
+            // Tres lecturas idénticas: el detector avisa en la tercera y la
+            // fase se corta para que el próximo briefing traiga el warning.
+            for (let index = 0; index < 3; index += 1) {
+              const input = { path: "README.md" };
+              const output = await callTool(call, "read_file", input);
+              emit(call, index, [{ toolCallId: `read-w-${index}`, toolName: "read_file", input }], [{ toolCallId: `read-w-${index}`, toolName: "read_file", input, output }]);
+            }
+            return;
+          }
+          warningSeenInBriefing = call.system.includes("Estás repitiendo la misma acción");
+          const startInput = { id: "t1", status: "IN_PROGRESS" };
+          const startOutput = await callTool(call, "update_plan_item", startInput);
+          emit(call, 0, [{ toolCallId: "start-w", toolName: "update_plan_item", input: startInput }], [{ toolCallId: "start-w", toolName: "update_plan_item", input: startInput, output: startOutput }]);
+          const doneInput = { id: "t1", status: "DONE", evidence: [{ kind: "manual", description: "revisado" }] };
+          const doneOutput = await callTool(call, "update_plan_item", doneInput);
+          emit(call, 1, [{ toolCallId: "done-w", toolName: "update_plan_item", input: doneInput }], [{ toolCallId: "done-w", toolName: "update_plan_item", input: doneInput, output: doneOutput }]);
+        },
+        REPLANNING: async () => {
+          throw new Error("No debería replanificar.");
+        },
+      });
+
+      const result = await runAuto(taskId, fake, { maxIdenticalActions: 3 });
+      const events = eventsOf(taskId);
+      const warningEvent = events.find((event) => event.type === "progress_warning");
+
+      checkEq(executingCalls, 2, "la fase se cortó tras el warning y se reanudó con un briefing nuevo");
+      check(warningSeenInBriefing, "el briefing siguiente incluye la advertencia");
+      checkEq(result.state, "DONE", "tras cambiar de estrategia, la corrida termina DONE");
+      checkEq(result.stopReason, "completed", "stopReason completed");
+      checkEq(warningEvent?.type, "progress_warning", "se emitió un evento progress_warning");
+      checkEq(warningEvent?.detector, "repeated_action", "el warning es de repeated_action");
+      checkEq(warningEvent?.count, 3, "el warning reporta 3 repeticiones");
+      checkEq(warningEvent?.threshold, 3, "el warning reporta el umbral 3");
+      check(result.transcript.some((line) => line.includes("Estás repitiendo la misma acción")), "el transcript registra el warning");
+      check(!JSON.stringify(events).includes("workspace de prueba 9C"), "ningún evento filtra el contenido leído");
+    }
+
+    // -----------------------------------------------------------------------
+    console.log("\n--- 9D: acción repetida después del warning → STALLED ---");
+      await resetWorkspace();
+    {
+      const taskId = newTask("Tarea que repite una acción");
+      const plan = {
+        objective: "Implementar repitiendo",
+        acceptance: [],
+        items: [{ id: "t1", title: "Trabajo", acceptance: [{ kind: "manual", description: "revisar" }] }],
+      };
+      let executingCalls = 0;
+      const fake = makeFake({
+        PLANNING: async (call) => {
+          const output = await callTool(call, "update_plan", plan);
+          emit(call, 0, [{ toolCallId: "plan-ra", toolName: "update_plan", input: plan }], [{ toolCallId: "plan-ra", toolName: "update_plan", input: plan, output }]);
+        },
+        EXECUTING: async (call) => {
+          executingCalls += 1;
+          const count = executingCalls === 1 ? 2 : 1;
+          for (let index = 0; index < count; index += 1) {
+            const input = { path: "README.md" };
+            const output = await callTool(call, "read_file", input);
+            emit(call, index, [{ toolCallId: `read-ra-${executingCalls}-${index}`, toolName: "read_file", input }], [{ toolCallId: `read-ra-${executingCalls}-${index}`, toolName: "read_file", input, output }]);
+          }
+        },
+        REPLANNING: async () => {
+          throw new Error("No debería replanificar.");
+        },
+      });
+
+      const result = await runAuto(taskId, fake, { maxIdenticalActions: 2 });
+      const events = eventsOf(taskId);
+      const warnings = events.filter((event) => event.type === "progress_warning");
+
+      checkEq(executingCalls, 2, "la corrida se detuvo en la segunda fase");
+      checkEq(result.state, "STALLED", "repetir después del warning termina STALLED");
+      checkEq(result.stopReason, "stalled", "stopReason stalled");
+      checkEq(warnings.length, 1, "solo se emite un warning antes de escalar");
+      checkEq(warnings[0]?.detector, "repeated_action", "el warning es de repeated_action");
+      checkEq(warnings[0]?.count, 2, "el warning reporta el umbral 2");
+      check(result.transcript.some((line) => line.includes("repitiendo la misma acción")), "el transcript explica el estancamiento");
+      checkEq(planOf(taskId, 1)?.items[0]?.status, "PENDING", "el item no avanzó");
+    }
+
+    // -----------------------------------------------------------------------
+    console.log("\n--- 9D: no_progress con lecturas distintas → STALLED ---");
+      await resetWorkspace();
+    {
+      const taskId = newTask("Tarea que solo lee");
+      const plan = {
+        objective: "Implementar leyendo",
+        acceptance: [],
+        items: [{ id: "t1", title: "Trabajo", acceptance: [{ kind: "manual", description: "revisar" }] }],
+      };
+      let executingCalls = 0;
+      const fake = makeFake({
+        PLANNING: async (call) => {
+          const output = await callTool(call, "update_plan", plan);
+          emit(call, 0, [{ toolCallId: "plan-np", toolName: "update_plan", input: plan }], [{ toolCallId: "plan-np", toolName: "update_plan", input: plan, output }]);
+        },
+        EXECUTING: async (call) => {
+          executingCalls += 1;
+          if (executingCalls === 1) {
+            const reads = [
+              { tool: "read_file", input: { path: "README.md" } },
+              { tool: "read_file", input: { path: "package.json" } },
+              { tool: "list_files", input: { extension: "json" } },
+            ];
+            for (let index = 0; index < reads.length; index += 1) {
+              const entry = reads[index]!;
+              const output = await callTool(call, entry.tool, entry.input);
+              emit(call, index, [{ toolCallId: `np-${index}`, toolName: entry.tool, input: entry.input }], [{ toolCallId: `np-${index}`, toolName: entry.tool, input: entry.input, output }]);
+            }
+            return;
+          }
+          const input = { extension: "ts" };
+          const output = await callTool(call, "list_files", input);
+          emit(call, 0, [{ toolCallId: "np-ts", toolName: "list_files", input }], [{ toolCallId: "np-ts", toolName: "list_files", input, output }]);
+        },
+        REPLANNING: async () => {
+          throw new Error("No debería replanificar.");
+        },
+      });
+
+      const result = await runAuto(taskId, fake, { maxNoProgressSteps: 3 });
+      const events = eventsOf(taskId);
+      const warnings = events.filter((event) => event.type === "progress_warning");
+
+      checkEq(executingCalls, 2, "la corrida se detuvo en la segunda fase");
+      checkEq(result.state, "STALLED", "leer sin avanzar termina STALLED");
+      checkEq(result.stopReason, "stalled", "stopReason stalled");
+      checkEq(warnings.length, 1, "solo se emite un warning antes de escalar");
+      checkEq(warnings[0]?.detector, "no_progress", "el warning es de no_progress");
+      checkEq(warnings[0]?.count, 3, "el warning reporta el umbral 3");
+      check(result.transcript.some((line) => line.includes("No hubo avance de ledger")), "el transcript explica la falta de progreso");
+      checkEq(planOf(taskId, 1)?.items[0]?.status, "PENDING", "el item no avanzó");
+    }
+
+    // -----------------------------------------------------------------------
+    console.log("\n--- 9D: diff idéntico sin completar item → STALLED ---");
+      await resetWorkspace();
+    {
+      const taskId = newTask("Tarea que repite el mismo diff");
+      const plan = {
+        objective: "Implementar con diff repetido",
+        acceptance: [],
+        items: [{ id: "t1", title: "Trabajo", acceptance: [{ kind: "manual", description: "revisar" }] }],
+      };
+      const content = "export const repeat = true;\n";
+      let executingCalls = 0;
+      const fake = makeFake({
+        PLANNING: async (call) => {
+          const output = await callTool(call, "update_plan", plan);
+          emit(call, 0, [{ toolCallId: "plan-id", toolName: "update_plan", input: plan }], [{ toolCallId: "plan-id", toolName: "update_plan", input: plan, output }]);
+        },
+        EXECUTING: async (call) => {
+          executingCalls += 1;
+          const count = executingCalls === 1 ? 2 : 1;
+          for (let index = 0; index < count; index += 1) {
+            const input = { path: "src/repeat.ts", content };
+            const output = await callTool(call, "write_file", input);
+            emit(call, index, [{ toolCallId: `id-${executingCalls}-${index}`, toolName: "write_file", input }], [{ toolCallId: `id-${executingCalls}-${index}`, toolName: "write_file", input: { path: "src/repeat.ts" }, output }]);
+          }
+        },
+        REPLANNING: async () => {
+          throw new Error("No debería replanificar.");
+        },
+      });
+
+      // maxIdenticalActions alto para aislar identical_diff: la acción se
+      // repite, pero el detector de diff tiene prioridad más baja y debe ser
+      // el que explique el estancamiento.
+      const result = await runAuto(taskId, fake, { maxIdenticalActions: 10, maxIdenticalDiffs: 2 });
+      const events = eventsOf(taskId);
+      const warnings = events.filter((event) => event.type === "progress_warning");
+
+      checkEq(executingCalls, 2, "la corrida se detuvo en la segunda fase");
+      checkEq(result.state, "STALLED", "repetir el mismo diff termina STALLED");
+      checkEq(result.stopReason, "stalled", "stopReason stalled");
+      checkEq(warnings.length, 1, "solo se emite un warning antes de escalar");
+      checkEq(warnings[0]?.detector, "identical_diff", "el warning es de identical_diff");
+      checkEq(warnings[0]?.count, 2, "el warning reporta el umbral 2");
+      check(result.transcript.some((line) => line.includes("repitiendo el mismo diff")), "el transcript explica el diff repetido");
+      checkEq(result.proposals.length, 1, "STALLED conserva el trabajo parcial para revisión");
+      checkEq(result.outcome.status, "READY_FOR_REVIEW", "con proposals, el outcome es READY_FOR_REVIEW");
+      checkEq(planOf(taskId, 1)?.items[0]?.status, "PENDING", "el item no se marcó DONE");
     }
 
     console.log("\n--- Resultado ---");
