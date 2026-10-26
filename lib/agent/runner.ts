@@ -11,11 +11,28 @@ import {
 } from "./task-store";
 import { getProject } from "./project-store";
 import { createWorkspaceForTask, destroyWorkspaceForTask, loadWorkspaceForTask, type TaskWorkspace } from "./workspace-manager";
-import { runAgentLoop, type AgentLoopResult, type RunAgentLoopOptions } from "./loop";
+import { runAgentLoop, type AgentFileProposal, type AgentLoopResult, type RunAgentLoopOptions } from "./loop";
+import {
+  runAutonomousLoop,
+  type AutonomousLoopResult,
+  type RunAutonomousLoopOptions,
+} from "./autonomy/dispatcher";
+import type { AutonomyTaskOutcome } from "./autonomy/contract";
 import { appendEvent } from "./event-log";
 import { persistProposals } from "./proposal-store";
 
 type LoopRunner = (options: RunAgentLoopOptions) => Promise<AgentLoopResult>;
+type AutonomyRunner = (options: RunAutonomousLoopOptions) => Promise<AutonomousLoopResult>;
+
+/** Resultado normalizado de cualquiera de los dos loops. `outcome` solo
+ * existe en la ruta autónoma (9C) y es la fuente de verdad del estado de
+ * la task; el camino legacy sigue decidiendo por `error`/`proposals`. */
+type TaskRunResult = {
+  error?: string;
+  stopReason: string | null;
+  proposals: AgentFileProposal[];
+  outcome?: AutonomyTaskOutcome;
+};
 
 /** Tope de reintentos automáticos por restart antes de rendirse y dejar la
  * task en `INTERRUPTED` para que la mire un humano — ver diseño de Fase 3,
@@ -67,7 +84,24 @@ export type RunTaskOptions = {
    * task de verdad SIEMPRE debe usar `runAgentLoop`; nunca se pasa este
    * parámetro fuera de un test. */
   loopRunner?: LoopRunner;
+  /** Fase 9C — inyectable solo para pruebas. Su presencia implica usar la
+   * ruta autónoma (además del flag de entorno), para que un test no
+   * dependa de variables globales. */
+  autonomyRunner?: AutonomyRunner;
 };
+
+/** Fase 9C — la autonomía es opt-in. Sin `MAGI_AUTONOMOUS_LOOP=1` (o un
+ * `autonomyRunner` inyectado por un test), el camino legacy queda
+ * exactamente igual que en Fase 8. */
+export function autonomousLoopEnabled(): boolean {
+  const raw = process.env.MAGI_AUTONOMOUS_LOOP?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
+export function resolveRunnerKind(opts: Pick<RunTaskOptions, "autonomyRunner"> = {}): "autonomy" | "legacy" {
+  if (opts.autonomyRunner) return "autonomy";
+  return autonomousLoopEnabled() ? "autonomy" : "legacy";
+}
 
 /** Fase 8D — el motor de contexto se enciende en producción (tasks reales
  * del Agent) y se puede apagar con `MAGI_CONTEXT_ENGINE_DISABLED=1` sin
@@ -78,6 +112,44 @@ export type RunTaskOptions = {
 function contextEngineEnabled(): boolean {
   const raw = process.env.MAGI_CONTEXT_ENGINE_DISABLED?.trim().toLowerCase();
   return !(raw === "1" || raw === "true" || raw === "yes" || raw === "on");
+}
+
+/** Fase 9C — adapta el resultado autónomo al mismo shape que consume el
+ * mapeo de estados de `runTask`. El estado de la task lo decide
+ * `outcome.status` (contrato 9A), no la mera presencia de `error`: un
+ * `BLOCKED`/`STALLED` con proposals debe poder ir a `READY_FOR_REVIEW`. */
+async function runAutonomyForTask(
+  task: CodingTask,
+  workspace: TaskWorkspace,
+  signal: AbortSignal,
+  runner: AutonomyRunner,
+): Promise<TaskRunResult> {
+  const result = await runner({
+    taskId: task.id,
+    task: task.prompt,
+    workspaceRoot: workspace.worktreePath,
+    repoRoot: workspace.basePath,
+    modelId: task.modelId,
+    workspaceId: workspace.id,
+    baseCommit: workspace.baseCommit,
+    abortSignal: signal,
+    contextEngine: { enabled: contextEngineEnabled() },
+  });
+
+  // Un FAILED puede venir de un `state` STALLED/BUDGET_EXHAUSTED/BLOCKED
+  // sin proposals: en ese caso el loop no trae `error`, así que se sintetiza
+  // uno con el estado real para que la task no quede FAILED sin diagnóstico.
+  const error =
+    result.outcome.status === "FAILED"
+      ? result.error ?? `La corrida autónoma terminó ${result.state} (${result.outcome.stopReason}).`
+      : undefined;
+
+  return {
+    error,
+    stopReason: result.outcome.stopReason,
+    proposals: result.proposals,
+    outcome: result.outcome,
+  };
 }
 
 /**
@@ -134,6 +206,7 @@ function contextEngineEnabled(): boolean {
  */
 export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promise<boolean> {
   const loopRunner = opts.loopRunner ?? runAgentLoop;
+  const useAutonomy = resolveRunnerKind(opts) === "autonomy";
 
   const task = getTask(taskId);
   if (!task) throw new Error(`No existe la task ${taskId}`);
@@ -176,21 +249,44 @@ export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promis
     // workspace en sí.
     updateTaskFields(taskId, { baseCommit: workspace.baseCommit });
 
-    const result = await loopRunner({
-      task: task.prompt,
-      workspaceRoot: workspace.worktreePath,
-      repoRoot: workspace.basePath,
-      modelId: task.modelId,
-      abortSignal: abortController.signal,
-      taskId,
-      // Fase 8D: encendido para tasks reales; `MAGI_CONTEXT_ENGINE_DISABLED=1`
-      // restaura el comportamiento previo sin recompilar. El governor sigue
-      // apagado (8E) hasta que se apruebe explícitamente.
-      contextEngine: { enabled: contextEngineEnabled() },
-    });
+    const result: TaskRunResult = useAutonomy
+      ? await runAutonomyForTask(task, workspace, abortController.signal, opts.autonomyRunner ?? runAutonomousLoop)
+      : await loopRunner({
+          task: task.prompt,
+          workspaceRoot: workspace.worktreePath,
+          repoRoot: workspace.basePath,
+          modelId: task.modelId,
+          abortSignal: abortController.signal,
+          taskId,
+          // Fase 8D: encendido para tasks reales; `MAGI_CONTEXT_ENGINE_DISABLED=1`
+          // restaura el comportamiento previo sin recompilar. El governor sigue
+          // apagado (8E) hasta que se apruebe explícitamente.
+          contextEngine: { enabled: contextEngineEnabled() },
+        });
 
     if (abortController.signal.aborted) {
       transitionAndLog(taskId, "CANCELLED");
+    } else if (result.outcome) {
+      // Fase 9C: el contrato autónomo ya resolvió el estado real de la
+      // task (incluido BLOCKED/STALLED/BUDGET_EXHAUSTED con trabajo
+      // parcial). No se reinterpreta a partir de `error`.
+      switch (result.outcome.status) {
+        case "FAILED":
+          transitionAndLog(taskId, "FAILED", { error: result.error, stopReason: result.stopReason }, result.error);
+          break;
+        case "CANCELLED":
+          transitionAndLog(taskId, "CANCELLED");
+          break;
+        case "READY_FOR_REVIEW":
+          // Fase 2F: persistir ANTES de transicionar, por la misma razón
+          // que en el camino legacy.
+          persistProposals(taskId, result.proposals);
+          transitionAndLog(taskId, "READY_FOR_REVIEW", { stopReason: result.stopReason });
+          break;
+        case "NO_CHANGES":
+          transitionAndLog(taskId, "NO_CHANGES", { stopReason: result.stopReason });
+          break;
+      }
     } else if (result.error) {
       transitionAndLog(taskId, "FAILED", { error: result.error, stopReason: result.stopReason }, result.error);
     } else if (result.proposals.length > 0) {

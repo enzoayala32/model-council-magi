@@ -156,7 +156,7 @@ const RUN_SCRIPT_ALLOWED_NAMES = ["build", "test", "lint"] as const;
  * scripts declarados contra `RUN_SCRIPT_ALLOWED_NAMES`. Nunca tira: si no
  * hay `package.json`, o no se puede parsear, devuelve `[]` (equivale a
  * "no ofrecer `run_script` en esta corrida"), no a un error de la task. */
-async function detectAllowedScripts(workspaceRoot: string): Promise<string[]> {
+export async function detectAllowedScripts(workspaceRoot: string): Promise<string[]> {
   try {
     const fs = await import("node:fs/promises");
     const raw = await fs.readFile(path.join(workspaceRoot, "package.json"), "utf-8");
@@ -185,7 +185,7 @@ export function sha256(text: string): string {
   return crypto.createHash("sha256").update(text, "utf-8").digest("hex");
 }
 
-function buildSystemPrompt(allowedScripts: string[], searchEnabled: boolean): string {
+export function buildSystemPrompt(allowedScripts: string[], searchEnabled: boolean): string {
   const runScriptLine =
     allowedScripts.length > 0
       ? `\n- run_script: corre uno de estos scripts del proyecto — ${allowedScripts.join(", ")} — siempre vía "npm run <nombre>". Usalo además de run_typecheck cuando corresponda (por ejemplo, correr los tests si la tarea tocó lógica, o el build si tocó algo que podría no compilar más allá del typecheck).`
@@ -271,7 +271,7 @@ function buildGoogleModel(modelId: string, apiKey: string) {
  * usaba `buildModelForId` (y que usa `runCouncilCompletion` en
  * `lib/council-run.ts` para el Council): todo modelo es OpenRouter por
  * default, salvo que `models.ts` lo tenga marcado como `"nvidia"`/`"google"`. */
-function resolveProviderName(modelId: string): ProviderName {
+export function resolveProviderName(modelId: string): ProviderName {
   const councilModel = getCouncilModel(modelId);
   if (councilModel?.provider === "nvidia") return "nvidia";
   if (councilModel?.provider === "google") return "google";
@@ -283,7 +283,7 @@ function resolveProviderName(modelId: string): ProviderName {
  * lo resuelve una sola vez en `runAgentLoop`, para elegir el pool correcto
  * ANTES de pedir una credential) y la `apiKey` de la credential que el
  * pool ya entregó. */
-function buildModelForId(providerName: ProviderName, modelId: string, apiKey: string) {
+export function buildModelForId(providerName: ProviderName, modelId: string, apiKey: string) {
   if (providerName === "nvidia") return buildNvidiaModel(modelId, apiKey);
   if (providerName === "google") return buildGoogleModel(modelId, apiKey);
   return buildOpenRouterModel(modelId, apiKey);
@@ -306,7 +306,7 @@ function buildModelForId(providerName: ProviderName, modelId: string, apiKey: st
  * `statusCode` cae en `unknown` (conservador: 1 reintento conservador,
  * sin tocar el pool, sin failover automático — ya definido así en
  * `classify.ts`, sin necesidad de tocarlo). */
-function toProviderErrorInput(error: unknown): ProviderErrorInput {
+export function toProviderErrorInput(error: unknown): ProviderErrorInput {
   if (error && typeof error === "object" && "statusCode" in error) {
     const statusCode = (error as { statusCode?: unknown }).statusCode;
     if (typeof statusCode === "number") {
@@ -337,7 +337,7 @@ function toProviderErrorInput(error: unknown): ProviderErrorInput {
  * su contrato (ya aprobado) descarta propiedades como `.responseBody` al
  * envolver el error — perdería justo el enriquecimiento que este helper
  * existe para preservar. */
-function buildErrorMessage(error: unknown): string {
+export function buildErrorMessage(error: unknown): string {
   const responseBody = error && typeof error === "object" && "responseBody" in error ? String((error as { responseBody?: unknown }).responseBody ?? "").slice(0, 2000) : null;
   const baseMessage = error instanceof Error ? error.message : "Error desconocido en el loop del agente.";
   return responseBody ? `${baseMessage} — respuesta del proveedor: ${responseBody}` : baseMessage;
@@ -805,7 +805,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
  * git — no hace falta snapshotear contenido "antes" a mano. `rawGitStatus`
  * se recibe ya calculado (no se vuelve a pedir acá) para que quien llama
  * pueda loguear la salida cruda si hace falta diagnosticar una discrepancia. */
-async function buildProposals(rawGitStatus: string, workspaceRoot: string, lastTypeCheckOk: boolean | null): Promise<AgentFileProposal[]> {
+export async function buildProposals(rawGitStatus: string, workspaceRoot: string, lastTypeCheckOk: boolean | null): Promise<AgentFileProposal[]> {
   const lines = rawGitStatus.split("\n").filter(Boolean);
 
   const typeCheck: TypeCheckResult =
