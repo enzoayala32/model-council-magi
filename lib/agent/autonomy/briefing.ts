@@ -58,6 +58,11 @@ export type AutonomyBriefingInput = {
   warnings?: string[];
   lastVerification?: BriefingVerification | null;
   budget?: BriefingBudget;
+  /** Fase 9E — presente solo cuando la corrida se reanuda. */
+  resume?: {
+    ofRunId: string;
+    verifiedAt: number;
+  };
   maxChars?: number;
 };
 
@@ -126,6 +131,13 @@ export function buildAutonomyBriefing(input: AutonomyBriefingInput): string {
     const b = input.budget;
     header.push(
       `Presupuesto: ${b.stepsUsed}/${b.maxSteps} pasos · ${b.tokensUsed}/${b.maxTokens} tokens · ${Math.round(b.wallTimeMs / 1000)}s/${Math.round(b.maxWallTimeMs / 1000)}s · replans ${b.replansUsed}/${b.maxReplans}`,
+    );
+  }
+
+  if (input.resume) {
+    const verifiedAt = new Date(input.resume.verifiedAt).toISOString();
+    header.push(
+      `Reanudación: corrida ${input.resume.ofRunId.slice(0, 8)}. El workspace fue verificado a las ${verifiedAt}; no asumas que el estado es el del resumen: releé lo que necesites.`,
     );
   }
 

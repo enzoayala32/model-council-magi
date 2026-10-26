@@ -17,7 +17,28 @@ import {
   type AutonomousLoopResult,
   type RunAutonomousLoopOptions,
 } from "./autonomy/dispatcher";
-import type { AutonomyTaskOutcome } from "./autonomy/contract";
+import { DEFAULT_AUTONOMY_LIMITS, type AutonomyTaskOutcome } from "./autonomy/contract";
+import {
+  cancelResumeRequest,
+  closeRunForRestart,
+  getActivePlan,
+  getActiveRunForTask,
+  getFileCheckpoints,
+  getPlanVersion,
+  getResumeChainLength,
+  getResumeSourceForTask,
+  getRun,
+  getStepsForRun,
+  invalidatePlanItemsForPaths,
+  requestResumeAndClose,
+  resetPlanForRestart,
+} from "./autonomy/ledger";
+import {
+  inspectWorkspaceForResume,
+  resumeAffectedPaths,
+  type ResumeContext,
+  type ResumeVerdict,
+} from "./autonomy/resume";
 import { appendEvent } from "./event-log";
 import { persistProposals } from "./proposal-store";
 
@@ -123,6 +144,7 @@ async function runAutonomyForTask(
   workspace: TaskWorkspace,
   signal: AbortSignal,
   runner: AutonomyRunner,
+  resume?: ResumeContext,
 ): Promise<TaskRunResult> {
   const result = await runner({
     taskId: task.id,
@@ -132,6 +154,7 @@ async function runAutonomyForTask(
     modelId: task.modelId,
     workspaceId: workspace.id,
     baseCommit: workspace.baseCommit,
+    resume,
     abortSignal: signal,
     contextEngine: { enabled: contextEngineEnabled() },
   });
@@ -149,6 +172,112 @@ async function runAutonomyForTask(
     stopReason: result.outcome.stopReason,
     proposals: result.proposals,
     outcome: result.outcome,
+  };
+}
+
+function resumePlanForTask(taskId: string, runId: string) {
+  const run = getRun(runId);
+  if (!run) return null;
+  return run.planVersion > 0 ? getPlanVersion(taskId, run.planVersion) : getActivePlan(taskId);
+}
+
+/** Fase 9E — abandona un pedido de reanudación: cancela el flag, marca el
+ * plan como historial y destruye el workspace viejo. Se usa cuando el
+ * runner decide que no puede reanudar (workspace ausente/drift de base) o
+ * cuando la autonomía está apagada. */
+async function abandonResumeForTask(taskId: string, sourceRunId: string, reason: string): Promise<void> {
+  const plan = resumePlanForTask(taskId, sourceRunId);
+  if (plan) {
+    try {
+      resetPlanForRestart(plan.id, reason);
+    } catch (error) {
+      console.warn(`[Coding Agent] no se pudo resetear el plan de la task ${taskId} al abandonar la reanudación:`, error);
+    }
+  }
+  try {
+    cancelResumeRequest(sourceRunId);
+  } catch (error) {
+    console.warn(`[Coding Agent] no se pudo cancelar el pedido de reanudación ${sourceRunId}:`, error);
+  }
+  await destroyWorkspaceBestEffort(taskId);
+}
+
+function resumeWarningText(verdict: ResumeVerdict): string[] {
+  return verdict.warnings.map((warning) => warning.message);
+}
+
+/** Fase 9E — revalida el workspace contra el último checkpoint y arma el
+ * `ResumeContext` que consume el dispatcher. Devuelve `null` si no hay
+ * pedido pendiente o si el workspace ya no es reanudable; en ese caso deja
+ * todo listo para un restart desde cero. */
+async function prepareResumeForTask(
+  task: CodingTask,
+): Promise<{ workspace: TaskWorkspace; resume: ResumeContext } | null> {
+  const source = getResumeSourceForTask(task.id);
+  if (!source) return null;
+
+  const workspace = loadWorkspaceForTask(task.id);
+  if (!workspace) {
+    await abandonResumeForTask(task.id, source.id, "Workspace ausente al reanudar; se reinicia desde cero.");
+    return null;
+  }
+
+  const plan = resumePlanForTask(task.id, source.id);
+  const checkpoints = getFileCheckpoints(source.id);
+  let verdict: ResumeVerdict;
+  try {
+    verdict = await inspectWorkspaceForResume({
+      worktreePath: workspace.worktreePath,
+      repoRoot: workspace.basePath,
+      baseCommit: workspace.baseCommit ?? task.baseCommit ?? source.baseCommit,
+      checkpointHead: source.headCommit ?? workspace.baseCommit ?? task.baseCommit,
+      checkpoints,
+    });
+  } catch (error) {
+    console.warn(`[Coding Agent] la verificación de reanudación de ${task.id} falló (se reinicia desde cero):`, error);
+    await abandonResumeForTask(task.id, source.id, "No se pudo verificar el workspace; se reinicia desde cero.");
+    return null;
+  }
+
+  if (!verdict.resumable) {
+    await abandonResumeForTask(
+      task.id,
+      source.id,
+      `Workspace no reanudable (${verdict.reason}); se reinicia desde cero.`,
+    );
+    return null;
+  }
+
+  const affected = resumeAffectedPaths(verdict);
+  if (plan && (affected.drifted.length > 0 || affected.missing.length > 0)) {
+    try {
+      invalidatePlanItemsForPaths(
+        plan.id,
+        [...affected.drifted, ...affected.missing],
+        "Evidencia invalidada por drift/archivo ausente durante la reanudación.",
+      );
+    } catch (error) {
+      console.warn(`[Coding Agent] no se pudo invalidar evidencia drift de ${task.id}:`, error);
+    }
+  }
+
+  const planValid = Boolean(plan && plan.items.length > 0);
+  const warnings = resumeWarningText(verdict);
+  if (!planValid) {
+    warnings.push("El plan persistido no es utilizable; se replanifica desde el estado actual del workspace.");
+  }
+
+  return {
+    workspace,
+    resume: {
+      ofRunId: source.id,
+      planVersion: planValid ? source.planVersion : 0,
+      headCommit: verdict.headCommit ?? source.headCommit ?? workspace.baseCommit,
+      attempt: getResumeChainLength(source.id) + 1,
+      warnings,
+      verifiedAt: verdict.verifiedAt,
+      budget: source.budget,
+    },
   };
 }
 
@@ -241,7 +370,29 @@ export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promis
       );
     }
 
-    workspace = await createWorkspaceForTask(task, project);
+    // Fase 9E: si la reconciliación de boot dejó un pedido de reanudación,
+    // se revalida el workspace y se reutiliza. Si no es reanudable, el
+    // helper ya lo destruyó y dejó el plan como historial: se crea uno
+    // nuevo abajo, exactamente como un restart desde cero.
+    let resume: ResumeContext | null = null;
+    const pendingResume = getResumeSourceForTask(taskId);
+    if (pendingResume) {
+      if (useAutonomy) {
+        const prepared = await prepareResumeForTask(task);
+        if (prepared) {
+          workspace = prepared.workspace;
+          resume = prepared.resume;
+        }
+      } else {
+        // La autonomía se apagó entre el crash y el claim: el loop legacy
+        // no entiende el plan/ledger, así que se reencola desde cero.
+        await abandonResumeForTask(taskId, pendingResume.id, "Autonomía desactivada; se reinicia desde cero.");
+      }
+    }
+
+    if (!workspace) {
+      workspace = await createWorkspaceForTask(task, project);
+    }
     // Fase 3: `workspaceId` YA quedó apuntado correctamente por
     // `recordWorkspaceCreated` (dentro de createWorkspaceForTask), en la
     // misma transacción que crea el registro — acá solo hace falta
@@ -250,7 +401,7 @@ export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promis
     updateTaskFields(taskId, { baseCommit: workspace.baseCommit });
 
     const result: TaskRunResult = useAutonomy
-      ? await runAutonomyForTask(task, workspace, abortController.signal, opts.autonomyRunner ?? runAutonomousLoop)
+      ? await runAutonomyForTask(task, workspace, abortController.signal, opts.autonomyRunner ?? runAutonomousLoop, resume ?? undefined)
       : await loopRunner({
           task: task.prompt,
           workspaceRoot: workspace.worktreePath,
@@ -393,10 +544,16 @@ async function destroyWorkspaceBestEffort(taskId: string): Promise<void> {
  * aplica a este caso) ni destruye el workspace (puede seguir siendo
  * necesario para terminar de aplicar a mano).
  */
-export async function reconcileOrphanedTasks(): Promise<{ requeued: string[]; interrupted: string[]; recoveredApplying: string[] }> {
+export async function reconcileOrphanedTasks(): Promise<{
+  requeued: string[];
+  interrupted: string[];
+  recoveredApplying: string[];
+  resumed: string[];
+}> {
   const requeued: string[] = [];
   const interrupted: string[] = [];
   const recoveredApplying: string[] = [];
+  const resumed: string[] = [];
 
   for (const task of listTasks({ status: "RUNNING" })) {
     // Si por algún motivo SÍ hay una corrida activa en memoria para esta
@@ -404,33 +561,176 @@ export async function reconcileOrphanedTasks(): Promise<{ requeued: string[]; in
     // tocamos — la reconciliación es solo para huérfanas de verdad.
     if (isTaskActive(task.id)) continue;
 
-    // Best-effort ANTES de decidir el destino — un workspace a medio
-    // terminar (o ya borrado a mano) nunca debe impedir la transición.
-    await destroyWorkspaceBestEffort(task.id);
+    const activeRun = getActiveRunForTask(task.id);
 
+    // Sin corrida de Fase 9: comportamiento legacy exacto (restart desde
+    // cero, con el workspace destruido antes de reencolar).
+    if (!activeRun) {
+      // Best-effort ANTES de decidir el destino — un workspace a medio
+      // terminar (o ya borrado a mano) nunca debe impedir la transición.
+      await destroyWorkspaceBestEffort(task.id);
+
+      if (task.restartRetryCount >= MAX_AUTO_RESTART_RETRIES) {
+        transitionAndLog(
+          task.id,
+          "INTERRUPTED",
+          undefined,
+          `${MAX_AUTO_RESTART_RETRIES} reintentos automáticos agotados sin llegar a un estado estable`,
+        );
+        interrupted.push(task.id);
+        continue;
+      }
+
+      try {
+        transitionAndLog(
+          task.id,
+          "QUEUED",
+          { restartRetryCount: task.restartRetryCount + 1 },
+          `reencolada tras reinicio del servidor (intento ${task.restartRetryCount + 1}/${MAX_AUTO_RESTART_RETRIES})`,
+        );
+        requeued.push(task.id);
+      } catch (error) {
+        // No debería pasar (venimos de leer RUNNING recién), pero si pasa
+        // (otro proceso la tocó justo en el medio), se loguea y se sigue con
+        // las demás — un fallo puntual acá no puede tirar todo el boot abajo.
+        console.error(`[Coding Agent] no se pudo reencolar la task huérfana ${task.id} durante la reconciliación:`, error);
+      }
+      continue;
+    }
+
+    // Fase 9E: a partir de acá hay una corrida autónoma huérfana. Primero
+    // los topes duros; después la verificación real del workspace.
     if (task.restartRetryCount >= MAX_AUTO_RESTART_RETRIES) {
-      transitionAndLog(
-        task.id,
-        "INTERRUPTED",
-        undefined,
-        `${MAX_AUTO_RESTART_RETRIES} reintentos automáticos agotados sin llegar a un estado estable`,
-      );
+      try {
+        closeRunForRestart(activeRun.id, "retries_exhausted", "Reintentos automáticos agotados.");
+      } catch (error) {
+        console.error(`[Coding Agent] no se pudo cerrar la corrida ${activeRun.id} al agotar reintentos:`, error);
+      }
+      await destroyWorkspaceBestEffort(task.id);
+      try {
+        transitionAndLog(
+          task.id,
+          "INTERRUPTED",
+          { stopReason: "retries_exhausted" },
+          `${MAX_AUTO_RESTART_RETRIES} reintentos automáticos agotados sin llegar a un estado estable`,
+        );
+      } catch (error) {
+        console.error(`[Coding Agent] no se pudo interrumpir la task ${task.id} al agotar reintentos:`, error);
+      }
       interrupted.push(task.id);
       continue;
     }
+
+    if (getResumeChainLength(activeRun.id) >= DEFAULT_AUTONOMY_LIMITS.maxResumeAttempts) {
+      try {
+        closeRunForRestart(activeRun.id, "resume_exhausted", "Se agotaron los intentos de reanudación.");
+      } catch (error) {
+        console.error(`[Coding Agent] no se pudo cerrar la corrida ${activeRun.id} al agotar reanudaciones:`, error);
+      }
+      await destroyWorkspaceBestEffort(task.id);
+      try {
+        transitionAndLog(
+          task.id,
+          "INTERRUPTED",
+          { stopReason: "resume_exhausted" },
+          `${DEFAULT_AUTONOMY_LIMITS.maxResumeAttempts} intentos de reanudación agotados`,
+        );
+      } catch (error) {
+        console.error(`[Coding Agent] no se pudo interrumpir la task ${task.id} al agotar reanudaciones:`, error);
+      }
+      interrupted.push(task.id);
+      continue;
+    }
+
+    const workspace = loadWorkspaceForTask(task.id);
+    const plan = resumePlanForTask(task.id, activeRun.id);
+    const checkpoints = getFileCheckpoints(activeRun.id);
+    const hasSteps = getStepsForRun(activeRun.id, 1).length > 0;
+    const hasProgress = Boolean(plan && plan.items.length > 0) || checkpoints.length > 0 || hasSteps;
+
+    let verdict: ResumeVerdict | null = null;
+    if (workspace && hasProgress) {
+      try {
+        verdict = await inspectWorkspaceForResume({
+          worktreePath: workspace.worktreePath,
+          repoRoot: workspace.basePath,
+          baseCommit: workspace.baseCommit ?? task.baseCommit ?? activeRun.baseCommit,
+          checkpointHead: activeRun.headCommit ?? workspace.baseCommit ?? task.baseCommit,
+          checkpoints,
+        });
+      } catch (error) {
+        console.warn(`[Coding Agent] no se pudo verificar el workspace de ${task.id} para reanudar:`, error);
+        verdict = null;
+      }
+    }
+
+    if (workspace && hasProgress && verdict?.resumable) {
+      try {
+        requestResumeAndClose(activeRun.id, "Corrida interrumpida por reinicio del servidor; se reanuda.");
+        const affected = resumeAffectedPaths(verdict);
+        if (plan && (affected.drifted.length > 0 || affected.missing.length > 0)) {
+          invalidatePlanItemsForPaths(
+            plan.id,
+            [...affected.drifted, ...affected.missing],
+            "Evidencia invalidada por drift/archivo ausente durante la reanudación.",
+          );
+        }
+        const warningCount = verdict.warnings.length;
+        const detail =
+          warningCount > 0
+            ? `reanudación verificada con ${warningCount} advertencia(s) (${affected.drifted.length} drift, ${affected.missing.length} ausente(s))`
+            : "reanudación verificada sin drift";
+        transitionAndLog(
+          task.id,
+          "QUEUED",
+          { restartRetryCount: task.restartRetryCount + 1 },
+          `${detail}; intento ${task.restartRetryCount + 1}/${MAX_AUTO_RESTART_RETRIES}`,
+        );
+        requeued.push(task.id);
+        resumed.push(task.id);
+        continue;
+      } catch (error) {
+        // Si algo falló después de marcar el pedido, se limpia para no
+        // dejar una reanudación fantasma y se cae al restart desde cero.
+        console.error(`[Coding Agent] no se pudo preparar la reanudación de ${task.id} (se reinicia desde cero):`, error);
+        try {
+          closeRunForRestart(activeRun.id, "error", "No se pudo preparar la reanudación; se reinicia desde cero.");
+        } catch {
+          // best-effort
+        }
+      }
+    }
+
+    // Restart desde cero: el workspace y el plan viejo quedan solo como
+    // historial. Nunca se pisa un archivo con drift.
+    const restartReason = workspace
+      ? hasProgress
+        ? `workspace no reanudable (${verdict?.reason ?? "verificación fallida"})`
+        : "sin checkpoint utilizable"
+      : "workspace ausente";
+    try {
+      closeRunForRestart(activeRun.id, "error", `Corrida no reanudable: ${restartReason}.`);
+    } catch (error) {
+      console.error(`[Coding Agent] no se pudo cerrar la corrida ${activeRun.id} antes del restart:`, error);
+    }
+    if (plan) {
+      try {
+        resetPlanForRestart(plan.id, `Plan anterior abandonado: ${restartReason}.`);
+      } catch (error) {
+        console.warn(`[Coding Agent] no se pudo resetear el plan ${plan.id} para restart:`, error);
+      }
+    }
+    await destroyWorkspaceBestEffort(task.id);
 
     try {
       transitionAndLog(
         task.id,
         "QUEUED",
         { restartRetryCount: task.restartRetryCount + 1 },
-        `reencolada tras reinicio del servidor (intento ${task.restartRetryCount + 1}/${MAX_AUTO_RESTART_RETRIES})`,
+        `reencolada desde cero (${restartReason}); intento ${task.restartRetryCount + 1}/${MAX_AUTO_RESTART_RETRIES}`,
       );
       requeued.push(task.id);
     } catch (error) {
-      // No debería pasar (venimos de leer RUNNING recién), pero si pasa
-      // (otro proceso la tocó justo en el medio), se loguea y se sigue con
-      // las demás — un fallo puntual acá no puede tirar todo el boot abajo.
       console.error(`[Coding Agent] no se pudo reencolar la task huérfana ${task.id} durante la reconciliación:`, error);
     }
   }
@@ -445,7 +745,7 @@ export async function reconcileOrphanedTasks(): Promise<{ requeued: string[]; in
     }
   }
 
-  return { requeued, interrupted, recoveredApplying };
+  return { requeued, interrupted, recoveredApplying, resumed };
 }
 
 /**

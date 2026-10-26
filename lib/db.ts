@@ -206,6 +206,8 @@ function createConnection(): Database.Database {
       state TEXT NOT NULL,
       stop_reason TEXT,
       resume_of_run_id TEXT REFERENCES agent_runs(id),
+      resume_requested INTEGER NOT NULL DEFAULT 0,
+      resumed_by_run_id TEXT REFERENCES agent_runs(id),
       workspace_id TEXT,
       base_commit TEXT,
       head_commit TEXT,
@@ -330,6 +332,19 @@ function createConnection(): Database.Database {
   if (!columnExists(db, "agent_tasks", "git_commit_error")) {
     db.exec("ALTER TABLE agent_tasks ADD COLUMN git_commit_error TEXT");
   }
+
+  // Fase 9E: columnas aditivas de reanudación. Una DB creada por 9A/9D ya
+  // tiene `agent_runs` sin ellas; CREATE TABLE IF NOT EXISTS no las agrega.
+  if (!columnExists(db, "agent_runs", "resume_requested")) {
+    db.exec("ALTER TABLE agent_runs ADD COLUMN resume_requested INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!columnExists(db, "agent_runs", "resumed_by_run_id")) {
+    db.exec("ALTER TABLE agent_runs ADD COLUMN resumed_by_run_id TEXT");
+  }
+  // El índice va DESPUÉS de los ALTER: en una DB vieja, `agent_runs` todavía
+  // no tiene `resume_requested` cuando corre el schema, y crearlo ahí haría
+  // fallar todo el arranque.
+  db.exec("CREATE INDEX IF NOT EXISTS idx_agent_runs_resume ON agent_runs(task_id, resume_requested)");
 
   const currentVersion = db.pragma("user_version", { simple: true }) as number;
   if (currentVersion !== SCHEMA_VERSION) {

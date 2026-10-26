@@ -184,6 +184,13 @@ export type AutonomyRun = {
   state: AutonomyState;
   stopReason: AutonomyStopReason | null;
   resumeOfRunId: string | null;
+  /** Fase 9E: la reconciliación de boot marcó esta corrida como
+   * reanudable. El runner la consume creando una corrida nueva con
+   * `resumeOfRunId` apuntando acá. */
+  resumeRequested: boolean;
+  /** Fase 9E: corrida nueva que consumió el pedido de reanudación. Evita
+   * reanudar dos veces la misma corrida. */
+  resumedByRunId: string | null;
   workspaceId: string | null;
   baseCommit: string | null;
   headCommit: string | null;

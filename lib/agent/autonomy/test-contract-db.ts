@@ -10,6 +10,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import Database from "better-sqlite3";
 
 let total = 0;
 let failed = 0;
@@ -53,6 +54,35 @@ async function main(): Promise<void> {
   let db: SqliteDb | null = null;
 
   try {
+    // Fase 9E: simula una DB creada por 9A/9D (sin las columnas de
+    // reanudación) para verificar la migración aditiva real. Si el índice
+    // nuevo se creara dentro del schema, este test fallaría al importar
+    // `db.ts` con "no such column: resume_requested".
+    await fs.mkdir(path.join(temp, "data"), { recursive: true });
+    const legacy = new Database(path.join(temp, "data", "council.db"));
+    legacy.exec(`
+      CREATE TABLE agent_runs (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES agent_tasks(id),
+        attempt INTEGER NOT NULL,
+        state TEXT NOT NULL,
+        stop_reason TEXT,
+        resume_of_run_id TEXT REFERENCES agent_runs(id),
+        workspace_id TEXT,
+        base_commit TEXT,
+        head_commit TEXT,
+        plan_version INTEGER NOT NULL DEFAULT 0,
+        budget_json TEXT NOT NULL,
+        last_event_seq INTEGER,
+        error TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        finished_at INTEGER
+      );
+    `);
+    legacy.close();
+    console.log("(DB pre-existente 9A/9D creada sin columnas de reanudación)\n");
+
     process.chdir(temp);
     checkEq(process.cwd(), temp, "el test corre en un cwd temporal");
 
@@ -81,6 +111,7 @@ async function main(): Promise<void> {
     );
     for (const index of [
       "idx_agent_runs_task",
+      "idx_agent_runs_resume",
       "idx_agent_runs_one_active",
       "idx_agent_plans_task",
       "idx_agent_plan_items_plan",
@@ -94,7 +125,16 @@ async function main(): Promise<void> {
     checkEq(db.pragma("user_version", { simple: true }), 1, "SCHEMA_VERSION no cambió (migración aditiva)");
 
     const runColumns = (db.prepare("PRAGMA table_info(agent_runs)").all() as Array<{ name: string }>).map((row) => row.name);
-    for (const column of ["state", "stop_reason", "plan_version", "budget_json", "finished_at", "resume_of_run_id"]) {
+    for (const column of [
+      "state",
+      "stop_reason",
+      "plan_version",
+      "budget_json",
+      "finished_at",
+      "resume_of_run_id",
+      "resume_requested",
+      "resumed_by_run_id",
+    ]) {
       check(runColumns.includes(column), `agent_runs tiene la columna ${column}`);
     }
 

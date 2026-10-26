@@ -21,6 +21,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { ModelMessage } from "ai";
+import type { RunAutonomousLoopOptions } from "./dispatcher";
 
 const execFileAsync = promisify(execFile);
 const sha256 = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
@@ -146,6 +147,7 @@ async function main(): Promise<void> {
     db.pragma("foreign_keys = ON");
 
     const ledger = await import("./ledger");
+    const planModule = await import("./plan");
     const { runAutonomousLoop } = await import("./dispatcher");
     const { __resetProviderPoolsForTests } = await import("../loop");
     const { listEvents } = await import("../event-log");
@@ -175,7 +177,13 @@ async function main(): Promise<void> {
       await execFileAsync("git", ["clean", "-fdx"], { cwd: workspace });
     };
 
-    const runAuto = (taskId: string, fake: (options: unknown) => Promise<unknown>, limits: Partial<AutonomyLimits> = {}, signal?: AbortSignal) =>
+    const runAuto = (
+      taskId: string,
+      fake: (options: unknown) => Promise<unknown>,
+      limits: Partial<AutonomyLimits> = {},
+      signal?: AbortSignal,
+      resume?: RunAutonomousLoopOptions["resume"],
+    ) =>
       runAutonomousLoop({
         taskId,
         task: "Implementar la feature 9C",
@@ -184,6 +192,7 @@ async function main(): Promise<void> {
         modelId: "test/modelo-no-registrado",
         workspaceId: null,
         baseCommit: null,
+        resume,
         abortSignal: signal,
         generateTextImpl: fake as never,
         limits: { maxWallTimeMs: 60_000, ...limits },
@@ -820,6 +829,97 @@ async function main(): Promise<void> {
       checkEq(result.proposals.length, 1, "STALLED conserva el trabajo parcial para revisión");
       checkEq(result.outcome.status, "READY_FOR_REVIEW", "con proposals, el outcome es READY_FOR_REVIEW");
       checkEq(planOf(taskId, 1)?.items[0]?.status, "PENDING", "el item no se marcó DONE");
+    }
+
+    // -----------------------------------------------------------------------
+    console.log("\n--- 9E: resume con checkpoint válido reutiliza el plan ---");
+      await resetWorkspace();
+    {
+      const taskId = newTask("Reanudar feature 9E");
+      const content = "export const resumed = true;\n";
+      const fileHash = sha256(content);
+      const planInput = {
+        objective: "Reanudar feature 9E",
+        acceptance: [{ kind: "manual", description: "revisar el resultado" }],
+        items: [
+          {
+            id: "t1",
+            title: "Escribir src/resumed.ts",
+            acceptance: [{ kind: "manual", description: "revisar el archivo" }],
+            paths: ["src/resumed.ts"],
+          },
+        ],
+      };
+      const normalized = planModule.normalizePlan(planInput);
+      if (!normalized.ok) throw new Error(`Plan de resume inválido: ${normalized.errors.map((error) => error.message).join(" ")}`);
+
+      const head = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: workspace })).stdout.trim();
+      const source = ledger.createRun({ taskId, state: "EXECUTING", baseCommit: head });
+      const saved = ledger.savePlanVersion({ taskId, runId: source.id, plan: normalized.plan, source: "model" });
+      const resumeBudget = { steps: 5, wallTimeMs: 120, inputTokens: 200, outputTokens: 20, estimatedCostUsd: null };
+      ledger.recordStepCheckpoint({
+        step: {
+          runId: source.id,
+          stepIndex: 0,
+          phase: "EXECUTING",
+          actions: [
+            { toolCallId: "source-1", toolName: "write_file", inputHash: "a".repeat(64), ok: true, files: ["src/resumed.ts"] },
+          ],
+        },
+        run: { budget: resumeBudget, planVersion: saved.version, headCommit: head },
+      });
+      ledger.requestResumeAndClose(source.id, "test resume 9E");
+
+      let executingSystem = "";
+      const fake = makeFake({
+        PLANNING: async () => {
+          throw new Error("No debería replanificar: el plan persistido es válido.");
+        },
+        EXECUTING: async (call) => {
+          executingSystem = call.system;
+          const writeInput = { path: "src/resumed.ts", content };
+          const writeOutput = await callTool(call, "write_file", writeInput);
+          emit(call, 0, [{ toolCallId: "resume-write", toolName: "write_file", input: writeInput }], [{ toolCallId: "resume-write", toolName: "write_file", input: { path: "src/resumed.ts" }, output: writeOutput }]);
+
+          const startInput = { id: "t1", status: "IN_PROGRESS" };
+          const startOutput = await callTool(call, "update_plan_item", startInput);
+          emit(call, 1, [{ toolCallId: "resume-start", toolName: "update_plan_item", input: startInput }], [{ toolCallId: "resume-start", toolName: "update_plan_item", input: startInput, output: startOutput }]);
+
+          const doneInput = { id: "t1", status: "DONE", evidence: [{ kind: "file", path: "src/resumed.ts", sha256: fileHash }] };
+          const doneOutput = await callTool(call, "update_plan_item", doneInput);
+          emit(call, 2, [{ toolCallId: "resume-done", toolName: "update_plan_item", input: doneInput }], [{ toolCallId: "resume-done", toolName: "update_plan_item", input: doneInput, output: doneOutput }]);
+        },
+        REPLANNING: async () => {
+          throw new Error("No debería replanificar.");
+        },
+      });
+
+      const result = await runAuto(taskId, fake, {}, undefined, {
+        ofRunId: source.id,
+        planVersion: saved.version,
+        headCommit: head,
+        attempt: 1,
+        warnings: ["El archivo src/resumed.ts cambió desde el checkpoint (drift simulado)."],
+        verifiedAt: Date.now(),
+        budget: resumeBudget,
+      });
+      const runs = ledger.listRunsForTask(taskId);
+      const resumedRun = runs.find((run) => run.id !== source.id);
+      const sourceAfter = ledger.getRun(source.id)!;
+
+      checkEq(result.state, "DONE", "la corrida reanudada termina DONE");
+      checkEq(result.outcome.status, "READY_FOR_REVIEW", "la reanudación produce trabajo revisable");
+      checkEq(runs.length, 2, "hay una corrida origen y una reanudada");
+      checkEq(resumedRun?.resumeOfRunId, source.id, "la corrida nueva apunta al origen");
+      checkEq(resumedRun?.planVersion, saved.version, "la corrida nueva conserva el plan persistido");
+      checkEq(resumedRun?.state, "DONE", "la corrida nueva queda DONE");
+      checkEq(resumedRun?.budget.steps, 8, "el presupuesto arranca en 5 y suma los 3 pasos ejecutados");
+      checkEq(sourceAfter.resumeRequested, false, "el pedido de reanudación se consumió");
+      checkEq(sourceAfter.resumedByRunId, resumedRun?.id, "el origen apunta a la corrida reanudada");
+      checkEq(planOf(taskId, 1)?.items[0]?.status, "DONE", "el item del plan persistido se completó");
+      check(result.transcript.some((line) => line.includes("♻️ Reanudando corrida")), "el transcript registra la reanudación");
+      check(executingSystem.includes("Reanudación:"), "el briefing incluye el bloque de reanudación");
+      check(executingSystem.includes("drift simulado"), "el briefing incluye los warnings de reconciliación");
     }
 
     console.log("\n--- Resultado ---");

@@ -163,6 +163,8 @@ type RunRow = {
   state: string;
   stop_reason: string | null;
   resume_of_run_id: string | null;
+  resume_requested: number;
+  resumed_by_run_id: string | null;
   workspace_id: string | null;
   base_commit: string | null;
   head_commit: string | null;
@@ -312,6 +314,8 @@ function rowToRun(row: RunRow): AutonomyRun {
     state: row.state as AutonomyState,
     stopReason: row.stop_reason as AutonomyStopReason | null,
     resumeOfRunId: row.resume_of_run_id,
+    resumeRequested: row.resume_requested === 1,
+    resumedByRunId: row.resumed_by_run_id,
     workspaceId: row.workspace_id,
     baseCommit: row.base_commit,
     headCommit: row.head_commit,
@@ -445,7 +449,13 @@ export type CreateRunInput = {
   state?: AutonomyState;
   workspaceId?: string | null;
   baseCommit?: string | null;
+  headCommit?: string | null;
+  planVersion?: number;
   budget?: Partial<AutonomyBudget>;
+  /** Fase 9E: corrida anterior que se reanuda. Consumir el pedido
+   * (`resume_requested` → `resumed_by_run_id`) y crear la corrida nueva
+   * ocurren en la MISMA transacción: no puede quedar un pedido consumido
+   * sin corrida, ni dos corridas reanudando el mismo origen. */
   resumeOfRunId?: string | null;
 };
 
@@ -463,10 +473,12 @@ export function createRun(input: CreateRunInput): AutonomyRun {
     state,
     stopReason: null,
     resumeOfRunId: input.resumeOfRunId ?? null,
+    resumeRequested: false,
+    resumedByRunId: null,
     workspaceId: input.workspaceId ?? null,
     baseCommit: input.baseCommit ?? null,
-    headCommit: null,
-    planVersion: 0,
+    headCommit: input.headCommit ?? null,
+    planVersion: input.planVersion ?? 0,
     budget,
     lastEventSeq: null,
     error: null,
@@ -476,30 +488,61 @@ export function createRun(input: CreateRunInput): AutonomyRun {
   };
 
   try {
-    db.prepare(
-      `INSERT INTO agent_runs
-       (id, task_id, attempt, state, stop_reason, resume_of_run_id, workspace_id, base_commit, head_commit,
-        plan_version, budget_json, last_event_seq, error, created_at, updated_at, finished_at)
-       VALUES (@id, @taskId, @attempt, @state, @stopReason, @resumeOfRunId, @workspaceId, @baseCommit, @headCommit,
-               @planVersion, @budgetJson, @lastEventSeq, @error, @createdAt, @updatedAt, @finishedAt)`,
-    ).run({
-      id: run.id,
-      taskId: run.taskId,
-      attempt: run.attempt,
-      state: run.state,
-      stopReason: run.stopReason,
-      resumeOfRunId: run.resumeOfRunId,
-      workspaceId: run.workspaceId,
-      baseCommit: run.baseCommit,
-      headCommit: run.headCommit,
-      planVersion: run.planVersion,
-      budgetJson: JSON.stringify(run.budget),
-      lastEventSeq: run.lastEventSeq,
-      error: run.error,
-      createdAt: run.createdAt,
-      updatedAt: run.updatedAt,
-      finishedAt: run.finishedAt,
+    const create = db.transaction(() => {
+      if (input.resumeOfRunId) {
+        const source = getRun(input.resumeOfRunId);
+        if (!source) throw new Error(`No existe la corrida de origen ${input.resumeOfRunId}.`);
+        if (!source.resumeRequested || source.resumedByRunId) {
+          throw new Error(`La corrida ${source.id} no tiene un pedido de reanudación pendiente.`);
+        }
+        if (source.finishedAt === null) {
+          throw new Error(`La corrida de origen ${source.id} todavía está activa.`);
+        }
+      }
+
+      db.prepare(
+        `INSERT INTO agent_runs
+         (id, task_id, attempt, state, stop_reason, resume_of_run_id, resume_requested, resumed_by_run_id,
+          workspace_id, base_commit, head_commit, plan_version, budget_json, last_event_seq, error,
+          created_at, updated_at, finished_at)
+         VALUES (@id, @taskId, @attempt, @state, @stopReason, @resumeOfRunId, @resumeRequested, @resumedByRunId,
+                 @workspaceId, @baseCommit, @headCommit, @planVersion, @budgetJson, @lastEventSeq, @error,
+                 @createdAt, @updatedAt, @finishedAt)`,
+      ).run({
+        id: run.id,
+        taskId: run.taskId,
+        attempt: run.attempt,
+        state: run.state,
+        stopReason: run.stopReason,
+        resumeOfRunId: run.resumeOfRunId,
+        resumeRequested: run.resumeRequested ? 1 : 0,
+        resumedByRunId: run.resumedByRunId,
+        workspaceId: run.workspaceId,
+        baseCommit: run.baseCommit,
+        headCommit: run.headCommit,
+        planVersion: run.planVersion,
+        budgetJson: JSON.stringify(run.budget),
+        lastEventSeq: run.lastEventSeq,
+        error: run.error,
+        createdAt: run.createdAt,
+        updatedAt: run.updatedAt,
+        finishedAt: run.finishedAt,
+      });
+
+      if (input.resumeOfRunId) {
+        const consumed = db
+          .prepare(
+            `UPDATE agent_runs
+             SET resume_requested = 0, resumed_by_run_id = ?, updated_at = ?
+             WHERE id = ? AND resume_requested = 1 AND resumed_by_run_id IS NULL`,
+          )
+          .run(run.id, now, input.resumeOfRunId);
+        if (consumed.changes === 0) {
+          throw new Error(`La corrida ${input.resumeOfRunId} ya fue reanudada por otra corrida.`);
+        }
+      }
     });
+    create();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes("UNIQUE constraint failed")) {
@@ -528,6 +571,87 @@ export function listRunsForTask(taskId: string): AutonomyRun[] {
     .prepare("SELECT * FROM agent_runs WHERE task_id = ? ORDER BY created_at ASC")
     .all(taskId) as RunRow[];
   return rows.map(rowToRun);
+}
+
+/** Fase 9E: pedido de reanudación pendiente de una task. La corrida de
+ * origen ya está cerrada (la reconciliación la cerró al marcar el pedido);
+ * el runner lo consume creando una corrida nueva. */
+export function getResumeSourceForTask(taskId: string): AutonomyRun | null {
+  const row = getDb()
+    .prepare(
+      `SELECT * FROM agent_runs
+       WHERE task_id = ? AND resume_requested = 1 AND resumed_by_run_id IS NULL AND finished_at IS NOT NULL
+       ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get(taskId) as RunRow | undefined;
+  return row ? rowToRun(row) : null;
+}
+
+/** Cantidad de corridas reanudadas en la cadena que termina en `runId`
+ * (incluida ella si a su vez es una reanudación). Se usa para
+ * `maxResumeAttempts`: una cadena de 2 reanudaciones ya agotó el tope. */
+export function getResumeChainLength(runId: string): number {
+  let current = getRun(runId);
+  let length = 0;
+  const seen = new Set<string>();
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    if (current.resumeOfRunId) length += 1;
+    current = current.resumeOfRunId ? getRun(current.resumeOfRunId) : null;
+  }
+  return length;
+}
+
+/** Marca una corrida activa como reanudable y la cierra en la misma
+ * transacción. El estado terminal del contrato no tiene `ABANDONED`; se usa
+ * `FAILED` con un motivo estable de reinicio — la corrida nueva lleva el
+ * `resumeOfRunId` y conserva el plan/checkpoints. */
+export function requestResumeAndClose(runId: string, reason: string): AutonomyRun {
+  const db = getDb();
+  const tx = db.transaction((): AutonomyRun => {
+    const run = getRun(runId);
+    if (!run) throw new Error(`No existe la corrida ${runId}.`);
+    if (run.finishedAt === null) {
+      db.prepare("UPDATE agent_runs SET resume_requested = 1, updated_at = ? WHERE id = ? AND finished_at IS NULL").run(
+        Date.now(),
+        runId,
+      );
+      transitionRun(runId, "FAILED", { stopReason: "error", error: reason });
+    } else if (!run.resumeRequested) {
+      db.prepare("UPDATE agent_runs SET resume_requested = 1, updated_at = ? WHERE id = ?").run(Date.now(), runId);
+    }
+    const updated = getRun(runId);
+    if (!updated) throw new Error(`La corrida ${runId} desapareció al marcarla para reanudar.`);
+    return updated;
+  });
+  return tx();
+}
+
+/** Cierra una corrida activa que NO se va a reanudar (workspace inválido,
+ * retries agotados, etc.). Idempotente: si ya terminó, devuelve la fila. */
+export function closeRunForRestart(runId: string, stopReason: AutonomyStopReason, error: string | null): AutonomyRun {
+  const db = getDb();
+  const tx = db.transaction((): AutonomyRun => {
+    const run = getRun(runId);
+    if (!run) throw new Error(`No existe la corrida ${runId}.`);
+    if (run.finishedAt !== null) {
+      if (run.resumeRequested) {
+        db.prepare("UPDATE agent_runs SET resume_requested = 0, updated_at = ? WHERE id = ?").run(Date.now(), runId);
+      }
+      return getRun(runId) ?? run;
+    }
+    db.prepare("UPDATE agent_runs SET resume_requested = 0, updated_at = ? WHERE id = ?").run(Date.now(), runId);
+    return transitionRun(runId, "FAILED", { stopReason, error });
+  });
+  return tx();
+}
+
+/** Cancela un pedido de reanudación que el runner decidió no usar (por
+ * ejemplo, el workspace desapareció entre la reconciliación y el claim). */
+export function cancelResumeRequest(runId: string): void {
+  getDb()
+    .prepare("UPDATE agent_runs SET resume_requested = 0, updated_at = ? WHERE id = ? AND resumed_by_run_id IS NULL")
+    .run(Date.now(), runId);
 }
 
 export type RunPatch = {
@@ -847,6 +971,59 @@ export function resetPlanItemToPending(itemId: string, reason?: string): Persist
   const updated = getPlanItemById(itemId);
   if (!updated) throw new Error("El item se actualizó pero no se pudo releer.");
   return updated;
+}
+
+/** Fase 9E — invalida la evidencia de archivo que apunta a paths con drift
+ * o ausentes. No toca el archivo real ni el contenido: si un item DONE
+ * dependía de ese archivo, vuelve a PENDING para que el modelo lo
+ * revalide. Devuelve cuántos items se invalidaron. */
+export function invalidatePlanItemsForPaths(planId: string, paths: string[], reason: string): number {
+  const targets = new Set(paths);
+  if (targets.size === 0) return 0;
+  const rows = getPlanItemRows(planId);
+  let invalidated = 0;
+
+  const tx = getDb().transaction(() => {
+    for (const row of rows) {
+      const evidence = safeJsonParse<unknown>(row.evidence_json, []);
+      if (!Array.isArray(evidence)) continue;
+      const touches = evidence.some(
+        (entry) => isPlainObject(entry) && entry.kind === "file" && typeof entry.path === "string" && targets.has(entry.path),
+      );
+      if (!touches) continue;
+
+      const terminal = row.status === "DONE" || row.status === "SKIPPED";
+      getDb()
+        .prepare(
+          `UPDATE agent_plan_items
+           SET status = ?, evidence_json = '[]', last_error = ?, started_at = ?, finished_at = NULL
+           WHERE id = ?`,
+        )
+        .run(terminal ? "PENDING" : row.status, reason, terminal ? null : row.started_at, row.id);
+      invalidated += 1;
+    }
+  });
+  tx();
+  return invalidated;
+}
+
+/** Fase 9E — un restart desde cero conserva el plan solo como historial:
+ * lo marca ABANDONED y devuelve sus items a PENDING sin evidencia. La
+ * corrida nueva va a crear una versión nueva cuando el modelo planifique. */
+export function resetPlanForRestart(planId: string, reason: string): number {
+  const db = getDb();
+  const tx = db.transaction((): number => {
+    const result = db
+      .prepare(
+        `UPDATE agent_plan_items
+         SET status = 'PENDING', evidence_json = '[]', last_error = ?, started_at = NULL, finished_at = NULL
+         WHERE plan_id = ?`,
+      )
+      .run(reason, planId);
+    db.prepare("UPDATE agent_plans SET status = 'ABANDONED' WHERE id = ?").run(planId);
+    return result.changes;
+  });
+  return tx();
 }
 
 export type UpdatePlanItemInput = {
@@ -1349,6 +1526,39 @@ export type FileCheckpoint = {
   mtimeMs: number;
   updatedAt: number;
 };
+
+/** Fase 9E — checkpoint atómico de un paso. El paso, los hashes de los
+ * archivos tocados y los metadatos de la corrida (presupuesto, versión de
+ * plan, HEAD, último evento) se escriben en UNA transacción: un crash no
+ * puede dejar un paso sin su checkpoint de archivos ni un checkpoint sin
+ * el paso que lo produjo.
+ *
+ * Los items del plan y las verificaciones se persisten en el momento en
+ * que ocurren (tools/verificador), antes de este checkpoint; no se
+ * reescriben acá para no duplicar filas. */
+export type RecordStepCheckpointInput = {
+  step: RecordStepInput;
+  checkpoints?: FileCheckpointInput[];
+  run?: RunPatch;
+};
+
+export type RecordStepCheckpointResult = {
+  step: AgentStep;
+  run: AutonomyRun | null;
+  checkpoints: number;
+};
+
+export function recordStepCheckpoint(input: RecordStepCheckpointInput): RecordStepCheckpointResult {
+  const db = getDb();
+  const tx = db.transaction((): RecordStepCheckpointResult => {
+    const step = recordStep(input.step);
+    const checkpoints = input.checkpoints ?? [];
+    for (const checkpoint of checkpoints) upsertFileCheckpoint(checkpoint);
+    const run = input.run ? updateRunProgress(input.step.runId, input.run) : null;
+    return { step, run, checkpoints: checkpoints.length };
+  });
+  return tx();
+}
 
 export function getFileCheckpoints(runId: string): FileCheckpoint[] {
   const rows = getDb()

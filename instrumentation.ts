@@ -25,9 +25,12 @@ export async function register() {
     const { listTasks } = await import("./lib/agent/task-store");
     const { maybeDispatchNext } = await import("./lib/agent/dispatcher");
 
-    const { requeued, interrupted, recoveredApplying } = await reconcileOrphanedTasks();
+    const { requeued, interrupted, recoveredApplying, resumed } = await reconcileOrphanedTasks();
     if (requeued.length > 0) {
       console.log(`[Coding Agent] ${requeued.length} task(s) reencolada(s) tras un reinicio: ${requeued.join(", ")}`);
+    }
+    if (resumed.length > 0) {
+      console.log(`[Coding Agent] ${resumed.length} task(s) se reanudarán desde su último checkpoint: ${resumed.join(", ")}`);
     }
     if (interrupted.length > 0) {
       console.log(`[Coding Agent] ${interrupted.length} task(s) quedaron INTERRUPTED (agotaron los reintentos automáticos): ${interrupted.join(", ")}`);

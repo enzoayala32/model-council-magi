@@ -78,16 +78,16 @@ import {
   getRun,
   getStepsForRun,
   markPlanStatus,
-  recordStep,
+  recordStepCheckpoint,
   recordVerification,
   resetPlanItemToPending,
   savePlanVersion,
   transitionRun,
   updatePlanItem,
   updateRunProgress,
-  upsertFileCheckpoint,
   type AcceptanceVerifier,
   type AgentStepAction,
+  type FileCheckpointInput,
   type PersistedPlan,
   type PersistedPlanItem,
   type RecordVerificationInput,
@@ -107,6 +107,7 @@ import {
   type BriefingVerification,
 } from "./briefing";
 import { createAcceptanceVerifier, type VerifierExec } from "./verifier";
+import type { ResumeContext } from "./resume";
 import {
   createProgressTracker,
   hashProgressAction,
@@ -283,6 +284,8 @@ type LoopContext = {
    * llamada actual para que el próximo briefing incluya la advertencia y el
    * modelo tenga una oportunidad real de cambiar de estrategia. */
   progressWarningPending: boolean;
+  /** Fase 9E — presente solo en una corrida reanudada. */
+  resume: ResumeContext | null;
   warnings: string[];
   warningSet: Set<string>;
   transcript: string[];
@@ -300,6 +303,9 @@ export type RunAutonomousLoopOptions = {
   modelId?: string;
   workspaceId?: string | null;
   baseCommit?: string | null;
+  /** Fase 9E — si viene, la corrida se crea en RESUMING, reutiliza el plan
+   * de la corrida de origen y arranca con el presupuesto acumulado. */
+  resume?: ResumeContext;
   abortSignal?: AbortSignal;
   limits?: Partial<AutonomyLimits>;
   /** Inyectable solo para tests: el default es `generateText` real. */
@@ -488,34 +494,44 @@ function resolveInsideWorkspace(workspaceRoot: string, relPath: string): string 
   return absolute;
 }
 
-/** Fase 9C (diseño 5.3.4) — checkpoint best-effort del archivo REAL que
- * acaba de escribir/editar una tool. No persiste contenido: solo hash,
- * tamaño y mtime. Un archivo borrado no se toca acá; 9E detecta el drift
- * comparando el checkpoint contra el filesystem. */
-function checkpointFile(ctx: LoopContext, relPath: string): void {
+/** Fase 9C/9E — checkpoint del archivo REAL que acaba de escribir/editar
+ * una tool. No persiste contenido: solo hash, tamaño y mtime. Un archivo
+ * borrado no se toca acá; 9E detecta el drift comparando el checkpoint
+ * contra el filesystem. Devuelve `null` si no se puede leer. */
+function buildFileCheckpoint(ctx: LoopContext, relPath: string): FileCheckpointInput | null {
   const absolute = resolveInsideWorkspace(ctx.workspaceRoot, relPath);
-  if (!absolute) return;
+  if (!absolute) return null;
   try {
     const stat = fs.statSync(absolute);
-    if (!stat.isFile() || stat.size > CHECKPOINT_MAX_FILE_BYTES) return;
+    if (!stat.isFile() || stat.size > CHECKPOINT_MAX_FILE_BYTES) return null;
     const buffer = fs.readFileSync(absolute);
     const digest = crypto.createHash("sha256").update(buffer).digest("hex");
-    upsertFileCheckpoint({
+    return {
       runId: ctx.runId,
       path: relPath,
       sha256: digest,
       size: stat.size,
       mtimeMs: stat.mtimeMs,
-    });
+    };
   } catch {
     // El checkpoint es auxiliar: nunca rompe el paso ni el loop.
+    return null;
   }
 }
 
-function shouldCheckpoint(ctx: LoopContext, stepIndex: number): boolean {
-  const every = ctx.limits.checkpointEverySteps;
-  if (every <= 1) return true;
-  return (stepIndex + 1) % every === 0;
+/** HEAD actual del workspace para el checkpoint. Best-effort y con timeout
+ * corto: si git falla, se conserva el HEAD anterior de la corrida. */
+function currentHeadCommit(workspaceRoot: string): string | null {
+  try {
+    const value = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: workspaceRoot,
+      timeout: 2_000,
+      encoding: "utf8",
+    }).trim();
+    return value || null;
+  } catch {
+    return null;
+  }
 }
 
 function recordContextUsage(
@@ -690,16 +706,10 @@ function recordVerificationSafe(ctx: LoopContext, input: Omit<RecordVerification
   }
 }
 
-function updateBudget(ctx: LoopContext): void {
-  try {
-    updateRunProgress(ctx.runId, { budget: snapshotBudget(ctx), lastEventSeq: ctx.lastEventSeq });
-  } catch {
-    warn(ctx, "No se pudo actualizar el presupuesto de la corrida.");
-  }
-}
-
 function recentSteps(ctx: LoopContext): BriefingStep[] {
-  return getStepsForRun(ctx.runId, 1_000)
+  const runIds = ctx.resume ? [ctx.resume.ofRunId, ctx.runId] : [ctx.runId];
+  const steps = runIds.flatMap((runId) => getStepsForRun(runId, 1_000));
+  return steps
     .slice(-MAX_RECENT_STEPS)
     .map((step) => ({
       stepIndex: step.stepIndex,
@@ -735,6 +745,7 @@ function buildBriefing(ctx: LoopContext, phase: BriefingPhase, plan: PersistedPl
     warnings: [...ctx.warnings, ...extraWarnings],
     lastVerification: ctx.lastVerification,
     budget: briefingBudget(ctx),
+    resume: ctx.resume ? { ofRunId: ctx.resume.ofRunId, verifiedAt: ctx.resume.verifiedAt } : undefined,
   });
 }
 
@@ -909,8 +920,13 @@ function handleModelStep(ctx: LoopContext, phase: ModelPhase, step: StepLike): v
     }
   }
 
-  if (checkpointPaths.size > 0 && shouldCheckpoint(ctx, stepIndex)) {
-    for (const file of checkpointPaths) checkpointFile(ctx, file);
+  // Fase 9E: se checkpointea TODO paso que mutó archivos (no cada N): un
+  // crash tiene que poder reanudarse desde el último paso, no desde el
+  // último múltiplo de `checkpointEverySteps`.
+  const fileCheckpoints: FileCheckpointInput[] = [];
+  for (const file of checkpointPaths) {
+    const checkpoint = buildFileCheckpoint(ctx, file);
+    if (checkpoint) fileCheckpoints.push(checkpoint);
   }
 
   const changed = Array.from(changedFiles).sort();
@@ -935,25 +951,56 @@ function handleModelStep(ctx: LoopContext, phase: ModelPhase, step: StepLike): v
   const progressSnapshot = ctx.progress.snapshot();
 
   const usage = extractUsage(step);
+  // El presupuesto se snapshotea DESPUÉS del paso actual: `ctx.steps` se
+  // incrementa recién al final, así que se calcula con +1 acá.
+  const nextBudget: AutonomyBudget = {
+    steps: ctx.steps + 1,
+    wallTimeMs: Math.max(0, ctx.now() - ctx.startedAt),
+    inputTokens: ctx.inputTokens + usage.inputTokens,
+    outputTokens: ctx.outputTokens + usage.outputTokens,
+    estimatedCostUsd: null,
+  };
+  const headCommit = currentHeadCommit(ctx.workspaceRoot);
   try {
-    recordStep({
-      runId: ctx.runId,
-      stepIndex,
-      phase,
-      actions,
-      results: resultMetas,
-      progress: {
-        toolCalls: calls.length,
-        toolResults: results.length,
-        planVersion: planAfter?.version ?? ctx.lastPlanVersion,
-        noProgressSteps: progressSnapshot.noProgressSteps,
-        replans: ctx.replans,
+    recordStepCheckpoint({
+      step: {
+        runId: ctx.runId,
+        stepIndex,
+        phase,
+        actions,
+        results: resultMetas,
+        progress: {
+          toolCalls: calls.length,
+          toolResults: results.length,
+          planVersion: planAfter?.version ?? ctx.lastPlanVersion,
+          noProgressSteps: progressSnapshot.noProgressSteps,
+          replans: ctx.replans,
+        },
+        inputTokens: usage.inputTokens > 0 ? usage.inputTokens : null,
+        outputTokens: usage.outputTokens > 0 ? usage.outputTokens : null,
       },
-      inputTokens: usage.inputTokens > 0 ? usage.inputTokens : null,
-      outputTokens: usage.outputTokens > 0 ? usage.outputTokens : null,
+      checkpoints: fileCheckpoints,
+      run: {
+        budget: nextBudget,
+        lastEventSeq: ctx.lastEventSeq,
+        planVersion: planAfter?.version ?? ctx.lastPlanVersion,
+        ...(headCommit ? { headCommit } : {}),
+      },
     });
   } catch {
-    warn(ctx, "No se pudo persistir el paso en el ledger.");
+    warn(ctx, "No se pudo persistir el checkpoint del paso en el ledger.");
+    // Fallback: al menos no perder presupuesto/HEAD si la transacción falló
+    // por un detalle de un checkpoint puntual.
+    try {
+      updateRunProgress(ctx.runId, {
+        budget: nextBudget,
+        lastEventSeq: ctx.lastEventSeq,
+        ...(headCommit ? { headCommit } : {}),
+      });
+    } catch {
+      // La corrida pudo haber terminado concurrentemente; no hay nada más
+      // que hacer acá.
+    }
   }
 
   ctx.steps += 1;
@@ -989,8 +1036,6 @@ function handleModelStep(ctx: LoopContext, phase: ModelPhase, step: StepLike): v
     markStall(ctx, verdict.detector, verdict.message);
     ctx.transcript.push(`⛔ ${verdict.message}`);
   }
-
-  updateBudget(ctx);
 }
 
 async function callModel(ctx: LoopContext, options: ModelCallOptions): Promise<ModelCallResult> {
@@ -1525,13 +1570,19 @@ async function createLoopContext(options: RunAutonomousLoopOptions): Promise<Loo
   const providerName = resolveProviderName(modelId);
   const pool = getProviderPool(providerName);
   const now = options.now ?? (() => Date.now());
-  const startedAt = now();
+  const resume = options.resume ?? null;
+  const resumedWallTimeMs = resume?.budget.wallTimeMs ?? 0;
+  const startedAt = now() - resumedWallTimeMs;
 
   const run = createRun({
     taskId: options.taskId,
+    state: resume ? "RESUMING" : "PLANNING",
     workspaceId: options.workspaceId ?? null,
     baseCommit: options.baseCommit ?? null,
-    budget: { steps: 0, wallTimeMs: 0, inputTokens: 0, outputTokens: 0, estimatedCostUsd: null },
+    headCommit: resume?.headCommit ?? options.baseCommit ?? null,
+    planVersion: resume?.planVersion ?? 0,
+    budget: resume?.budget ?? { steps: 0, wallTimeMs: 0, inputTokens: 0, outputTokens: 0, estimatedCostUsd: null },
+    resumeOfRunId: resume?.ofRunId ?? null,
   });
 
   const controller = new AbortController();
@@ -1539,10 +1590,11 @@ async function createLoopContext(options: RunAutonomousLoopOptions): Promise<Loo
   if (options.abortSignal?.aborted) controller.abort();
   else options.abortSignal?.addEventListener("abort", onExternalAbort, { once: true });
 
+  const remainingWallTimeMs = Math.max(1, limits.maxWallTimeMs - resumedWallTimeMs);
   const timeoutTimer = setTimeout(() => {
     ctx.timedOut = true;
     controller.abort();
-  }, limits.maxWallTimeMs);
+  }, remainingWallTimeMs);
   timeoutTimer.unref?.();
 
   const allowedScripts = await detectAllowedScripts(options.workspaceRoot);
@@ -1626,11 +1678,11 @@ async function createLoopContext(options: RunAutonomousLoopOptions): Promise<Loo
     timedOut: false,
     now,
     startedAt,
-    steps: 0,
-    inputTokens: 0,
-    outputTokens: 0,
+    steps: resume?.budget.steps ?? 0,
+    inputTokens: resume?.budget.inputTokens ?? 0,
+    outputTokens: resume?.budget.outputTokens ?? 0,
     replans: 0,
-    lastPlanVersion: 0,
+    lastPlanVersion: resume?.planVersion ?? 0,
     lastTypeCheckOk: null,
     lastVerification: null,
     lastEventSeq: null,
@@ -1638,6 +1690,7 @@ async function createLoopContext(options: RunAutonomousLoopOptions): Promise<Loo
     stallReason: null,
     stallMessage: null,
     progressWarningPending: false,
+    resume,
     warnings: [],
     warningSet: new Set(),
     transcript,
@@ -1645,6 +1698,13 @@ async function createLoopContext(options: RunAutonomousLoopOptions): Promise<Loo
     contextUsage: [],
     contextEngine,
   };
+
+  if (resume) {
+    for (const message of resume.warnings) warn(ctx, message);
+    transcript.push(
+      `♻️ Reanudando corrida ${resume.ofRunId.slice(0, 8)} (intento ${resume.attempt}, plan v${resume.planVersion || "nuevo"}).`,
+    );
+  }
 
   try {
     const legacyTools = createAgentTools(
