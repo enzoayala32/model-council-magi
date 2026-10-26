@@ -96,6 +96,10 @@ export function isTaskActive(taskId: string): boolean {
 export function cancelTask(taskId: string): boolean {
   const controller = activeRuns.get(taskId);
   if (!controller) return false;
+  // Fase 9F: cancelar dos veces (o una task que ya terminó) es un no-op.
+  // El primer abort dispara la cancelación con gracia del dispatcher; el
+  // segundo no debe reportarse como una cancelación nueva.
+  if (controller.signal.aborted) return false;
   controller.abort();
   return true;
 }

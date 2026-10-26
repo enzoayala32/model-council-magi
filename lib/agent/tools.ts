@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
@@ -439,6 +440,7 @@ export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentTo
       execute: wrapToolExecute(
         "run_typecheck",
         mutating("exec", async (_input, options) => {
+          const startedAt = Date.now();
           try {
             // En Windows, npx en realidad es npx.cmd — sin shell:true no se
             // resuelve (falla con "spawn npx ENOENT"), aunque en Linux/Mac
@@ -453,11 +455,25 @@ export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentTo
               timeoutMs: 120_000,
               signal: options?.abortSignal,
             });
-            const output = (stdout + stderr).trim();
-            return { ok: true, success: true, output: output.slice(0, MAX_TYPECHECK_OUTPUT) };
+            const rawOutput = (stdout + stderr).trim();
+            return {
+              ok: true,
+              success: true,
+              exitCode: 0,
+              durationMs: Date.now() - startedAt,
+              outputSha256: hashOutput(rawOutput),
+              output: rawOutput.slice(0, MAX_TYPECHECK_OUTPUT),
+            };
           } catch (error) {
-            const output = errorOutput(error).slice(0, MAX_TYPECHECK_OUTPUT);
-            return { ok: true, success: false, output };
+            const rawOutput = errorOutput(error);
+            return {
+              ok: true,
+              success: false,
+              exitCode: exitCodeOf(error),
+              durationMs: Date.now() - startedAt,
+              outputSha256: hashOutput(rawOutput),
+              output: rawOutput.slice(0, MAX_TYPECHECK_OUTPUT),
+            };
           }
         }),
         EXEC_POLICY,
@@ -490,6 +506,7 @@ export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentTo
                 if (!allowedScripts.includes(name)) {
                   return { ok: false, error: `El script "${name}" no está disponible en este proyecto (disponibles: ${allowedScripts.join(", ") || "ninguno"}).` };
                 }
+                const startedAt = Date.now();
                 try {
                   const { stdout, stderr } = await execWithTreeKill("npm", ["run", name], {
                     cwd: workspaceRoot,
@@ -499,11 +516,27 @@ export function createAgentTools(workspaceRoot: string, onEvent: (event: AgentTo
                     // el árbol de procesos real, no solo la shell.
                     signal: options?.abortSignal,
                   });
-                  const output = (stdout + stderr).trim();
-                  return { ok: true, success: true, name, output: output.slice(0, MAX_TYPECHECK_OUTPUT) };
+                  const rawOutput = (stdout + stderr).trim();
+                  return {
+                    ok: true,
+                    success: true,
+                    name,
+                    exitCode: 0,
+                    durationMs: Date.now() - startedAt,
+                    outputSha256: hashOutput(rawOutput),
+                    output: rawOutput.slice(0, MAX_TYPECHECK_OUTPUT),
+                  };
                 } catch (error) {
-                  const output = errorOutput(error).slice(0, MAX_TYPECHECK_OUTPUT);
-                  return { ok: true, success: false, name, output };
+                  const rawOutput = errorOutput(error);
+                  return {
+                    ok: true,
+                    success: false,
+                    name,
+                    exitCode: exitCodeOf(error),
+                    durationMs: Date.now() - startedAt,
+                    outputSha256: hashOutput(rawOutput),
+                    output: rawOutput.slice(0, MAX_TYPECHECK_OUTPUT),
+                  };
                 }
               }),
               EXEC_POLICY,
@@ -564,4 +597,20 @@ function errorOutput(error: unknown): string {
     if (e.message) return e.message;
   }
   return "tsc falló sin salida capturable.";
+}
+
+/** Fase 9F — hash del output completo, sin persistir el output. El ledger y
+ * el informe final solo guardan este digest como evidencia. */
+function hashOutput(text: string): string {
+  return crypto.createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+/** Exit code numérico si el proceso lo expuso; `null` para timeout/abort o
+ * señales, donde no hay un código real que inventar. */
+function exitCodeOf(error: unknown): number | null {
+  if (error && typeof error === "object") {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "number" && Number.isFinite(code)) return code;
+  }
+  return null;
 }

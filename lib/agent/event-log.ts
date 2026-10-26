@@ -2,13 +2,27 @@ import crypto from "node:crypto";
 import { getDb } from "../db";
 import type { ProviderName } from "../provider-resilience/config";
 import type { ContextUsagePayload } from "./context/usage";
+import type { FinalReport } from "./autonomy/final-report";
 
 /** Los 6 tipos mínimos para reconstruir el timeline completo de una task
  * sin necesitar nada más que `agent_events` (ver diseño de Fase 2, sección
  * 12). No hay un tipo por cada `stopReason` — eso vive en
  * `agent_tasks.stop_reason` y se comunica acá con un único `status_change`
  * al estado final. */
-export type AgentEventType = "tool_call" | "tool_result" | "text" | "typecheck_result" | "run_script_result" | "status_change" | "git_commit_result" | "credential_failover" | "context_usage" | "progress_warning";
+export type AgentEventType =
+  | "tool_call"
+  | "tool_result"
+  | "text"
+  | "typecheck_result"
+  | "run_script_result"
+  | "status_change"
+  | "git_commit_result"
+  | "credential_failover"
+  | "context_usage"
+  | "progress_warning"
+  | "cancellation_requested"
+  | "cancelled"
+  | "final_report";
 
 export type AgentEventPayload =
   | { type: "tool_call"; toolName: string; input: unknown }
@@ -51,7 +65,16 @@ export type AgentEventPayload =
       threshold: number;
       message: string;
       step: number;
-    };
+    }
+  /** Fase 9F — cancelación pedida por el usuario. Se emite una sola vez,
+   * antes de esperar `cancelGraceMs` a las tools en vuelo. */
+  | { type: "cancellation_requested"; reason: "user" }
+  /** Fase 9F — cierre efectivo de una corrida cancelada. `forced` es true
+   * si se agotó la gracia y hubo que abortar tools en vuelo. */
+  | { type: "cancelled"; forced: boolean; stopReason: string }
+  /** Fase 9F — informe final metadata-only, persistido de forma idempotente
+   * en `agent_final_reports`. */
+  | { type: "final_report"; report: FinalReport };
 
 export type AgentEvent = {
   id: string;
@@ -154,6 +177,12 @@ export function eventsToTranscript(events: AgentEvent[]): string[] {
       if (p.outcome === "rotated") lines.push(`🔁 credential ${p.credentialId} (${p.provider}) falló (${p.reason}) — rotando a otra.`);
       else if (p.outcome === "stopped") lines.push(`⛔ credential ${p.credentialId} (${p.provider}) falló (${p.reason}) — no se rotó${p.note ? ` (${p.note})` : ""}.`);
       else lines.push(`⛔ ${p.provider}: sin ninguna credential disponible (${p.reason}).`);
+    } else if (p.type === "cancellation_requested") {
+      lines.push("⏹ cancelación solicitada; se espera a las tools en vuelo.");
+    } else if (p.type === "cancelled") {
+      lines.push(`⏹ corrida cancelada${p.forced ? " (gracia agotada)" : ""} (${p.stopReason}).`);
+    } else if (p.type === "final_report") {
+      lines.push(`📄 informe final: ${p.report.status} — plan ${p.report.plan.done}/${p.report.plan.total}, ${p.report.changes.length} cambio(s).`);
     }
   }
   return lines;

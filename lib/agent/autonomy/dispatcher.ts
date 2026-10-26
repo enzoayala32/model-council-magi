@@ -77,10 +77,12 @@ import {
   getPlanVersion,
   getRun,
   getStepsForRun,
+  getVerificationsForRun,
   markPlanStatus,
   recordStepCheckpoint,
   recordVerification,
   resetPlanItemToPending,
+  saveFinalReport,
   savePlanVersion,
   transitionRun,
   updatePlanItem,
@@ -92,6 +94,7 @@ import {
   type PersistedPlanItem,
   type RecordVerificationInput,
 } from "./ledger";
+import { buildFinalReport, type FinalReport } from "./final-report";
 import {
   buildFallbackPlan,
   describeCriterion,
@@ -260,11 +263,21 @@ type LoopContext = {
   searchEnabled: boolean;
   generateTextImpl: (options: Parameters<typeof generateText>[0]) => Promise<unknown>;
   pool: ReturnType<typeof getProviderPool>;
+  controller: AbortController;
   signal: AbortSignal;
   externalSignal?: AbortSignal;
   onExternalAbort: () => void;
   timeoutTimer: NodeJS.Timeout;
   timedOut: boolean;
+  /** Fase 9F — cancelación con gracia. `cancelRequested` se enciende al
+   * pedir la cancelación y bloquea tools/fases nuevas; el controller recién
+   * se aborta al terminar el paso/tool en vuelo o al vencer la gracia. */
+  cancelRequested: boolean;
+  cancelGraceExpired: boolean;
+  cancelTimer: NodeJS.Timeout | null;
+  modelCallActive: boolean;
+  execActive: boolean;
+  cancelledEventEmitted: boolean;
   now: () => number;
   startedAt: number;
   steps: number;
@@ -665,6 +678,70 @@ function abortDecision(ctx: LoopContext): TerminalDecision {
   return { state: "CANCELLED", stopReason: "cancelled", error: "Cancelada." };
 }
 
+/** Aborta el controller interno y cancela la gracia pendiente. Idempotente:
+ * llamarlo dos veces no cambia nada. */
+function abortInternal(ctx: LoopContext): void {
+  if (ctx.cancelTimer) {
+    clearTimeout(ctx.cancelTimer);
+    ctx.cancelTimer = null;
+  }
+  if (!ctx.controller.signal.aborted) ctx.controller.abort();
+}
+
+/** Fase 9F — pide cancelar sin cortar de inmediato el paso/tool en vuelo.
+ * Si no hay nada corriendo, aborta ya; si hay una llamada al modelo o una
+ * verificación en curso, deja terminar ese trabajo hasta `cancelGraceMs`.
+ * El gate de tools impide que se programen tools nuevas mientras tanto. */
+function requestCancellation(ctx: LoopContext): void {
+  if (ctx.cancelRequested) return;
+  ctx.cancelRequested = true;
+  appendEventSafe(ctx, { type: "cancellation_requested", reason: "user" });
+  ctx.transcript.push("⏹ Cancelación solicitada; se espera a las tools en vuelo.");
+
+  if (!ctx.modelCallActive && !ctx.execActive) {
+    abortInternal(ctx);
+    return;
+  }
+
+  const graceMs = ctx.limits.cancelGraceMs;
+  if (graceMs <= 0) {
+    ctx.cancelGraceExpired = true;
+    abortInternal(ctx);
+    return;
+  }
+
+  ctx.cancelTimer = setTimeout(() => {
+    ctx.cancelGraceExpired = true;
+    ctx.transcript.push("⏹ Se agotó la gracia de cancelación; se abortan las tools en vuelo.");
+    abortInternal(ctx);
+  }, graceMs);
+  ctx.cancelTimer.unref?.();
+}
+
+/** Envuelve cada tool para que, una vez pedida la cancelación, ninguna tool
+ * NUEVA se ejecute. Las que ya estaban en vuelo siguen su curso (o las corta
+ * el signal cuando vence la gracia). */
+function gateTools(ctx: LoopContext, tools: ToolSet): ToolSet {
+  const gated: ToolSet = {};
+  for (const [name, definition] of Object.entries(tools)) {
+    const execute = definition.execute;
+    if (typeof execute !== "function") {
+      gated[name] = definition;
+      continue;
+    }
+    gated[name] = {
+      ...definition,
+      execute: async (input: unknown, options: unknown) => {
+        if (ctx.cancelRequested) {
+          return { ok: false, errorCode: "cancelled", error: "La task fue cancelada." };
+        }
+        return (execute as (input: unknown, options: unknown) => unknown)(input, options);
+      },
+    } as ToolSet[string];
+  }
+  return gated;
+}
+
 function warn(ctx: LoopContext, message: string): void {
   const clean = safeText(message, MAX_WARNING_CHARS) ?? "warning";
   if (ctx.warningSet.has(clean)) return;
@@ -846,6 +923,14 @@ function handleModelStep(ctx: LoopContext, phase: ModelPhase, step: StepLike): v
       toolCallId: result.toolCallId,
       ...(code ? { code } : {}),
       ...(errorText ? { summary: errorText } : {}),
+      // Fase 9F: metadata de comandos para el informe final. Nunca se
+      // persiste stdout/stderr; solo nombre, éxito, exit code, duración y
+      // hash del output.
+      ...(typeof output?.name === "string" ? { name: output.name } : {}),
+      ...(typeof output?.success === "boolean" ? { success: output.success } : {}),
+      ...(typeof output?.exitCode === "number" && Number.isFinite(output.exitCode) ? { exitCode: output.exitCode } : {}),
+      ...(typeof output?.durationMs === "number" && Number.isFinite(output.durationMs) ? { durationMs: output.durationMs } : {}),
+      ...(typeof output?.outputSha256 === "string" ? { outputSha256: output.outputSha256 } : {}),
     });
 
     // Fase 9D — observación para el detector. El output completo se hashea
@@ -885,12 +970,20 @@ function handleModelStep(ctx: LoopContext, phase: ModelPhase, step: StepLike): v
     // modelo tenga que inventar un exit code.
     if (result.toolName === "run_typecheck" && typeof output?.success === "boolean") {
       const success = output.success;
+      const exitCode = typeof output.exitCode === "number" ? output.exitCode : success ? 0 : 1;
+      const durationMs = typeof output.durationMs === "number" ? Math.max(0, Math.round(output.durationMs)) : undefined;
+      const outputSha256 = typeof output.outputSha256 === "string" ? output.outputSha256 : undefined;
       ctx.lastTypeCheckOk = success;
       ctx.lastVerification = { criterion: "typecheck", status: success ? "passed" : "failed" };
       recordVerificationSafe(ctx, {
         criterion: { kind: "typecheck" },
         status: success ? "passed" : "failed",
-        evidence: { exitCode: success ? 0 : 1, source: "tool" },
+        evidence: {
+          exitCode,
+          ...(durationMs !== undefined ? { durationMs } : {}),
+          ...(outputSha256 ? { outputSha256 } : {}),
+          source: "tool",
+        },
       });
       // Sin `outputExcerpt`: el stdout de tsc puede contener código del
       // proyecto y este evento se persiste.
@@ -902,11 +995,19 @@ function handleModelStep(ctx: LoopContext, phase: ModelPhase, step: StepLike): v
       if (name && (SCRIPT_NAMES as readonly string[]).includes(name) && typeof output?.success === "boolean") {
         const success = output.success;
         const scriptName = name as ScriptName;
+        const exitCode = typeof output.exitCode === "number" ? output.exitCode : success ? 0 : 1;
+        const durationMs = typeof output.durationMs === "number" ? Math.max(0, Math.round(output.durationMs)) : undefined;
+        const outputSha256 = typeof output.outputSha256 === "string" ? output.outputSha256 : undefined;
         ctx.lastVerification = { criterion: `script:${name}`, status: success ? "passed" : "failed" };
         recordVerificationSafe(ctx, {
           criterion: { kind: "script", name: scriptName },
           status: success ? "passed" : "failed",
-          evidence: { exitCode: success ? 0 : 1, source: "tool" },
+          evidence: {
+            exitCode,
+            ...(durationMs !== undefined ? { durationMs } : {}),
+            ...(outputSha256 ? { outputSha256 } : {}),
+            source: "tool",
+          },
         });
         appendEventSafe(ctx, { type: "run_script_result", name, success });
       }
@@ -1036,6 +1137,11 @@ function handleModelStep(ctx: LoopContext, phase: ModelPhase, step: StepLike): v
     markStall(ctx, verdict.detector, verdict.message);
     ctx.transcript.push(`⛔ ${verdict.message}`);
   }
+
+  // Fase 9F: si se pidió cancelar durante este paso, ya se persistió el
+  // checkpoint y ahora sí se corta el controller. Las tools del paso que
+  // todavía estén en vuelo tienen hasta este punto (o hasta la gracia).
+  if (ctx.cancelRequested) abortInternal(ctx);
 }
 
 async function callModel(ctx: LoopContext, options: ModelCallOptions): Promise<ModelCallResult> {
@@ -1047,8 +1153,10 @@ async function callModel(ctx: LoopContext, options: ModelCallOptions): Promise<M
   // posterior. Dentro de esta llamada el cursor sigue garantizando que
   // un reintento por Step-0 use una credential distinta.
   const cursor = ctx.pool.beginOperation();
+  const tools = gateTools(ctx, options.tools);
 
   while (true) {
+    if (ctx.cancelRequested) abortInternal(ctx);
     if (ctx.signal.aborted) return { ok: false, terminal: abortDecision(ctx) };
 
     const acquireResult = cursor.next();
@@ -1079,13 +1187,14 @@ async function callModel(ctx: LoopContext, options: ModelCallOptions): Promise<M
     const model = buildModelForId(ctx.providerName, ctx.modelId, apiKey);
 
     try {
+      ctx.modelCallActive = true;
       await ctx.generateTextImpl({
         model,
         system: options.system,
         prompt: options.prompt,
-        tools: options.tools,
+        tools,
         abortSignal: ctx.signal,
-        stopWhen: options.stopWhen,
+        stopWhen: [...options.stopWhen, () => ctx.cancelRequested],
         prepareStep: async ({ messages, stepNumber }: { messages: ModelMessage[]; stepNumber: number }) => {
           // Fase 8D/9C: como máximo `refreshLimit` refrescos por corrida;
           // el engine tiene su propio timeout y conserva el briefing
@@ -1117,6 +1226,7 @@ async function callModel(ctx: LoopContext, options: ModelCallOptions): Promise<M
         ...(options.toolChoice ? { toolChoice: options.toolChoice } : {}),
       } as Parameters<typeof generateText>[0]);
       ctx.pool.release(credentialId, "success", Date.now(), undefined, healthGeneration);
+      if (ctx.cancelRequested) abortInternal(ctx);
       return { ok: true };
     } catch (error) {
       if (ctx.signal.aborted) return { ok: false, terminal: abortDecision(ctx) };
@@ -1159,6 +1269,8 @@ async function callModel(ctx: LoopContext, options: ModelCallOptions): Promise<M
           error: sanitizeError(buildErrorMessage(error), ctx.workspaceRoot),
         },
       };
+    } finally {
+      ctx.modelCallActive = false;
     }
   }
 }
@@ -1169,6 +1281,7 @@ async function ensurePlan(ctx: LoopContext): Promise<PlanOutcome> {
 
   let lastErrors: string[] = [];
   for (let attempt = 1; attempt <= ctx.limits.maxInvalidPlanAttempts; attempt += 1) {
+    if (ctx.cancelRequested) abortInternal(ctx);
     if (ctx.signal.aborted) return { ok: false, terminal: abortDecision(ctx) };
     const budget = checkBudget(ctx);
     if (budget) return { ok: false, terminal: budget };
@@ -1352,6 +1465,7 @@ async function executePhase(ctx: LoopContext): Promise<ModelCallResult> {
       () => checkBudget(ctx) !== null,
       () => ctx.stallReason !== null || ctx.replans > ctx.limits.maxReplans,
       () => ctx.progressWarningPending,
+      () => ctx.cancelRequested,
       () => ctx.signal.aborted,
     ],
   });
@@ -1447,9 +1561,11 @@ async function verifyGlobal(ctx: LoopContext, plan: PersistedPlan): Promise<{ ok
   const failures: string[] = [];
 
   for (const criterion of plan.acceptance) {
+    if (ctx.cancelRequested) abortInternal(ctx);
     if (ctx.signal.aborted) return { ok: false, reason: "Cancelada durante la verificación." };
 
     let result: Awaited<ReturnType<AcceptanceVerifier>>;
+    ctx.execActive = true;
     try {
       result = await ctx.verifier({
         criterion,
@@ -1459,6 +1575,8 @@ async function verifyGlobal(ctx: LoopContext, plan: PersistedPlan): Promise<{ ok
       });
     } catch {
       result = { status: "unavailable", evidence: { reason: "verifier_error" }, detail: "El verificador falló." };
+    } finally {
+      ctx.execActive = false;
     }
 
     ctx.lastVerification = { criterion: describeCriterion(criterion), status: result.status };
@@ -1468,6 +1586,14 @@ async function verifyGlobal(ctx: LoopContext, plan: PersistedPlan): Promise<{ ok
       status: result.status === "passed" ? "passed" : result.status === "failed" ? "failed" : "unverified",
       evidence: result.evidence ?? {},
     });
+
+    // La cancelación pudo llegar mientras el verificador corría: se deja
+    // terminar ESE comando, se registra su resultado real y recién ahí se
+    // corta el controller interno.
+    if (ctx.cancelRequested) {
+      abortInternal(ctx);
+      return { ok: false, reason: "Cancelada durante la verificación." };
+    }
 
     if (result.status === "passed") continue;
     if (!isMachineCheckable(criterion)) {
@@ -1519,13 +1645,16 @@ async function finalize(
     }
   }
 
-  // Un FAILED/CANCELLED no propone cambios parciales: el usuario no debe
+  if (finalState === "CANCELLED") abortInternal(ctx);
+
+  // Un FAILED/CANCELLED no propone cambios parciales al usuario: no debe
   // revisar un diff a medias de una corrida que no llegó a un estado
   // estable. BLOCKED/STALLED/BUDGET_EXHAUSTED sí pueden tener trabajo útil.
-  let proposals: AgentFileProposal[] = [];
-  if (finalState !== "FAILED" && finalState !== "CANCELLED") {
-    proposals = await collectProposals(ctx);
-  }
+  // El informe final, en cambio, sí refleja el estado real del workspace
+  // incluso para FAILED/CANCELLED — son hechos, no propuestas.
+  const reportProposals = await collectProposals(ctx);
+  const proposals: AgentFileProposal[] =
+    finalState !== "FAILED" && finalState !== "CANCELLED" ? reportProposals : [];
 
   if (finalState === "DONE") {
     const plan = currentPlan(ctx);
@@ -1540,6 +1669,38 @@ async function finalize(
 
   ctx.transcript.push(`⛔ ${finalState}${error ? `: ${error}` : ""}`);
   const outcome = resolveTaskOutcome(finalState, proposals.length > 0, stopReason);
+
+  if (finalState === "CANCELLED" && !ctx.cancelledEventEmitted) {
+    ctx.cancelledEventEmitted = true;
+    appendEventSafe(ctx, { type: "cancelled", forced: ctx.cancelGraceExpired, stopReason: outcome.stopReason });
+  }
+
+  // Fase 9F — informe final determinista, metadata-only. Se construye desde
+  // el ledger y las proposals reales; nunca desde la prosa del modelo.
+  const plan = currentPlan(ctx);
+  const report = buildFinalReport({
+    taskId: ctx.taskId,
+    runId: ctx.runId,
+    state: finalState,
+    outcome,
+    stopReason,
+    budget: snapshotBudget(ctx),
+    plan,
+    steps: getStepsForRun(ctx.runId, 1_000),
+    verifications: getVerificationsForRun(ctx.runId),
+    proposals: reportProposals,
+    warnings: ctx.warnings,
+    resumeWarnings: ctx.resume?.warnings,
+    workspaceRoot: ctx.workspaceRoot,
+    maxBytes: ctx.limits.maxFinalReportBytes,
+  });
+  try {
+    const saved = saveFinalReport({ runId: ctx.runId, taskId: ctx.taskId, report });
+    // Idempotencia: si el informe ya existía, no se duplica el evento.
+    if (saved.created) appendEventSafe(ctx, { type: "final_report", report: saved.report.report });
+  } catch {
+    warn(ctx, "final_report_not_persisted");
+  }
 
   return {
     runId: ctx.runId,
@@ -1586,7 +1747,11 @@ async function createLoopContext(options: RunAutonomousLoopOptions): Promise<Loo
   });
 
   const controller = new AbortController();
-  const onExternalAbort = () => controller.abort();
+  let ctxRef: LoopContext | null = null;
+  const onExternalAbort = () => {
+    if (ctxRef) requestCancellation(ctxRef);
+    else controller.abort();
+  };
   if (options.abortSignal?.aborted) controller.abort();
   else options.abortSignal?.addEventListener("abort", onExternalAbort, { once: true });
 
@@ -1671,11 +1836,18 @@ async function createLoopContext(options: RunAutonomousLoopOptions): Promise<Loo
     searchEnabled: false,
     generateTextImpl: options.generateTextImpl ?? generateText,
     pool,
+    controller,
     signal: controller.signal,
     externalSignal: options.abortSignal,
     onExternalAbort,
     timeoutTimer,
     timedOut: false,
+    cancelRequested: false,
+    cancelGraceExpired: false,
+    cancelTimer: null,
+    modelCallActive: false,
+    execActive: false,
+    cancelledEventEmitted: false,
     now,
     startedAt,
     steps: resume?.budget.steps ?? 0,
@@ -1726,11 +1898,17 @@ async function createLoopContext(options: RunAutonomousLoopOptions): Promise<Loo
     warn(ctx, "cost_limit_not_enforceable");
   }
 
+  ctxRef = ctx;
+  // El signal pudo abortarse entre el registro del listener y este punto:
+  // se re-chequea para no perder la cancelación ni el evento asociado.
+  if (options.abortSignal?.aborted) requestCancellation(ctx);
+
   return ctx;
 }
 
 function cleanup(ctx: LoopContext): void {
   clearTimeout(ctx.timeoutTimer);
+  if (ctx.cancelTimer) clearTimeout(ctx.cancelTimer);
   ctx.externalSignal?.removeEventListener("abort", ctx.onExternalAbort);
 }
 
@@ -1766,6 +1944,7 @@ async function runWithContext(ctx: LoopContext): Promise<AutonomousLoopResult> {
   }
 
   while (true) {
+    if (ctx.cancelRequested) abortInternal(ctx);
     if (ctx.signal.aborted) {
       const decision = abortDecision(ctx);
       return finalize(ctx, decision.state, decision.stopReason, decision.error);

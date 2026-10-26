@@ -56,6 +56,7 @@ import {
   type PlanSource,
   type PlanStatus,
 } from "./plan";
+import type { FinalReport } from "./final-report";
 
 const MAX_STEP_JSON_CHARS = 65_536;
 const MAX_EVIDENCE_FILE_BYTES = 2_000_000;
@@ -1314,7 +1315,21 @@ export type RecordStepInput = {
 };
 
 const MAX_RESULT_SUMMARY_CHARS = 500;
-const RESULT_KEYS = new Set(["ok", "errorCode", "code", "summary", "exitCode", "durationMs", "toolCallId", "count", "files"]);
+const RESULT_KEYS = new Set([
+  "ok",
+  "errorCode",
+  "code",
+  "summary",
+  "exitCode",
+  "durationMs",
+  "toolCallId",
+  "count",
+  "files",
+  // Fase 9F — metadata de comandos; nunca output/stdout/stderr.
+  "name",
+  "success",
+  "outputSha256",
+]);
 
 /** Convierte resultados arbitrarios en metadatos allowlisted. Cualquier
  * clave desconocida (típicamente `content`, `stdout`, `output`) se descarta
@@ -1343,6 +1358,12 @@ function sanitizeResults(results: unknown[]): { results: Array<Record<string, un
         clean.exitCode = value;
       } else if ((key === "durationMs" || key === "count") && typeof value === "number" && Number.isFinite(value)) {
         clean[key] = value;
+      } else if (key === "name" && typeof value === "string") {
+        clean.name = redactSecrets(value).slice(0, 80);
+      } else if (key === "success" && typeof value === "boolean") {
+        clean.success = value;
+      } else if (key === "outputSha256" && typeof value === "string" && /^[a-f0-9]{64}$/i.test(value)) {
+        clean.outputSha256 = value.toLowerCase();
       } else if (key === "files") {
         const files = sanitizeFiles(value);
         clean.files = files.files;
@@ -1652,4 +1673,95 @@ export function findCommandVerification(
     if (recordedExit === exitCode) return verification;
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Fase 9F — informe final persistido (metadata-only, idempotente por run)
+// ---------------------------------------------------------------------------
+
+type FinalReportRow = {
+  run_id: string;
+  task_id: string;
+  status: string;
+  stop_reason: string | null;
+  report_json: string;
+  created_at: number;
+};
+
+export type PersistedFinalReport = {
+  runId: string;
+  taskId: string;
+  status: string;
+  stopReason: string | null;
+  report: FinalReport;
+  createdAt: number;
+};
+
+function rowToFinalReport(row: FinalReportRow): PersistedFinalReport {
+  return {
+    runId: row.run_id,
+    taskId: row.task_id,
+    status: row.status,
+    stopReason: row.stop_reason,
+    report: JSON.parse(row.report_json) as FinalReport,
+    createdAt: row.created_at,
+  };
+}
+
+export function getFinalReport(runId: string): PersistedFinalReport | null {
+  const row = getDb()
+    .prepare("SELECT * FROM agent_final_reports WHERE run_id = ?")
+    .get(runId) as FinalReportRow | undefined;
+  return row ? rowToFinalReport(row) : null;
+}
+
+export type SaveFinalReportInput = {
+  runId: string;
+  taskId: string;
+  report: FinalReport;
+  now?: number;
+};
+
+/** Persistencia idempotente: la PK es `run_id`, así que dos finalizaciones
+ * de la misma corrida devuelven el primer informe y `created:false`. El
+ * llamador usa `created` para emitir el evento `final_report` una sola vez. */
+export function saveFinalReport(input: SaveFinalReportInput): {
+  report: PersistedFinalReport;
+  created: boolean;
+} {
+  if (input.report.runId !== input.runId) {
+    throw new Error("El informe final no pertenece a la corrida indicada.");
+  }
+  if (input.report.taskId !== input.taskId) {
+    throw new Error("El informe final no pertenece a la task indicada.");
+  }
+  const reportJson = JSON.stringify(input.report);
+  if (Buffer.byteLength(reportJson, "utf8") > 10_000_000) {
+    throw new Error("El informe final supera el máximo absoluto de 10 MB.");
+  }
+
+  const db = getDb();
+  const tx = db.transaction((): { report: PersistedFinalReport; created: boolean } => {
+    const existing = getFinalReport(input.runId);
+    if (existing) return { report: existing, created: false };
+
+    const now = input.now ?? Date.now();
+    db.prepare(
+      `INSERT INTO agent_final_reports (run_id, task_id, status, stop_reason, report_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(input.runId, input.taskId, input.report.status, input.report.stopReason, reportJson, now);
+
+    return {
+      report: {
+        runId: input.runId,
+        taskId: input.taskId,
+        status: input.report.status,
+        stopReason: input.report.stopReason,
+        report: input.report,
+        createdAt: now,
+      },
+      created: true,
+    };
+  });
+  return tx();
 }

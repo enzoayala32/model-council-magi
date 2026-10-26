@@ -93,6 +93,19 @@ function formatEvent(event: AgentEvent): { text: string; kind: "err" | "ok" | "s
   if (p.type === "progress_warning") {
     return { text: `⚠️ paso ${p.step + 1}: ${p.message} (${p.count}/${p.threshold})`, kind: "status" };
   }
+  if (p.type === "cancellation_requested") {
+    return { text: "⏹ Cancelación solicitada; se espera a las tools en vuelo.", kind: "status" };
+  }
+  if (p.type === "cancelled") {
+    return { text: `⏹ Corrida cancelada${p.forced ? " (gracia agotada)" : ""} (${p.stopReason}).`, kind: "err" };
+  }
+  if (p.type === "final_report") {
+    const r = p.report;
+    return {
+      text: `📄 Informe final: ${r.status} — plan ${r.plan.done}/${r.plan.total}, ${r.changes.length} cambio(s), ${r.limitations.length} limitación(es).`,
+      kind: r.status === "done" ? "ok" : "status",
+    };
+  }
   return { text: JSON.stringify(p), kind: "text" };
 }
 
