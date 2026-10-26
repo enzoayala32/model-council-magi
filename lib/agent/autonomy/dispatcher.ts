@@ -715,7 +715,6 @@ function requestCancellation(ctx: LoopContext): void {
     ctx.transcript.push("⏹ Se agotó la gracia de cancelación; se abortan las tools en vuelo.");
     abortInternal(ctx);
   }, graceMs);
-  ctx.cancelTimer.unref?.();
 }
 
 /** Envuelve cada tool para que, una vez pedida la cancelación, ninguna tool
