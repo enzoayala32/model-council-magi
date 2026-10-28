@@ -91,7 +91,7 @@ Los 6 exports eliminados: `prunePlanVersions` (`lib/agent/autonomy/ledger.ts`), 
 **Archivos creados:** `lib/agent/test-tool-call.ts`.
 **Archivos eliminados:** `app/api/council/route.ts`.
 **Archivos modificados:** `README.md`, `lib/agent/autonomy/ledger.ts`, `lib/agent/autonomy/plan.ts`, `lib/agent/autonomy/verifier.ts`, `lib/agent/context/sensitive-paths.ts`, `lib/agent/task-store.ts`, `lib/agent/workspace-store.ts`, `lib/agent/autonomy/test-plan-tools.ts`, `lib/agent/test-agent-routes.ts`, `lib/agent/test-delete-file.ts`, `lib/agent/test-read-range.ts`, `lib/agent/test-repo-map-tool.ts`, `lib/agent/test-run-script.ts`, `lib/agent/test-tool-policy.ts`, `lib/agent/test-web-search-tool.ts`.
-**Commit:** pendiente al momento de escribir esta sección; se completa en el commit de la fase.
+**Commit:** `6c0ed5d` — `fase 3: código muerto y tipado de tests`.
 
 **Verificación:** `npm run typecheck` exit 0 (el primer intento falló con TS2307 porque `.next/types/validator.ts` todavía apuntaba a la ruta eliminada; se borró `.next` y el build regeneró los tipos). `npm run lint` exit 0 con **0 errores y 39 warnings** (ya no queda ningún `no-explicit-any`). `npm test` **63/63 OK**. `npm run build` exit 0 con los mismos 2 warnings preexistentes de Turbopack; `/api/council` ya no aparece en las rutas compiladas.
 
