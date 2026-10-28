@@ -107,6 +107,23 @@ Se activa desde el conector "Filesystem" en Ajustes, eligiendo qué modelo del p
 
 ---
 
+## Coding Agent (opcional)
+
+Además del consejo, la app trae un **Coding Agent** con su propia UI en `/agent`: elegís un proyecto, escribís una task y el agente lee el repo, propone cambios, corre scripts allowlisted y deja todo listo para revisar. Nada se aplica solo: los cambios pasan por la misma cola de propuestas con aprobación.
+
+**Qué incluye:**
+
+- **Proyectos y tasks persistentes.** `agent_projects`, `agent_tasks`, `agent_workspaces`, `agent_proposals` y `agent_events` viven en SQLite. Cada task tiene su workspace aislado; podés cancelarla, reencolarla o borrarla desde la UI.
+- **Dos runtimes.** El **loop legacy** (`lib/agent/loop.ts`) hace tool-use con `generateText` de `ai`, failover de credenciales Step-0 (solo rota si el error ocurrió antes del primer step), context governor y `buildProposals` desde `git status`. El **Autonomous Loop** (`lib/agent/autonomy/dispatcher.ts`) es opt-in con `MAGI_AUTONOMOUS_LOOP=1`: planifica, ejecuta, verifica acceptance machine-checkable y persiste un ledger reanudable.
+- **Ledger y resume.** `lib/agent/autonomy/ledger.ts` es la única capa que escribe `agent_runs`, `agent_plans`, `agent_plan_items`, `agent_steps`, `agent_file_checkpoints`, `agent_verifications` y `agent_final_reports`. Valida transiciones y evidencia; sin verificador el resultado es `verification_unavailable`, nunca éxito asumido. Los detalles de límites están en [`docs/ARQUITECTURA-AGENTE.md`](docs/ARQUITECTURA-AGENTE.md).
+- **Tools con política.** `read_file`, `list_directory`, `run_script`, `web_search` (requiere `TAVILY_API_KEY`), `typecheck`, propuestas de escritura/edición y borrado controlado. Los scripts solo pueden ser los allowlisted del proyecto; los paths se resuelven contra el workspace y se rechazan symlinks/`..`.
+- **Context engine.** Con el engine encendido (default en tasks reales, se apaga con `MAGI_CONTEXT_ENGINE_DISABLED=1`), el agente recibe briefing, repo-map y presupuesto de tokens por paso. Si el engine falla, la task sigue sin contexto automático: nunca rompe la corrida.
+- **Aplicación y verificación.** Aplicar una propuesta es explícito; para `.ts`/`.tsx` se corre `tsc --noEmit` real antes de aprobar. Los cambios multiarchivo se agrupan por `groupId`.
+
+**Variables relevantes:** `OPENROUTER_CODING_MODEL`, `MAGI_AUTONOMOUS_LOOP`, `MAGI_CONTEXT_ENGINE_DISABLED`, `AGENT_FS_ROOT`, `TAVILY_API_KEY` (ver `.env.example`). El Coding Agent usa el mismo pool de credenciales OpenRouter que el consejo (`OPENROUTER_API_KEY`, `OPENROUTER_API_KEY_2`, …).
+
+---
+
 ## Adjuntos
 
 Podés subir imágenes, archivos de texto, y documentos **PDF/DOCX** — el texto se extrae server-side (`pdf-parse` y `mammoth`) antes de mandarlo al consejo. La extracción es best-effort: un archivo corrupto o escaneado sin OCR no rompe la corrida.
@@ -134,7 +151,9 @@ El estado del consejo (en espera, deliberando, completo) se muestra en un panel 
 - **Íconos:** `lucide-react`
 - **Gateways de LLM:** [OpenRouter](https://openrouter.ai) (principal), [NVIDIA NIM](https://build.nvidia.com) y [Google AI Studio](https://aistudio.google.com) (directos)
 - **Extracción de documentos:** `pdf-parse`, `mammoth`
-- **Persistencia:** `localStorage` del navegador para hilos/skills — sin base de datos
+- **Persistencia:** SQLite local con `better-sqlite3` en `data/council.db` (hilos, tasks del Coding Agent, proyectos, workspaces, propuestas, eventos y ledger de autonomía). `localStorage` queda solo para preferencias de UI (skills, conectores, hilos migrados una vez).
+- **Coding Agent:** `ai` SDK + tools nativas, con loop legacy y Autonomous Loop opt-in (`MAGI_AUTONOMOUS_LOOP=1`).
+- **Requisito:** Node **>= 22** (`package.json` → `engines.node`). `better-sqlite3` es nativo: si tu Node no tiene binario prebuilt, necesita toolchain de compilación (Python + C++ build tools).
 
 ---
 
@@ -142,11 +161,15 @@ El estado del consejo (en espera, deliberando, completo) se muestra en un panel 
 
 ### 1. Clonar e instalar
 
+Requisitos: **Node >= 22** y npm. En Windows conviene una terminal con permisos de build si `better-sqlite3` no encuentra un prebuilt.
+
 ```bash
 git clone https://github.com/enzoayala32/model-council-magi.git
 cd model-council-magi
 npm install
 ```
+
+La primera ejecución crea `data/council.db` y aplica el schema con `CREATE TABLE IF NOT EXISTS` (sin servicio externo ni migraciones manuales). El archivo está ignorado por git; no lo commitees.
 
 ### 2. Configurar variables de entorno
 
@@ -154,7 +177,7 @@ npm install
 cp .env.example .env
 ```
 
-Como mínimo necesitás `OPENROUTER_API_KEY` ([conseguí una gratis acá](https://openrouter.ai/keys)). `NVIDIA_API_KEY` y `GEMINI_API_KEY` son opcionales.
+Como mínimo necesitás `OPENROUTER_API_KEY` ([conseguí una gratis acá](https://openrouter.ai/keys)). `NVIDIA_API_KEY`, `GEMINI_API_KEY` y `TAVILY_API_KEY` son opcionales. El `.env.example` documenta **todas** las variables que lee el código, incluidas las de seguridad de `/api/*` y los flags del Coding Agent.
 
 ### 3. Correr en desarrollo
 
@@ -162,7 +185,7 @@ Como mínimo necesitás `OPENROUTER_API_KEY` ([conseguí una gratis acá](https:
 npm run dev
 ```
 
-Abrí [http://localhost:3000](http://localhost:3000).
+Abrí [http://localhost:3000](http://localhost:3000). Si usás otro puerto, definí `PORT` o `ALLOWED_HOSTS` (ver seguridad).
 
 ### 4. Build de producción
 
@@ -171,7 +194,19 @@ npm run build
 npm start
 ```
 
+### 5. Verificación local
+
+```bash
+npm run typecheck   # tsc --noEmit
+npm run lint        # eslint .
+npm test            # suite offline (sin proveedores reales)
+npm run test:live   # suite que sí llama a proveedores (requiere keys)
+```
+
+`npm test` descubre los scripts `council:test-*` y `provider-resilience:test-*` por prefijo y omite los live, `agent:test-project` (manual) y los agrupadores `agent:test-phase8`/`phase9` (sus sub-tests ya corren). El runner imprime qué omitió y por qué.
+
 ---
+
 
 ## Seguridad de la API (Fase 1)
 
@@ -201,29 +236,71 @@ Si corrés en otro puerto, definí `PORT` o `ALLOWED_HOSTS`; si estás detrás d
 ## Estructura del proyecto
 
 ```
+proxy.ts                          # seguridad /api/* (Host, Origin, token, Content-Type)
+next.config.ts                    # config de Next + tracing
+eslint.config.mjs                 # flat config (eslint-config-next)
+scripts/run-tests.ts              # runner de la suite offline/live
+
 app/
-  page.tsx                        # UI completa
-  layout.tsx                      # metadata, lang="es"
-  globals.css                     # paleta cream/teal + estilos generales
-  components/council/              # panel MAGI (autocontenido)
-  api/council/stream/route.ts      # orquesta las fases, personas MAGI, vía SSE
-  api/council/apply-file-change/   # aprobación de cambios (incluye grupos atómicos)
-  api/council/model-health/        # snapshot de confiabilidad por modelo
+  layout.tsx, globals.css, icon.svg
+  page.tsx                        # UI del consejo (configuración + render)
+  agent/                          # UI del Coding Agent (/agent)
+    page.tsx, ProjectPicker.tsx, useAgentTaskEvents.ts, agent.css
+  hooks/
+    useCouncilRun.ts              # motor cliente de la corrida (SSE, estado, propuestas)
+    useThreads.ts                 # hilos + snapshot del turno
+    useModelHealth.ts, useModelPing.ts
+  components/
+    council/                      # panel MAGI autocontenido
+    main/                         # sidebar, composer, settings, results, vistas
+  api/
+    council/
+      stream/route.ts             # plomería HTTP/SSE → lib/council-orchestrator.ts
+      apply-file-change/          # aprobación de cambios (grupos atómicos)
+      model-health/, ping/
+    agent/
+      tasks/                      # CRUD, cancel, apply, events, browse, inspect
+      projects/, models/
+    threads/                      # GET/POST/DELETE + migrate (localStorage → SQLite)
+    provider-resilience/status/   # snapshot de credenciales/pool
+
 lib/
-  models.ts                       # catálogo de modelos, fallbackModelId, paneles de fusión
-  openrouter.ts                   # cliente OpenRouter
-  nvidia.ts                       # cliente NVIDIA NIM directo
-  google-ai-studio.ts             # cliente Google AI Studio directo
-  llm-shared.ts                   # tipos y clase de error compartidos
-  agent-tools.ts                  # herramientas de GitHub
-  fs-tools.ts                     # herramientas del agente de archivos + auto-verificación TS
-  model-health.ts                 # tracker en memoria de éxito/falla por modelo
-  attachment-extraction.ts        # extracción de texto de PDF/DOCX
-  skills.ts, threads.ts           # habilidades del agente e hilos guardados
+  council-orchestrator.ts         # pipeline draft → debate → voto → juez → síntesis
+  council-run.ts                  # draft/debate/vote/judge + failover + watchdog
+  council-consensus.ts            # convergencia, votos, mind-change, parsing
+  council-prompts.ts              # prompts de cada fase
+  council-types.ts                # StreamRequest/StreamEvent compartidos
+  persona-presets.ts              # presets MAGI/code-review/research/writing/strategy
+  models.ts                       # catálogo, fallbackModelId, paneles de fusión
+  openrouter.ts, nvidia.ts, google-ai-studio.ts, llm-shared.ts
+  model-health.ts, model-ping.ts
+  agent-tools.ts, fs-tools.ts     # tools GitHub y filesystem + auto-verificación TS
+  attachment-extraction.ts        # PDF/DOCX → texto
+  api-security.ts, api-json.ts    # reglas de seguridad y body JSON uniforme
+  db.ts                           # SQLite (better-sqlite3), schema y PRAGMA user_version
+  threads.ts, threads-db.ts       # hilos: cliente y persistencia
+  skills.ts
+  agent/                          # Coding Agent
+    loop.ts                       # runtime legacy (generateText + tools)
+    runner.ts                     # task → workspace → loop/autonomía → estado
+    tools.ts, tool-policy.ts, safe-path.ts
+    task-store.ts, project-store.ts, workspace-*.ts, proposal-*.ts, event-log.ts
+    apply.ts, repo-*.ts, dependency-graph.ts, read-range.ts, search-provider.ts
+    context/                      # engine, briefing, budget, governor, sensitive-paths
+    autonomy/                     # contract, plan, ledger, dispatcher, verifier, resume
+  provider-resilience/            # pool, cooldown, classify, redact, config, events
+
+data/council.db                   # SQLite local (ignorado por git)
+docs/REPORTE-REFACTOR.md          # reporte de este refactor
+docs/ARQUITECTURA-AGENTE.md       # límites ledger.ts / loop.ts
 ```
+
+Los archivos `test-*.ts` viven junto al módulo que prueban (`lib/`, `lib/agent/`, `lib/agent/autonomy/`, `lib/agent/context/`, `lib/provider-resilience/`) y se ejecutan con `tsx` vía scripts de `package.json`.
 
 ---
 
 ## Créditos
 
-Fork de [sanky369/open-model-council](https://github.com/sanky369/open-model-council), la implementación original del concepto "Model Council" estilo Perplexity. Esta versión suma: traducción completa al español, proveedores directos de NVIDIA/Google además de OpenRouter con fallback por modelo, ingeniería de resiliencia extensa, agente de archivos con aprobación (patchsets atómicos y auto-verificación de TypeScript real), extracción de PDF/DOCX, mapa de desacuerdo visual, y el panel MAGI con Modo MAGI opcional.
+Fork de [sanky369/open-model-council](https://github.com/sanky369/open-model-council), la implementación original del concepto "Model Council" estilo Perplexity. Esta versión suma: traducción completa al español, proveedores directos de NVIDIA/Google además de OpenRouter con fallback por modelo, ingeniería de resiliencia extensa, agente de archivos con aprobación (patchsets atómicos y auto-verificación de TypeScript real), extracción de PDF/DOCX, mapa de desacuerdo visual, el panel MAGI con Modo MAGI opcional, persistencia SQLite para hilos y tasks, y un Coding Agent con loop legacy + Autonomous Loop reanudable.
+
+Inspiraciones adicionales: [`magi`](https://github.com/fshiori/magi) para el protocolo adaptativo, los presets de personas y el tracking de cambio de opinión. El concepto "Model Council" original es de [sanky369/open-model-council](https://github.com/sanky369/open-model-council).

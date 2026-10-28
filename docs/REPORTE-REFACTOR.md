@@ -127,12 +127,21 @@ Los 6 exports eliminados: `prunePlanVersions` (`lib/agent/autonomy/ledger.ts`), 
 **Archivos modificados:** `app/api/council/stream/route.ts`, `app/page.tsx`, `package.json` (script `council:test-orchestrator`).
 **Commit:** `f288253` — `fase 5: orquestador y hook del consejo`.
 
-**Verificación:** `npm run typecheck` exit 0. `npm run lint` exit 0 con **0 errores y 37 warnings** (bajó de 39: se fueron dos unused vars al mover código). `npm run council:test-orchestrator` **54/54**. `npm test` **68/68 scripts OK**. `npm run build` exit 0 con **2 warnings** de Turbopack, ambos con el mismo trace `next.config.ts` → `lib/fs-tools.ts` → `app/api/council/apply-file-change/route.ts` (preexistente; en Fase 4 aparecía una sola vez vía `stream/route.ts`). Smoke test con dev server en `:3100`: `/` 200, prompt vacío devuelve SSE de error, JSON inválido 400, `Content-Type: text/plain` 403. Servidor detenido.
+**Verificación:** `npm run typecheck` exit 0. `npm run lint` exit 0 con **0 errores y 37 warnings** (bajó de 39; el detalle por regla está en la sección 5). `npm run council:test-orchestrator` **54/54**. `npm test` **68/68 scripts OK**. `npm run build` exit 0 con **2 warnings** de Turbopack, ambos con el mismo trace `next.config.ts` → `lib/fs-tools.ts` → `app/api/council/apply-file-change/route.ts` (preexistente; en Fase 4 aparecía una sola vez vía `stream/route.ts`). Smoke test con dev server en `:3100`: `/` 200, prompt vacío devuelve SSE de error, JSON inválido 400, `Content-Type: text/plain` 403. Servidor detenido.
 
 
 ### Fase 6 — Documentación y configuración
 
-Pendiente de implementación.
+**Qué se hizo:** se puso al día la documentación con el estado real del repo después de Fases 1–5 y se completó la configuración de entorno.
+
+- **README en español, actualizado:** se corrigió la sección de stack (SQLite + `better-sqlite3`, ya no “sin base de datos”), se agregó el requisito **Node >= 22**, una sección **Coding Agent** (proyectos/tasks, loop legacy vs. autonomía opt-in, ledger/resume, tools, context engine, aplicación/verificación), una sección de **scripts** (`typecheck`, `lint`, `test`, `test:live`, `build`) y la **estructura real** del proyecto (incluye `app/agent`, `app/hooks`, `app/api/agent`, `lib/agent/*`, `lib/provider-resilience/*`, `scripts/`, `proxy.ts` y `data/council.db`). Se mantuvieron el español y los créditos, sumando la inspiración en `magi` y el fork original.
+- **`.env.example` completo:** ahora documenta las **19 variables** que lee el código de producción: `OPENROUTER_API_KEY`, `OPENROUTER_API_KEY_2..N`, `OPENROUTER_SITE_URL`, `OPENROUTER_APP_NAME`, `OPENROUTER_CODING_MODEL`, `NVIDIA_API_KEY`, `GEMINI_API_KEY`, `SYNTHESIS_MODEL`, `FUSION_JUDGE_MODEL`, `FOLLOWUP_MODEL`, `AGENT_FS_ROOT`, `TAVILY_API_KEY`, `GITHUB_TOKEN`, `MAGI_AUTONOMOUS_LOOP`, `MAGI_CONTEXT_ENGINE_DISABLED`, `ALLOWED_HOSTS`, `ALLOWED_ORIGINS`, `APP_ACCESS_TOKEN` y `PORT`. Cada una con default, obligatoriedad y efecto. La única variable de `process.env` no documentada es `PATH`, que solo aparece en un test de política de tools y no es configuración de la app.
+
+**Archivos modificados:** `README.md`, `.env.example`, `docs/REPORTE-REFACTOR.md`.
+**Commit:** pendiente al momento de escribir esta sección; se completa en el commit de la fase.
+
+**Verificación:** `npm run typecheck` exit 0; `npm run lint` exit 0 con 0 errores y 37 warnings; `npm test` **68/68 scripts OK**. No hubo cambios de código, rutas ni dependencias, así que no se repitió el build de producción (el de Fase 5 sigue siendo el último: exit 0 con 2 warnings de Turbopack). El inventario de variables se verificó con un script que recorre `app/`, `lib/`, `scripts/`, `proxy.ts` y `next.config.ts` y compara contra `.env.example`; no quedan faltantes salvo `PATH`.
+
 
 ### Fase 7 — Funcionalidades nuevas
 
@@ -354,7 +363,7 @@ EXIT=0
 | `npm test` | **67/67 OK** | **68/68 OK** (incluye `council:test-orchestrator`). |
 | `npm run council:test-orchestrator` | No existía | **54/54**. |
 | `npm run typecheck` | exit 0 | exit 0. |
-| `npm run lint` | 0 errores, 39 warnings | 0 errores, **37 warnings** (2 unused vars menos). |
+| `npm run lint` | 0 errores, 39 warnings | 0 errores, **37 warnings** (27 unused, 8 set-state, 2 `<img>`). |
 | `npm run build` | exit 0, 1 warning Turbopack | exit 0, **2 warnings** (mismo trace vía `apply-file-change`). |
 | Smoke HTTP (`:3100`) | — | `/` 200; prompt vacío SSE de error; JSON inválido 400; `text/plain` 403. |
 
@@ -368,6 +377,29 @@ TSC=0
 === Resumen: 68/68 OK ===
 npm notice run consenso-ia@0.1.0 build
 EXIT=0
+```
+
+### Fase 6 — ANTES / DESPUÉS
+
+| Comando / artefacto | ANTES (Fase 5) | DESPUÉS (Fase 6) |
+|---|---|---|
+| `README.md` → Stack técnico | “Persistencia: `localStorage`… sin base de datos”. | SQLite + `better-sqlite3`, `data/council.db`, Node >= 22 y Coding Agent. |
+| `README.md` → Coding Agent | No existía. | Sección completa: proyectos/tasks, loop legacy vs. autonomía, ledger/resume, tools, context engine, aplicación/verificación. |
+| `README.md` → Scripts | No había sección de verificación local. | `typecheck`, `lint`, `test`, `test:live`, `build` y qué omite el runner. |
+| `README.md` → Estructura | 13 líneas, desactualizada (sin `app/agent`, hooks, `lib/agent`, `provider-resilience`, `scripts`, `proxy.ts`). | Árbol real con esas carpetas y `data/council.db`. |
+| `.env.example` | 14 variables documentadas; faltaban `OPENROUTER_API_KEY_2..N`, `OPENROUTER_CODING_MODEL`, `MAGI_AUTONOMOUS_LOOP`, `MAGI_CONTEXT_ENGINE_DISABLED` y `PORT`. | **19 variables** de producción documentadas; única omisión: `PATH` (solo test). |
+| `npm run typecheck` | exit 0 | exit 0. |
+| `npm run lint` | 0 errores, 37 warnings | 0 errores, 37 warnings (sin cambios). |
+| `npm test` | 68/68 OK | **68/68 OK**. |
+| `npm run build` | exit 0, 2 warnings Turbopack | No se repitió (solo docs/config); último build sigue siendo el de Fase 5. |
+
+**Salida real resumida:**
+
+```text
+npm notice run consenso-ia@0.1.0 typecheck
+TSC=0
+✖ 37 problems (0 errors, 37 warnings)
+=== Resumen: 68/68 OK ===
 ```
 
 ---
@@ -449,6 +481,15 @@ Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar q
 - **Límites ledger/loop documentados, no refactorizados:** la fase pedía documentar responsabilidades, no mover código. En esta fase `ledger.ts` y `loop.ts` quedaron intactos; el doc `docs/ARQUITECTURA-AGENTE.md` fija la regla para futuras fases.
 - **Smoke test acotado:** se validó `/` 200, prompt vacío, JSON inválido y `Content-Type` incorrecto. No se ejecutó una corrida real con proveedores (siguen bloqueados por `ByteString ... 8212` y falta de keys), así que la UI de resultados no se verificó end-to-end. **NO VERIFICADO.**
 
+### Fase 6
+
+- **README como documento de producto, no de refactor:** se mantuvieron las secciones que explican el consejo (modo adaptativo, personas, resiliencia, adjuntos, Tribunal, panel MAGI) y se agregó lo que faltaba del estado real: SQLite, Coding Agent, Node >= 22, scripts y estructura. El detalle del refactor sigue en este reporte, no en el README.
+- **`.env.example` con defaults reales:** cada variable documenta el default que usa el código (`SYNTHESIS_MODEL`, `FUSION_JUDGE_MODEL` y `FOLLOWUP_MODEL` caen a `nvidia/nemotron-3.5-lightning:free`; `OPENROUTER_SITE_URL` a `http://localhost:3000`; `OPENROUTER_APP_NAME` a `Consenso IA`). No se inventaron variables nuevas.
+- **`OPENROUTER_API_KEY_2..N`:** el pool descubre cualquier sufijo numérico, no solo `_2`; se documenta como `_2` para no sugerir que hay un tope. Las keys duplicadas por valor se deduplican.
+- **`GITHUB_TOKEN` sí se documentó:** el inventario inicial lo omitió porque la primera pasada solo miró `process.env.X` en `lib/` y `app/`; el script de verificación lo encontró. Se agregó a `.env.example` antes de cerrar la fase.
+- **`PATH` queda fuera:** aparece en `lib/agent/test-tool-policy.ts` para simular un entorno sin scripts; no es configuración de la app y no debe ir en `.env`.
+- **Sin cambios de código:** la fase es solo documentación/configuración. No se repitió el build porque no cambió ningún archivo que Next compile; el último build válido sigue siendo el de Fase 5. `typecheck`, `lint` y `npm test` sí se corrieron.
+
 ---
 
 ## 5. Riesgos conocidos y deuda
@@ -469,6 +510,9 @@ Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar q
 - **Orquestador con proveedor falso:** los 54 casos de Fase 5 prueban el pipeline y la secuencia de eventos, pero no la integración real con OpenRouter/NVIDIA/Google ni el framing SSE byte a byte. El smoke HTTP cubrió cuatro escenarios; una corrida completa con modelos reales sigue **NO VERIFICADA**.
 - **UI sin tests de render:** `useCouncilRun` se movió sin tests de React (el repo no tiene Testing Library ni jsdom). La paridad se apoya en typecheck, lint, build y smoke; un cambio de estado que no rompa tipos podría pasar desapercibido.
 - **Doble fuente de verdad del snapshot:** `useCouncilRun` escribe `liveStateRef.current.synthesis/fusionJudge/followUps/generatedImages` además de su propio estado, porque `useThreads` lee ese ref al cerrar el turno. Es intencional para preservar el comportamiento, pero es un acoplamiento a vigilar si se parte más la página.
+- **El README puede desactualizarse otra vez:** no hay un chequeo automático de que `.env.example` cubra todas las `process.env` ni de que el árbol de estructura coincida con el repo. El inventario de Fase 6 se hizo con un script ad hoc; si se agrega una variable nueva, hay que actualizar `.env.example` a mano.
+- **`.env.example` no valida nada:** son placeholders (`sk-or-v1-your-key`, `nvapi-your-key`, etc.). La app no verifica formato; una key inválida falla recién en la primera llamada al proveedor.
+- **Build de Fase 6 no ejecutado:** al no haber cambios de código, se aceptó el build de Fase 5 como último válido. Si se toca `README.md`/`.env.example` no hace falta, pero cualquier cambio futuro de código sí debe recompilar.
 
 ---
 
@@ -510,7 +554,13 @@ Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar q
 2. `npm run dev` y abrir `http://localhost:3000`: la UI debe cargar igual que antes (sidebar, selector de modelos, composer).
 3. En otra terminal: `curl -i -X POST http://localhost:3000/api/council/stream -H "Content-Type: application/json" --data '{"prompt":""}'` → 200 SSE con `{"type":"error","error":"Enter a prompt for the council."}`; el mismo POST con `Content-Type: text/plain` → 403; con `{"` → 400.
 
-### Fases 6–7
+### Fase 6
+
+1. `cp .env.example .env` y revisar que estén las 19 variables; `npm run typecheck && npm run lint` → exit 0 (37 warnings, 0 errores).
+2. `npm test` → `=== Resumen: 68/68 OK ===`.
+3. Abrir `README.md` y confirmar las secciones “Stack técnico” (SQLite, Node >= 22), “Coding Agent”, “Instalación rápida” (scripts) y “Estructura del proyecto”; contrastar el árbol con `ls app lib`.
+
+### Fase 7
 
 Pendiente de implementación.
 
@@ -527,4 +577,5 @@ Pendiente de implementación.
 - Logs de Fase 3: `C:\Users\Admin\AppData\Local\Temp\opencode\fase3-npm-test.log`, `fase3-lint-final.log`, `fase3-build.log`, `fase3-exports2.txt`.
 - Logs de Fase 4: `C:\Users\Admin\AppData\Local\Temp\opencode\fase4-npm-test.log`, `fase4-lint.log`, `fase4-lint2.log`, `fase4-build.log`, `fase4-lock.log`.
 - Logs de Fase 5: `C:\Users\Admin\AppData\Local\Temp\opencode\fase5-npm-test.log`, `fase5-lint.log`, `fase5-build.log`, `fase5-dev.log`.
+- Logs de Fase 6: `C:\Users\Admin\AppData\Local\Temp\opencode\fase6-npm-test.log`.
 - Arquitectura del Coding Agent: `docs/ARQUITECTURA-AGENTE.md`.
