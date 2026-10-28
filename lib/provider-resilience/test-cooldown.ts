@@ -7,7 +7,7 @@
  */
 import { computeCooldownMs, parseRetryAfterMs, BASE_COOLDOWN_MS, MAX_COOLDOWN_MS } from "./cooldown";
 
-let results: boolean[] = [];
+const results: boolean[] = [];
 
 function check(label: string, ok: boolean, detail?: unknown): void {
   results.push(ok);

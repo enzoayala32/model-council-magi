@@ -13,7 +13,7 @@ export function FooterReadout({ stats }: { stats: CouncilStat[] }) {
         <span className="magiReadoutItem" key={stat.label}>
           {index > 0 ? (
             <span className="magiReadoutSep" aria-hidden="true">
-              //
+              {"//"}
             </span>
           ) : null}
           <span className="magiReadoutValue">{stat.value}</span>

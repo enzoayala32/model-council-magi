@@ -15,7 +15,6 @@ const DB_PATH = path.join(DATA_DIR, "council.db");
 const SCHEMA_VERSION = 1;
 
 declare global {
-  // eslint-disable-next-line no-var
   var __councilDb: Database.Database | undefined;
 }
 

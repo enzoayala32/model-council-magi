@@ -19,7 +19,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-let results: boolean[] = [];
+const results: boolean[] = [];
 
 function check(label: string, ok: boolean, detail?: unknown): void {
   results.push(ok);

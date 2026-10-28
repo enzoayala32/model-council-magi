@@ -27,7 +27,7 @@ import { redactSecrets, registerSecret } from "./provider-resilience/redact";
 import { getCouncilResilienceLog, __clearCouncilResilienceLogForTests } from "./provider-resilience/council-log";
 import { OpenRouterError } from "./llm-shared";
 
-let results: boolean[] = [];
+const results: boolean[] = [];
 
 function check(label: string, ok: boolean, detail?: unknown): void {
   results.push(ok);
@@ -207,7 +207,7 @@ async function main(): Promise<void> {
     try {
       await withCredentialFailover("openrouter", signal, async () => {
         calls++;
-        throw "un valor que ni siquiera es un Error"; // eslint-disable-line no-throw-literal
+        throw "un valor que ni siquiera es un Error";
       });
     } catch {
       threw = true;

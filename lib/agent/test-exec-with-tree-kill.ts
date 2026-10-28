@@ -23,7 +23,7 @@ import { execWithTreeKill, ExecWithTreeKillError } from "./exec-with-tree-kill";
 
 const execFileAsync = promisify(execFile);
 
-let results: boolean[] = [];
+const results: boolean[] = [];
 
 function check(label: string, ok: boolean, detail?: unknown): void {
   results.push(ok);

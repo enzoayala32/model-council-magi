@@ -46,7 +46,19 @@ Este documento es acumulativo. Cada fase se agrega acá con su commit, archivos,
 
 ### Fase 2 — Lint, scripts unificados y CI
 
-Pendiente de implementación.
+**Qué se hizo:**
+- Se creó `eslint.config.mjs` (flat config) con `eslint-config-next/core-web-vitals` + `eslint-config-next/typescript` y se cambió `npm run lint` de `next lint` (inexistente en Next 16) a `eslint .`.
+- Se creó `scripts/run-tests.ts`: descubre los scripts de test offline del `package.json`, los corre de a uno (varias suites escriben `data/council.db`), aplica timeout y devuelve exit 1 si alguno falla. No usa bash.
+- Se agregaron los scripts `test` (`tsx scripts/run-tests.ts`), `test:live` (`--live`) y `typecheck` (`tsc --noEmit`), y `engines.node: ">=22"` (con `package-lock.json` actualizado).
+- Se creó `.github/workflows/ci.yml`: Node 22, `npm ci`, `typecheck`, `lint`, `test`, `build`.
+- Se corrigió el fallo preexistente de `agent:test-repo-map-tool`: el hijo se lanzaba con `npx ... shell:true` y la ruta del repo (con espacios) se partía. Ahora se invoca el CLI de `tsx` con `process.execPath` y `execFile` sin shell. Pasa 50/50.
+- Se aplicaron correcciones mecánicas de lint: `prefer-const` en harness de tests, `const service = fakeService(...)` en `test-context-engine.ts`, `{"//"}` en `FooterReadout.tsx` y limpieza de directivas `eslint-disable` sin uso. En `repo-map-service.ts` quedaron dos `eslint-disable-next-line prefer-const` justificados (el closure las lee antes de asignarlas).
+
+**Archivos creados:** `eslint.config.mjs`, `scripts/run-tests.ts`, `.github/workflows/ci.yml`.
+**Archivos modificados:** `package.json`, `package-lock.json`, `app/agent/ProjectPicker.tsx`, `app/components/council/FooterReadout.tsx`, `lib/db.ts`, `lib/agent/repo-map-service.ts`, `lib/agent/test-repo-map-tool.ts` y 16 harness de tests (solo `prefer-const`/directivas).
+**Commit:** pendiente al momento de escribir esta sección; se completa en el commit de la fase.
+
+**Criterio de aceptación:** `npm run typecheck && npm run lint && npm test && npm run build` → exit 0 (verificado). `npm test` corre 63 scripts offline: 63/63 OK. El lint queda en 0 errores y 64 warnings documentados.
 
 ### Fase 3 — Código muerto y duplicado
 
@@ -185,6 +197,41 @@ tasks después: 174
 ACEPTACIÓN FASE 1: PASS
 ```
 
+### Fase 2 — ANTES / DESPUÉS
+
+| Comando | ANTES (Fase 1) | DESPUÉS (Fase 2) |
+|---|---|---|
+| `npm run lint` | FALLA: `next lint` no existe en Next 16; salida real: `Invalid project directory provided, no such directory: ...\lint` (exit 1). | exit 0; `eslint .` sobre 203 archivos: **0 errores, 64 warnings**. |
+| `npm run typecheck` | No existía el script. `npx tsc --noEmit` daba exit 0. | exit 0, sin salida. |
+| `npm test` | No existía el script. | exit 0; **63/63 scripts offline OK**. |
+| `npm run test:live` | No existía. | Script creado; no ejecutado (requiere proveedores/keys). |
+| `npm run build` | exit 0 (Fase 1). | exit 0; se mantienen 2 warnings de Turbopack sobre el trace de `next.config.ts` (preexistentes, no bloquean). |
+| `npm run agent:test-repo-map-tool` | FALLA por ruta con espacios (preexistente). | exit 0; **50/50 casos OK** tras citar correctamente el hijo. |
+| Aceptación encadenada | — | `npm run typecheck && npm run lint && npm test && npm run build` → **exit 0**. |
+
+**Desglose real de los 64 warnings de lint:** `@typescript-eslint/no-unused-vars` 30, `@typescript-eslint/no-explicit-any` 25, `react-hooks/set-state-in-effect` 7, `@next/next/no-img-element` 2. No hay errores.
+
+**Salida resumida real de `npm test`:**
+
+```text
+=== Tests offline — 63 script(s) ===
+...
+=== Resumen: 63/63 OK ===
+```
+
+**Salida real de la aceptación encadenada:**
+
+```text
+npm notice run consenso-ia@0.1.0 typecheck
+npm notice run consenso-ia@0.1.0 lint
+npm notice run consenso-ia@0.1.0 test
+...
+=== Resumen: 63/63 OK ===
+npm notice run consenso-ia@0.1.0 build
+✓ Compiled successfully
+ACCEPTANCE_EXIT=0
+```
+
 ---
 
 ## 3. Tests nuevos
@@ -193,6 +240,7 @@ ACEPTACIÓN FASE 1: PASS
 |---|---|---:|---|
 | 0 | — | — | — |
 | 1 | `lib/test-api-security.ts` | 54 | `security:test-proxy` |
+| 2 | `scripts/run-tests.ts` (runner, no casos propios) | — | `npm test` / `npm run test:live` |
 
 ---
 
@@ -218,16 +266,27 @@ ACEPTACIÓN FASE 1: PASS
 - **Test de grafo:** el test existente `agent:test-dependency-graph-repo` copia solo `app/` y `lib/`. Un import `../proxy` desde `lib/test-api-security.ts` quedaba irresoluble y hacía fallar ese test. Se quitó el import de wiring del test puro; el wiring de `proxy.ts` se verificó con el build y con el dev server real.
 - **Runtime:** se confirmó en `node_modules/next` que Next 16.2.4 usa `mod.proxy || mod.default` y que el proxy corre siempre en runtime Node.js; por eso `process.env` se usa sin restricciones de Edge.
 
+### Fase 2
+
+- **Lint con 0 errores y warnings:** no se silenció todo. `prefer-const` y el comentario JSX se corrigieron; quedan warnings en reglas que requieren decisiones de diseño: `no-explicit-any` (25, casi todos casts de `ToolSet` en harness; se auditan en Fase 3), `set-state-in-effect` (7, inicializaciones legítimas desde `localStorage`/SSE; la Fase 5 refactoriza `page.tsx` y hooks), `no-unused-vars` (30, imports/tipos de tests) y `no-img-element` (2, imágenes existentes). Se prefiere un lint verde con deuda visible a un lint que no corre.
+- **`npm test` no corre los agrupadores** `agent:test-phase8`/`agent:test-phase9` porque sus sub-tests ya están en la lista; tampoco corre `agent:test-project` (harness manual que exige una ruta) ni los live. El runner imprime qué omite y por qué.
+- **`agent:test-repo-map-tool` se arregló en Fase 2:** era un fallo preexistente de quoting en Windows, no un cambio de producto. Ahora el hijo usa `process.execPath` + CLI de `tsx` y no depende de `shell:true`.
+- **CI en `ubuntu-latest`:** se eligió Linux para que el CI valide la compatibilidad declarada. **NO VERIFICADO**: el workflow no se ejecutó en GitHub desde este entorno; localmente solo se validó en Windows. `npm ci` tampoco se corrió localmente (se usó `npm install`); el `package-lock.json` se actualizó con `npm install --package-lock-only --ignore-scripts`.
+- **`eslint --fix` borró directivas `eslint-disable` sin uso** en `ProjectPicker.tsx`, `lib/db.ts` y `test-council-resilience.ts`. Se revisó el diff: no cambia comportamiento y los tests siguen pasando.
+- **Timeout del runner:** 15 minutos por script por defecto (configurable con `--timeout=segundos`). En la primera corrida `provider-resilience:test-redact` quedó colgado sin emitir salida y se canceló; al repetirlo aislado pasó 20/20 en 2s. Se documenta como evento transitorio de la máquina, no como fallo del test.
+- **Install scripts en CI:** npm 12 bloquea por defecto los scripts de `better-sqlite3`, `esbuild`, `sharp` y `unrs-resolver`. Se aprobaron explícitamente en `package.json` (`allowScripts`, versiones pinneadas) para que `npm ci` en un entorno limpio pueda compilar/instalar las dependencias nativas. Sin esto, la suite que usa SQLite fallaría en CI aunque localmente ande.
+
 ---
 
 ## 5. Riesgos conocidos y deuda
 
 - La app no tiene autenticación por defecto. `APP_ACCESS_TOKEN` es una cerradura opcional, no un sistema de usuarios.
 - Detrás de un reverse proxy hay que preservar el `Host` o configurar `ALLOWED_HOSTS`/`ALLOWED_ORIGINS` con el host público.
-- `agent:test-project` sigue fallando sin argumentos (es un harness manual) y `agent:test-repo-map-tool` sigue fallando por la ruta con espacios; son fallos preexistentes.
-- Los proveedores reales no quedaron validados: `agent:test` y `agent:test-runner-real` fallan con `ByteString ... 8212`; `agent:test-model-registry` no tiene keys. No se declaran como OK.
-- El lint de Fase 2 todavía no está implementado; `npm run lint` sigue apuntando a `next lint`, que no existe en Next 16.
-- El runner unificado `npm test` todavía no existe; `security:test-proxy` se ejecuta individualmente hasta Fase 2.
+- `agent:test-project` sigue siendo un harness manual: sin argumentos imprime el uso y sale 1; no está en `npm test`. Con argumentos en un repo temporal dio PASS.
+- Los proveedores reales no quedaron validados: `agent:test` y `agent:test-runner-real` fallan con `ByteString ... 8212`; `agent:test-model-registry` no tiene keys. No se declaran como OK y `test:live` no se ejecuta en CI.
+- `npm run lint` queda en 0 errores pero con 64 warnings (25 `any`, 7 `set-state-in-effect`, 30 unused vars, 2 `<img>`). La deuda está a la vista y se ataca en Fases 3 y 5.
+- El workflow de CI está escrito pero **NO VERIFICADO** en GitHub; la suite local se validó solo en Windows. Si Linux falla, el primer paso es revisar los tests que asumen rutas de Windows.
+- `provider-resilience:test-redact` se colgó una vez sin salida durante la suite completa y se canceló por timeout; en aislamiento pasó 20/20. No se reprodujo.
 
 ---
 
@@ -245,7 +304,13 @@ ACEPTACIÓN FASE 1: PASS
 2. `curl -i -X POST http://localhost:3000/api/agent/tasks -H "Origin: http://evil.example" -H "Content-Type: application/json" --data "{}"` → 403.
 3. `curl -i http://localhost:3000/api/agent/browse?path=C:\\ -H "Host: evil.example"` → 403; el mismo GET con Host normal → 200.
 
-### Fases 2–7
+### Fase 2
+
+1. `npm run typecheck && npm run lint` → exit 0; el lint muestra warnings pero ningún error.
+2. `npm test` → debe terminar con `=== Resumen: 63/63 OK ===` y exit 0.
+3. `npm run build` → exit 0; opcionalmente `npm run test:live` si hay proveedores/keys configurados.
+
+### Fases 3–7
 
 Pendiente de implementación.
 
@@ -258,3 +323,4 @@ Pendiente de implementación.
 - Logs de Fase 1: `C:\Users\Admin\AppData\Local\Temp\opencode\fase1-logs-final`.
 - Build de Fase 1: `C:\Users\Admin\AppData\Local\Temp\opencode\fase1-build.log`.
 - Aceptación Fase 1: `C:\Users\Admin\AppData\Local\Temp\opencode\fase1-acceptance.js` (script) y su salida en la sección 2.
+- Logs de Fase 2: `C:\Users\Admin\AppData\Local\Temp\opencode\fase2-acceptance.log`, `fase2-npm-test.log`, `fase2-eslint-first.log`, `fase2-next-lint-before.log`.

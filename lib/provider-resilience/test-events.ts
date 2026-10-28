@@ -16,7 +16,7 @@
 import { classifyExhaustion, describeExhaustion } from "./events";
 import type { CredentialState } from "./pool";
 
-let results: boolean[] = [];
+const results: boolean[] = [];
 
 function check(label: string, ok: boolean, detail?: unknown): void {
   results.push(ok);

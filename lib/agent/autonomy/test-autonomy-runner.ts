@@ -311,7 +311,7 @@ async function main(): Promise<void> {
     {
       const taskId = newTask("legacy con proposals");
       let legacyCalls = 0;
-      let autonomyCalls = 0;
+      const autonomyCalls = 0;
       await runTask(taskId, {
         loopRunner: async () => {
           legacyCalls += 1;

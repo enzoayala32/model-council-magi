@@ -23,7 +23,7 @@ import { runAgentLoop, __resetProviderPoolsForTests, type RunAgentLoopOptions } 
 import { getCodingAgentModels, getCouncilModel } from "../models";
 import type { SearchProvider } from "./search-provider";
 
-let results: boolean[] = [];
+const results: boolean[] = [];
 
 function check(label: string, ok: boolean, detail?: unknown): void {
   results.push(ok);

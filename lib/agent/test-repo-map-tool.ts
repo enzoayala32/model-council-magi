@@ -323,7 +323,11 @@ const snapshot = () => ({ typescript: loaded(/node_modules[\\\\/]typescript[\\\\
 `,
     );
     const toolsPath = path.resolve(process.cwd(), "lib/agent/tools.ts");
-    const { stdout } = await execFileAsync("npx", ["tsx", scriptPath, toolsPath, baseDir], { cwd: process.cwd(), shell: process.platform === "win32", timeout: 120_000 });
+    // Se invoca el CLI de tsx con el Node actual en vez de `npx ... shell:true`:
+    // en Windows el shell concatenaba los argumentos sin citar y una ruta con
+    // espacios (este repo) se partía en dos. execFile sin shell cita cada arg.
+    const tsxCli = path.resolve(process.cwd(), "node_modules/tsx/dist/cli.mjs");
+    const { stdout } = await execFileAsync(process.execPath, [tsxCli, scriptPath, toolsPath, baseDir], { cwd: process.cwd(), timeout: 120_000 });
     const line = stdout.split("\n").find((l) => l.startsWith("RESULT "));
     const state = line ? JSON.parse(line.slice(7)) : null;
     check(state !== null && state.afterImport.typescript === false && state.afterImport.service === false && state.afterImport.views === true && state.afterImport.tracker === true, "importar tools.ts NO carga TypeScript ni el service (solo el tracker y las vistas, que son livianos)", () => stdout.slice(-400));

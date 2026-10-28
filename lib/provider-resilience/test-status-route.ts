@@ -12,7 +12,7 @@ import { GET as statusRoute } from "../../app/api/provider-resilience/status/rou
 import { __resetProviderPoolsForTests } from "./registry";
 import { recordCouncilResilienceEvent, __clearCouncilResilienceLogForTests } from "./council-log";
 
-let results: boolean[] = [];
+const results: boolean[] = [];
 
 function check(label: string, ok: boolean, detail?: unknown): void {
   results.push(ok);

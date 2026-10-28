@@ -317,7 +317,7 @@ async function main() {
     const gi: Record<string, WorldFile> = { "g.ts": `export class G {\n${Array.from({ length: 80 }, (_, i) => `  m${i}() {}`).join("\n")}\n}\n` };
     const fixtures: Array<[string, RepoMapSnapshotData]> = [["next", next], ["200 archivos", await world(manyFiles(200))], ["gigante", await world(gi)], ["vacío", await world({})]];
     let combos = 0;
-    let exceeded: string[] = [];
+    const exceeded: string[] = [];
     const wrongErrors: string[] = [];
     for (const [name, data] of fixtures) {
       for (const detail of ["overview", "files", "symbols"] as const) {

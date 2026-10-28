@@ -67,8 +67,7 @@ async function main() {
   console.log("--- Carga inicial única y briefing ---");
   {
     const tracker = createRepoMapTracker();
-    let service!: FakeService;
-    service = fakeService(async () => success(service, tracker));
+    const service = fakeService(async () => success(service, tracker));
     const engine = createContextEngine({ task: "editá lib/a.ts", workspaceRoot: "C:/tmp", modelId: "test/model", tracker, service });
     checkEq(engine.getSystemSuffix(), "", "antes de start no hay briefing");
     await engine.start();
@@ -139,8 +138,7 @@ async function main() {
   console.log("\n--- Refrescos acotados y single-flight ---");
   {
     const tracker = createRepoMapTracker();
-    let service!: FakeService;
-    service = fakeService(async () => success(service, tracker));
+    const service = fakeService(async () => success(service, tracker));
     const engine = createContextEngine({ task: "lib/a.ts", workspaceRoot: "C:/tmp", modelId: "m", tracker, service, refreshLimit: 2 });
     await engine.start();
     checkEq(engine.needsRefresh(), false, "sin cambios no necesita refresh");
@@ -165,8 +163,7 @@ async function main() {
       release = resolve;
     });
     let gateActive = false;
-    let service!: FakeService;
-    service = fakeService(async () => {
+    const service = fakeService(async () => {
       if (gateActive) await gate;
       return success(service, tracker);
     });
@@ -186,8 +183,7 @@ async function main() {
   {
     const tracker = createRepoMapTracker();
     let fail = false;
-    let service!: FakeService;
-    service = fakeService(async () => (fail ? { ok: false, code: "unstable", error: "inestable", generation: tracker.generation, attempts: 3 } : success(service, tracker)));
+    const service = fakeService(async () => (fail ? { ok: false, code: "unstable", error: "inestable", generation: tracker.generation, attempts: 3 } : success(service, tracker)));
     const engine = createContextEngine({ task: "lib/a.ts", workspaceRoot: "C:/tmp", modelId: "m", tracker, service, refreshLimit: 1 });
     await engine.start();
     const before = engine.getSystemSuffix();
@@ -204,8 +200,7 @@ async function main() {
   console.log("\n--- Actividad reciente y rutas sensibles ---");
   {
     const tracker = createRepoMapTracker();
-    let service!: FakeService;
-    service = fakeService(async () => success(service, tracker));
+    const service = fakeService(async () => success(service, tracker));
     const engine = createContextEngine({ task: "lib/a.ts", workspaceRoot: "C:/tmp", modelId: "m", tracker, service });
     await engine.start();
     engine.noteTouched(["src\\b.ts", ".env"]);
@@ -223,8 +218,7 @@ async function main() {
   console.log("\n--- Presupuesto de briefing ---");
   {
     const tracker = createRepoMapTracker();
-    let service!: FakeService;
-    service = fakeService(async () => success(service, tracker));
+    const service = fakeService(async () => success(service, tracker));
     const engine = createContextEngine({ task: "lib/a.ts", workspaceRoot: "C:/tmp", modelId: "m", tracker, service, briefingMaxChars: 120 });
     await engine.start();
     const briefing = engine.getBriefing();
@@ -236,8 +230,7 @@ async function main() {
   checkEq(DEFAULT_CONTEXT_REFRESH_LIMIT, 2, "default de refrescos = 2");
   {
     const tracker = createRepoMapTracker();
-    let service!: FakeService;
-    service = fakeService(async () => success(service, tracker, { truncated: true }));
+    const service = fakeService(async () => success(service, tracker, { truncated: true }));
     const engine = createContextEngine({ task: "lib/a.ts", workspaceRoot: "C:/tmp", modelId: "m", tracker, service });
     await engine.start();
     checkEq(engine.getSummary().truncated, false, "la selección no está truncada por candidatos");

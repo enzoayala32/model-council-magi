@@ -16,7 +16,7 @@ import { classifyProviderError, type ProviderErrorInput } from "./classify";
 import { computeCooldownMs } from "./cooldown";
 import { CredentialPool, type CredentialEntry } from "./pool";
 
-let results: boolean[] = [];
+const results: boolean[] = [];
 
 function check(label: string, ok: boolean, detail?: unknown): void {
   results.push(ok);
@@ -132,8 +132,8 @@ function main(): void {
   console.log("\n--- Integración: cooldown creciente real a través de classify()+pool.release() ---");
   {
     const p = pool("A");
-    let cursor = p.beginOperation();
-    let lease = cursor.next(0);
+    const cursor = p.beginOperation();
+    const lease = cursor.next(0);
     check("setup: A disponible al arrancar", lease.status === "AVAILABLE", lease);
 
     // Primer 429 sobre A.

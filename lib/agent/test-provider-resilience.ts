@@ -19,7 +19,7 @@ import { createProject } from "./project-store";
 import { createTask } from "./task-store";
 import { listEvents, type AgentEventPayload } from "./event-log";
 
-let results: boolean[] = [];
+const results: boolean[] = [];
 
 function check(label: string, ok: boolean, detail?: unknown): void {
   results.push(ok);

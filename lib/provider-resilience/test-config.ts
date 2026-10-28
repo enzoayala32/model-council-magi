@@ -13,7 +13,7 @@
 import { resolveCredentials, createProviderPool, getProviderSnapshot } from "./config";
 import { redactSecrets } from "./redact";
 
-let results: boolean[] = [];
+const results: boolean[] = [];
 
 function check(label: string, ok: boolean, detail?: unknown): void {
   results.push(ok);

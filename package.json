@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint .",
     "agent:test": "tsx lib/agent/test-run.ts",
     "agent:test-project": "tsx lib/agent/test-project.ts",
     "agent:test-task-state": "tsx lib/agent/test-task-state.ts",
@@ -76,7 +76,10 @@
     "provider-resilience:test-redact": "tsx lib/provider-resilience/test-redact.ts",
     "provider-resilience:test-events": "tsx lib/provider-resilience/test-events.ts",
     "provider-resilience:test-status-route": "tsx lib/provider-resilience/test-status-route.ts",
-    "provider-resilience:test-concurrency": "tsx lib/provider-resilience/test-concurrency.ts"
+    "provider-resilience:test-concurrency": "tsx lib/provider-resilience/test-concurrency.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx scripts/run-tests.ts",
+    "test:live": "tsx scripts/run-tests.ts --live"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.55",
@@ -103,5 +106,14 @@
     "eslint": "^9.17.0",
     "eslint-config-next": "^16.2.4",
     "tsx": "^4.23.12"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.3": true,
+    "esbuild@0.28.2": true,
+    "sharp@0.34.5": true,
+    "unrs-resolver@1.11.1": true
   }
 }

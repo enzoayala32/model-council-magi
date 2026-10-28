@@ -9,7 +9,7 @@
  */
 import { registerSecret, redactSecrets, redactError } from "./redact";
 
-let results: boolean[] = [];
+const results: boolean[] = [];
 
 function check(label: string, ok: boolean, detail?: unknown): void {
   results.push(ok);

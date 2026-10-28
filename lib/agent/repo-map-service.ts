@@ -298,7 +298,11 @@ export function createRepoMapService(options: RepoMapServiceOptions): RepoMapSer
   function waitForQuiet(signal: AbortSignal | undefined): Promise<"quiet" | "timeout" | "aborted"> {
     return new Promise((resolve) => {
       let finished = false;
+      // Se declaran antes de `finish` porque el closure las lee; se asignan
+      // una sola vez más abajo, después de definir el handler.
+      // eslint-disable-next-line prefer-const
       let handle: unknown;
+      // eslint-disable-next-line prefer-const
       let unsubscribe: (() => void) | undefined;
       const finish = (result: "quiet" | "timeout" | "aborted") => {
         if (finished) return;

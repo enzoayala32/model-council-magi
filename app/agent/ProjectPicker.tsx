@@ -138,7 +138,6 @@ export function ProjectPicker({ onChoose, onClose }: { onChoose: (path: string, 
 
   useEffect(() => {
     browseTo();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function selectFolder(p: string) {

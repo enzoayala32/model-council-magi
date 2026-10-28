@@ -11,7 +11,7 @@
  */
 import { TavilySearchProvider, createSearchProviderFromEnv, MAX_WEB_SEARCH_RESULTS } from "./search-provider";
 
-let results: boolean[] = [];
+const results: boolean[] = [];
 
 function check(label: string, ok: boolean, detail?: unknown): void {
   results.push(ok);
