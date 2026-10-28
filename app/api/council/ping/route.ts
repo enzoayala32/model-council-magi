@@ -1,12 +1,16 @@
 import { NextResponse } from "next/server";
+import { readJsonBody } from "@/lib/api-json";
 import { pingModels } from "@/lib/model-ping";
 
 /** Dry run liviano: confirma que cada modelo seleccionado responde antes de
  * lanzar la corrida completa (que puede tardar minutos y gastar tokens
  * reales). No pasa por el pipeline de reintentos de la corrida real. */
 export async function POST(request: Request) {
-  const body = (await request.json()) as { modelIds?: string[] };
-  const modelIds = Array.isArray(body?.modelIds) ? body.modelIds.filter((id) => typeof id === "string") : [];
+  const parsed = await readJsonBody<{ modelIds?: string[] }>(request);
+  if (!parsed.ok) return parsed.response;
+  const modelIds = Array.isArray(parsed.body?.modelIds)
+    ? parsed.body.modelIds.filter((id) => typeof id === "string")
+    : [];
   if (!modelIds.length) {
     return NextResponse.json({ error: "No modelIds provided." }, { status: 400 });
   }

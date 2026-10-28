@@ -38,6 +38,7 @@
     "agent:test-repo-map-tool": "tsx lib/agent/test-repo-map-tool.ts",
     "agent:test-provider-resilience": "tsx lib/agent/test-provider-resilience.ts",
     "test-council-resilience": "tsx lib/test-council-resilience.ts",
+    "security:test-proxy": "tsx lib/test-api-security.ts",
     "agent:test-runner-real": "tsx lib/agent/test-runner-real.ts",
     "agent:test-model-registry": "tsx lib/agent/test-model-registry.ts",
     "agent:test-context-estimate": "tsx lib/agent/context/test-context-estimate.ts",

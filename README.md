@@ -173,6 +173,31 @@ npm start
 
 ---
 
+## Seguridad de la API (Fase 1)
+
+La app sigue siendo **single-user y self-hosted**: no hay login ni multiusuario. Lo que se agregó es una puerta de entrada para que una página web ajena abierta en el mismo navegador no pueda hablarle a `localhost` a través de `/api/*`.
+
+`proxy.ts` (el reemplazo de `middleware.ts` en Next 16) intercepta `/api/:path*` y aplica, en este orden:
+
+1. **Host permitido** — por defecto `localhost`, `127.0.0.1` y `[::1]` con el puerto de `PORT` (o `3000`). Se configura con `ALLOWED_HOSTS` (lista separada por comas; una entrada sin puerto acepta cualquier puerto de ese host). Esto también corta **DNS rebinding**: un dominio atacante que resuelve a `127.0.0.1` manda su propio `Host`, que no está en la allowlist.
+2. **Token opcional** — si `APP_ACCESS_TOKEN` está definido, todo `/api/*` exige `Authorization: Bearer <token>` o la cookie `magi_access_token=<token>`. Si no está definido, el comportamiento es el de siempre.
+3. **Origin / Sec-Fetch-Site** — en `POST`, `PUT`, `PATCH` y `DELETE`, si viene `Origin` tiene que estar en `ALLOWED_ORIGINS` (por defecto, el mismo origen del `Host` permitido, en `http` y `https`). Si no viene `Origin`, se rechaza `Sec-Fetch-Site: cross-site`. Un cliente que no es navegador (curl, un script) no manda `Origin` ni `Sec-Fetch-Site` y se deja pasar a propósito.
+4. **Content-Type** — si el método muta y hay body, tiene que ser `application/json` o `*+json`. Las rutas que no reciben body (`cancel`, `discard`, `apply`, deletes) siguen funcionando sin `Content-Type`.
+
+Los rechazos devuelven JSON en español: `403` para Host/Origin/token/`Content-Type`, siempre con la forma `{ "ok": false, "error": "..." }`. Un body JSON inválido devuelve `400` con la misma forma, en vez de un 500.
+
+Variables nuevas (ver `.env.example`):
+
+| Variable | Default | Para qué |
+|---|---|---|
+| `ALLOWED_HOSTS` | `localhost:3000,127.0.0.1:3000,[::1]:3000` | Hosts aceptados por el proxy |
+| `ALLOWED_ORIGINS` | mismo origen del Host permitido | Orígenes aceptados en métodos que mutan |
+| `APP_ACCESS_TOKEN` | vacío (sin token) | Cerradura opcional para `/api/*` |
+
+Si corrés en otro puerto, definí `PORT` o `ALLOWED_HOSTS`; si estás detrás de un reverse proxy con otro dominio público, agregalo a `ALLOWED_HOSTS` y `ALLOWED_ORIGINS`.
+
+---
+
 ## Estructura del proyecto
 
 ```

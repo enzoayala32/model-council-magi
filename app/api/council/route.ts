@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { readJsonBody } from "@/lib/api-json";
 import { COUNCIL_MODELS, getCouncilModel, getFusionPanel } from "@/lib/models";
 import { OpenRouterError, createChatCompletion } from "@/lib/openrouter";
 
@@ -34,7 +35,9 @@ const MODE_INSTRUCTIONS = {
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as CouncilRequest;
+    const parsed = await readJsonBody<CouncilRequest>(request);
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.body;
     const prompt = body.prompt?.trim();
     const apiKey = body.apiKey?.trim() || process.env.OPENROUTER_API_KEY;
     const selectedModels = normalizeSelection(body.selectedModels, body.fusionPanelId);

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { readJsonBody } from "@/lib/api-json";
 import { applyProposal, discardProposal, getProposal } from "@/lib/fs-tools";
 
 /**
@@ -7,12 +8,9 @@ import { applyProposal, discardProposal, getProposal } from "@/lib/fs-tools";
  * user hits "Apply" in the UI, which POSTs here with the proposal id.
  */
 export async function POST(request: Request) {
-  let body: { proposalId?: string; action?: "apply" | "reject" };
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ ok: false, error: "Invalid JSON body." }, { status: 400 });
-  }
+  const parsed = await readJsonBody<{ proposalId?: string; action?: "apply" | "reject" }>(request);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.body;
 
   const proposalId = body.proposalId?.trim();
   const action = body.action ?? "apply";

@@ -1,4 +1,5 @@
 import { AGENT_TOOLS, executeAgentTool } from "@/lib/agent-tools";
+import { readJsonBody } from "@/lib/api-json";
 import { bufferFromDataUrl, extractDocxText, extractPdfText } from "@/lib/attachment-extraction";
 import { FS_TOOLS, executeFsTool, isFsTool, newProposalGroupId, type FileProposal, type TypeCheckResult } from "@/lib/fs-tools";
 import { assignPersonas, getPersonaPreset } from "@/lib/persona-presets";
@@ -57,6 +58,12 @@ const FOLLOWUP_MODEL = "nvidia/nemotron-3.5-lightning:free";
 const FUSION_JUDGE_MODEL = "nvidia/nemotron-3.5-lightning:free";
 
 export async function POST(request: Request) {
+  // Fase 1: parsear antes de abrir el SSE. Un body inválido debe ser un
+  // 400 JSON normal, no un stream 200 que recién falla adentro.
+  const parsed = await readJsonBody<StreamRequest>(request);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.body;
+
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -69,7 +76,6 @@ export async function POST(request: Request) {
       const isAborted = () => signal.aborted;
 
       try {
-        const body = (await request.json()) as StreamRequest;
         const prompt = body.prompt?.trim();
         // Fase 5E: `explicitOpenRouterKey` es el override de `body.apiKey`
         // — bypassea el pool de credentials por completo (5C, ya

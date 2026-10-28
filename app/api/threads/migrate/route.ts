@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { readJsonBody } from "@/lib/api-json";
 import { countThreads, importThreads } from "@/lib/threads-db";
 import type { StoredThread } from "@/lib/threads";
 
@@ -13,8 +14,9 @@ export async function POST(request: Request) {
   if (existing > 0) {
     return NextResponse.json({ imported: 0, skipped: true, reason: "Server already has threads." });
   }
-  const body = (await request.json()) as { threads: StoredThread[] };
-  const threads = Array.isArray(body?.threads) ? body.threads : [];
+  const parsed = await readJsonBody<{ threads: StoredThread[] }>(request);
+  if (!parsed.ok) return parsed.response;
+  const threads = Array.isArray(parsed.body?.threads) ? parsed.body.threads : [];
   const imported = importThreads(threads);
   return NextResponse.json({ imported, skipped: false });
 }
