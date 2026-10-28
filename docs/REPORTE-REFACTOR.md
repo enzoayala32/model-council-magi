@@ -110,7 +110,7 @@ Los 6 exports eliminados: `prunePlanVersions` (`lib/agent/autonomy/ledger.ts`), 
 
 **Archivos creados:** `lib/test-council-consensus.ts`, `lib/test-council-prompts.ts`, `lib/test-persona-presets.ts`, `lib/test-attachment-extraction.ts`.
 **Archivos modificados:** `package.json` (4 scripts + `jszip` en `devDependencies`), `package-lock.json`.
-**Commit:** pendiente al momento de escribir esta sección; se completa en el commit de la fase.
+**Commit:** `e445b10` — `fase 4: tests del núcleo del consejo`.
 
 **Verificación:** `npm run typecheck` exit 0 (los primeros intentos fallaron por la firma de `check` en dos archivos; se unificó a `check(ok, label, detail)` donde hacía falta). `npm run lint` exit 0 con **0 errores y 39 warnings** (los mismos de Fase 3). `npm test` **67/67 scripts OK**. `npm run build` exit 0 con **1 warning** de Turbopack (el mismo trace de `next.config.ts` → `lib/fs-tools.ts` → `route.ts`, que en Fase 3 aparecía duplicado).
 
