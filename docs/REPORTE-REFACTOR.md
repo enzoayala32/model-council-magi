@@ -116,7 +116,19 @@ Los 6 exports eliminados: `prunePlanVersions` (`lib/agent/autonomy/ledger.ts`), 
 
 ### Fase 5 — Refactors behavior-preserving
 
-Pendiente de implementación.
+**Qué se hizo:** dos extracciones sin cambio de comportamiento, más la documentación de límites del Coding Agent.
+
+1. **Orquestación del consejo fuera de la ruta HTTP.** `app/api/council/stream/route.ts` pasó de 661 a **58 líneas**: solo parsea el body con `readJsonBody` (400 uniforme de Fase 1), abre el `ReadableStream`, formatea SSE y cierra el controller en `finally`. Todo el pipeline (drafts → debate → voto → juez → síntesis → imagen → follow-ups) vive en `lib/council-orchestrator.ts` (701 líneas) como `runCouncilStream({ body, signal, send, deps })`.
+2. **Dependencias inyectables.** `CouncilRunDeps` agrupa las 16 funciones que hacen I/O (`runDraft`, `runDebate`, `runVoteResilient`, `createFusionJudgeReportResilient`, `createAgentCompletion`, `createChatCompletion`, `createImageGeneration`, `withCredentialFailover`, `withWatchdog`, `resolveCredentials`, `registerSecret`, `logStep`, `executeAgentTool`, `executeFsTool`, `isFsTool`, `newProposalGroupId`). Los tests pasan un proveedor falso y verifican la secuencia SSE sin red, DB ni timers reales.
+3. **Motor de la corrida en el cliente.** `app/page.tsx` pasó de 1.006 a **587 líneas**. `app/hooks/useCouncilRun.ts` (621 líneas) concentra estado de resultados, lectura del SSE (`readCouncilStream`), cancelación, propuestas de archivos, tokens, votos, personas y snapshot del turno. La página conserva configuración, modelos, adjuntos, hilos y render.
+4. **Límites documentados.** `docs/ARQUITECTURA-AGENTE.md` fija qué hace y qué no hace `lib/agent/autonomy/ledger.ts` (única capa que escribe las 7 tablas del Autonomous Loop; valida transiciones y evidencia; no orquesta) y `lib/agent/loop.ts` (runtime del Coding Agent legacy: `generateText`, tools, failover Step-0, context governor; no persiste ledger ni decide estados de plan).
+
+**Archivos creados:** `lib/council-orchestrator.ts`, `lib/test-council-orchestrator.ts`, `app/hooks/useCouncilRun.ts`, `docs/ARQUITECTURA-AGENTE.md`.
+**Archivos modificados:** `app/api/council/stream/route.ts`, `app/page.tsx`, `package.json` (script `council:test-orchestrator`).
+**Commit:** pendiente al momento de escribir esta sección; se completa en el commit de la fase.
+
+**Verificación:** `npm run typecheck` exit 0. `npm run lint` exit 0 con **0 errores y 37 warnings** (bajó de 39: se fueron dos unused vars al mover código). `npm run council:test-orchestrator` **54/54**. `npm test` **68/68 scripts OK**. `npm run build` exit 0 con **2 warnings** de Turbopack, ambos con el mismo trace `next.config.ts` → `lib/fs-tools.ts` → `app/api/council/apply-file-change/route.ts` (preexistente; en Fase 4 aparecía una sola vez vía `stream/route.ts`). Smoke test con dev server en `:3100`: `/` 200, prompt vacío devuelve SSE de error, JSON inválido 400, `Content-Type: text/plain` 403. Servidor detenido.
+
 
 ### Fase 6 — Documentación y configuración
 
@@ -331,6 +343,33 @@ npm notice run consenso-ia@0.1.0 build
 EXIT=0
 ```
 
+### Fase 5 — ANTES / DESPUÉS
+
+| Comando | ANTES (Fase 4) | DESPUÉS (Fase 5) |
+|---|---|---|
+| `wc -l app/api/council/stream/route.ts` | 661 | **58**. |
+| `wc -l app/page.tsx` | 1.006 | **587**. |
+| `wc -l lib/council-orchestrator.ts` | No existía | **701** (pipeline completo + normalización + `CouncilRunDeps`). |
+| `wc -l app/hooks/useCouncilRun.ts` | No existía | **621** (motor cliente de la corrida). |
+| `npm test` | **67/67 OK** | **68/68 OK** (incluye `council:test-orchestrator`). |
+| `npm run council:test-orchestrator` | No existía | **54/54**. |
+| `npm run typecheck` | exit 0 | exit 0. |
+| `npm run lint` | 0 errores, 39 warnings | 0 errores, **37 warnings** (2 unused vars menos). |
+| `npm run build` | exit 0, 1 warning Turbopack | exit 0, **2 warnings** (mismo trace vía `apply-file-change`). |
+| Smoke HTTP (`:3100`) | — | `/` 200; prompt vacío SSE de error; JSON inválido 400; `text/plain` 403. |
+
+**Salida real resumida:**
+
+```text
+npm notice run consenso-ia@0.1.0 typecheck
+TSC=0
+✖ 37 problems (0 errors, 37 warnings)
+54/54 casos OK.
+=== Resumen: 68/68 OK ===
+npm notice run consenso-ia@0.1.0 build
+EXIT=0
+```
+
 ---
 
 ## 3. Tests nuevos
@@ -345,8 +384,9 @@ EXIT=0
 | 4 | `lib/test-council-prompts.ts` | 79 | `council:test-prompts` |
 | 4 | `lib/test-persona-presets.ts` | 45 | `council:test-persona-presets` |
 | 4 | `lib/test-attachment-extraction.ts` | 27 | `council:test-attachment-extraction` |
+| 5 | `lib/test-council-orchestrator.ts` | 54 | `council:test-orchestrator` |
 
-Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar que el tipado no cambió el comportamiento (46 casos entre los cuatro scripts). Fase 4 agrega 245 casos y el total de scripts del runner pasa de 63 a 67.
+Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar que el tipado no cambió el comportamiento (46 casos entre los cuatro scripts). Fase 4 agrega 245 casos y el total de scripts del runner pasa de 63 a 67. Fase 5 agrega 54 casos con un proveedor falso y el total pasa a 68 scripts.
 
 ---
 
@@ -399,6 +439,16 @@ Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar q
 - **Sin red ni DB:** los cuatro harness son puramente locales. No cubren proveedores reales ni el orquestador SSE; eso es Fase 5. Un verde acá no prueba que el consejo funcione end-to-end.
 - **Runner automático:** `scripts/run-tests.ts` descubre `council:test-*` por prefijo, así que no hubo que registrar los 4 scripts a mano en el runner. El orden es el de `package.json`.
 
+### Fase 5
+
+- **Extracción sin cambio de comportamiento:** `runCouncilStream` es una copia literal del cuerpo del `POST` anterior, con dos ajustes de plomería: el controller ya no se cierra dentro del orquestador (lo cierra la ruta en `finally`) y `send` se inyecta. La secuencia de eventos, los textos y los umbrales quedaron idénticos; los 54 casos fijan el contrato.
+- **`CouncilRunDeps` completo, no parcial:** los tests pueden pisar cualquier función, pero el default siempre es la implementación real. Se eligió un objeto plano de funciones (no clases ni módulos mockeados) para que el test sea legible y no dependa de `vi.mock`/`jest.mock`, que el repo no usa.
+- **El hook no reemplaza a `useThreads`:** `useCouncilRun` recibe `commitActiveTurn`, `syncThread` y `activeThreadIdRef` de la página. Los hilos siguen siendo responsabilidad de `useThreads`; el hook solo produce la corrida y su snapshot.
+- **`runFusionPanelId` arranca en `DEFAULT_FUSION_PANEL_ID`:** el estado original de `page.tsx` arrancaba con ese valor (no `null`). Se preservó para que el panel de fusión se muestre igual antes de la primera corrida; `resetRunState` lo recalcula desde `selectedFusionPanelId`.
+- **Dos firmas de `send`:** el orquestador recibe `send(event)` y la ruta lo envuelve en SSE. Los tests del orquestador asertan eventos, no el framing `data: ...\n\n`; el framing se validó en el smoke HTTP, no con un test unitario.
+- **Límites ledger/loop documentados, no refactorizados:** la fase pedía documentar responsabilidades, no mover código. En esta fase `ledger.ts` y `loop.ts` quedaron intactos; el doc `docs/ARQUITECTURA-AGENTE.md` fija la regla para futuras fases.
+- **Smoke test acotado:** se validó `/` 200, prompt vacío, JSON inválido y `Content-Type` incorrecto. No se ejecutó una corrida real con proveedores (siguen bloqueados por `ByteString ... 8212` y falta de keys), así que la UI de resultados no se verificó end-to-end. **NO VERIFICADO.**
+
 ---
 
 ## 5. Riesgos conocidos y deuda
@@ -407,7 +457,7 @@ Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar q
 - Detrás de un reverse proxy hay que preservar el `Host` o configurar `ALLOWED_HOSTS`/`ALLOWED_ORIGINS` con el host público.
 - `agent:test-project` sigue siendo un harness manual: sin argumentos imprime el uso y sale 1; no está en `npm test`. Con argumentos en un repo temporal dio PASS.
 - Los proveedores reales no quedaron validados: `agent:test` y `agent:test-runner-real` fallan con `ByteString ... 8212`; `agent:test-model-registry` no tiene keys. No se declaran como OK y `test:live` no se ejecuta en CI.
-- `npm run lint` queda en 0 errores y 39 warnings (30 unused vars, 7 `set-state-in-effect`, 2 `<img>`); ya no hay `no-explicit-any`. La deuda restante se ataca en la Fase 5 (hooks/`page.tsx`) y en limpieza posterior.
+- `npm run lint` queda en 0 errores y **37 warnings** (27 unused vars, 8 `set-state-in-effect`, 2 `<img>`); ya no hay `no-explicit-any`. Respecto de Fase 4 bajaron 3 unused vars y subió 1 `set-state-in-effect`; el resto es limpieza posterior.
 - El workflow de CI está escrito pero **NO VERIFICADO** en GitHub; la suite local se validó solo en Windows. Si Linux falla, el primer paso es revisar los tests que asumen rutas de Windows.
 - `provider-resilience:test-redact` se colgó una vez sin salida durante la suite completa y se canceló por timeout; en aislamiento pasó 20/20. No se reprodujo.
 - **Ruta `POST /api/council` eliminada:** si existía un cliente externo (fuera del repo) que la usaba, ahora recibe 404. La UI interna no la usaba. Si se necesita compatibilidad, habría que restaurarla como alias de `/api/council/stream`.
@@ -416,6 +466,9 @@ Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar q
 - **Cobertura nueva sin red:** los 245 casos de Fase 4 prueban funciones puras (parsing, scoring, prompts, extracción). No cubren llamadas a proveedores, streaming SSE ni persistencia. Un verde acá no reemplaza la validación live, que sigue bloqueada.
 - **Fixture PDF mínimo:** el generador de PDF de test solo produce una página y fuente Helvetica/WinAnsi. No sirve para probar paginación real, PDFs escaneados ni fuentes embebidas; eso queda sin cobertura.
 - **`check` con dos firmas:** la inconsistencia entre harnesses (`label` primero vs. `ok` primero) es deuda cosmética. Si alguien copia un bloque de un archivo a otro, typecheck lo detecta, pero conviene unificar en una limpieza futura.
+- **Orquestador con proveedor falso:** los 54 casos de Fase 5 prueban el pipeline y la secuencia de eventos, pero no la integración real con OpenRouter/NVIDIA/Google ni el framing SSE byte a byte. El smoke HTTP cubrió cuatro escenarios; una corrida completa con modelos reales sigue **NO VERIFICADA**.
+- **UI sin tests de render:** `useCouncilRun` se movió sin tests de React (el repo no tiene Testing Library ni jsdom). La paridad se apoya en typecheck, lint, build y smoke; un cambio de estado que no rompa tipos podría pasar desapercibido.
+- **Doble fuente de verdad del snapshot:** `useCouncilRun` escribe `liveStateRef.current.synthesis/fusionJudge/followUps/generatedImages` además de su propio estado, porque `useThreads` lee ese ref al cerrar el turno. Es intencional para preservar el comportamiento, pero es un acoplamiento a vigilar si se parte más la página.
 
 ---
 
@@ -451,7 +504,13 @@ Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar q
 2. `npm test` → `=== Resumen: 67/67 OK ===` (el runner descubre los 4 scripts por prefijo).
 3. `npm run build` → exit 0 con 1 warning de Turbopack; los tests no agregan rutas ni tocan la UI.
 
-### Fases 5–7
+### Fase 5
+
+1. `npm run council:test-orchestrator` → 54/54; `npm test` → `=== Resumen: 68/68 OK ===`.
+2. `npm run dev` y abrir `http://localhost:3000`: la UI debe cargar igual que antes (sidebar, selector de modelos, composer).
+3. En otra terminal: `curl -i -X POST http://localhost:3000/api/council/stream -H "Content-Type: application/json" --data '{"prompt":""}'` → 200 SSE con `{"type":"error","error":"Enter a prompt for the council."}`; el mismo POST con `Content-Type: text/plain` → 403; con `{"` → 400.
+
+### Fases 6–7
 
 Pendiente de implementación.
 
@@ -467,3 +526,5 @@ Pendiente de implementación.
 - Logs de Fase 2: `C:\Users\Admin\AppData\Local\Temp\opencode\fase2-acceptance.log`, `fase2-npm-test.log`, `fase2-eslint-first.log`, `fase2-next-lint-before.log`.
 - Logs de Fase 3: `C:\Users\Admin\AppData\Local\Temp\opencode\fase3-npm-test.log`, `fase3-lint-final.log`, `fase3-build.log`, `fase3-exports2.txt`.
 - Logs de Fase 4: `C:\Users\Admin\AppData\Local\Temp\opencode\fase4-npm-test.log`, `fase4-lint.log`, `fase4-lint2.log`, `fase4-build.log`, `fase4-lock.log`.
+- Logs de Fase 5: `C:\Users\Admin\AppData\Local\Temp\opencode\fase5-npm-test.log`, `fase5-lint.log`, `fase5-build.log`, `fase5-dev.log`.
+- Arquitectura del Coding Agent: `docs/ARQUITECTURA-AGENTE.md`.
