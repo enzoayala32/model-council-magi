@@ -56,7 +56,7 @@ Este documento es acumulativo. Cada fase se agrega acá con su commit, archivos,
 
 **Archivos creados:** `eslint.config.mjs`, `scripts/run-tests.ts`, `.github/workflows/ci.yml`.
 **Archivos modificados:** `package.json`, `package-lock.json`, `app/agent/ProjectPicker.tsx`, `app/components/council/FooterReadout.tsx`, `lib/db.ts`, `lib/agent/repo-map-service.ts`, `lib/agent/test-repo-map-tool.ts` y 16 harness de tests (solo `prefer-const`/directivas).
-**Commit:** pendiente al momento de escribir esta sección; se completa en el commit de la fase.
+**Commit:** `a2764f7` — `fase 2: lint, runner de tests y CI`.
 
 **Criterio de aceptación:** `npm run typecheck && npm run lint && npm test && npm run build` → exit 0 (verificado). `npm test` corre 63 scripts offline: 63/63 OK. El lint queda en 0 errores y 64 warnings documentados.
 
