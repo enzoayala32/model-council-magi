@@ -81,19 +81,6 @@ export class TaskNotTerminalError extends Error {
   }
 }
 
-/** Fase 3: `true` si `error` es el `SqliteError` que tira el índice único
- * parcial `idx_agent_tasks_one_running_per_project` (`agent_tasks.project_id
- * WHERE status='RUNNING'`) al intentar dejar una segunda task `RUNNING` del
- * mismo proyecto. Exportado porque tanto `transitionTask` como quien la
- * llama (`runTask`, al hacer su propio auto-claim QUEUED→RUNNING) necesitan
- * reconocer este caso puntual para tratarlo como "perdió la carrera del
- * dispatch", no como un error real de la task. */
-export function isRunningSlotConflictError(error: unknown): boolean {
-  const e = error as { code?: string; message?: string } | null;
-  if (!e) return false;
-  return e.code === "SQLITE_CONSTRAINT_UNIQUE" || (typeof e.message === "string" && e.message.includes("UNIQUE constraint failed"));
-}
-
 export type CodingTask = {
   id: string;
   projectId: string;

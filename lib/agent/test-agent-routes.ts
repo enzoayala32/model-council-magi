@@ -55,8 +55,8 @@ function jsonRequest(url: string, method: string, body?: unknown): Request {
   });
 }
 
-async function readJson(response: Response): Promise<any> {
-  return response.json();
+async function readJson<T>(response: Response): Promise<T> {
+  return response.json() as Promise<T>;
 }
 
 /** Lee el body de un `Response` de SSE como texto, con un timeout total,
@@ -119,8 +119,8 @@ async function main() {
   console.log("--- Caso 1: POST /api/agent/projects + GET listado ---");
   const dir = await makeGitProject("caso1");
   const createProjectRes = await createProjectRoute(jsonRequest("http://localhost/api/agent/projects", "POST", { name: "Proyecto 2H", localPath: dir }));
-  const createProjectBody = await readJson(createProjectRes);
-  const listProjectsBody = await readJson(await listProjectsRoute());
+  const createProjectBody = await readJson<{ ok: boolean; project: { id: string; localPath: string } }>(createProjectRes);
+  const listProjectsBody = await readJson<{ projects: Array<{ id: string }> }>(await listProjectsRoute());
   const ok1 =
     createProjectRes.status === 201 &&
     createProjectBody.ok === true &&
@@ -138,7 +138,7 @@ async function main() {
 
   // --- Caso 2: GET /api/agent/models devuelve solo modelos habilitados ---
   console.log("\n--- Caso 2: GET /api/agent/models ---");
-  const modelsBody = await readJson(await listModelsRoute());
+  const modelsBody = await readJson<{ ok: boolean; models: Array<{ id: string }> }>(await listModelsRoute());
   const ok2 = modelsBody.ok === true && Array.isArray(modelsBody.models) && modelsBody.models.length > 0 && modelsBody.models.every((m: { id: string }) => typeof m.id === "string");
   console.log(ok2 ? `✅ ${modelsBody.models.length} modelo(s) habilitado(s) para el Coding Agent.` : `❌ Falló. ${JSON.stringify(modelsBody)}`);
   results.push(ok2);
@@ -159,7 +159,7 @@ async function main() {
   appendEvent(task.id, { type: "text", text: "arrancando" });
   appendEvent(task.id, { type: "tool_call", toolName: "read_file", input: { path: "a.ts" } });
 
-  const getTaskBody = await readJson(await getTaskRoute(new Request("http://localhost"), { params: Promise.resolve({ id: task.id }) }));
+  const getTaskBody = await readJson<{ ok: boolean; task: { status: string } }>(await getTaskRoute(new Request("http://localhost"), { params: Promise.resolve({ id: task.id }) }));
   const ok4a = getTaskBody.ok === true && getTaskBody.task.status === "RUNNING";
   console.log(ok4a ? "✅ GET /api/agent/tasks/[id] refleja RUNNING." : `❌ Falló. ${JSON.stringify(getTaskBody)}`);
   results.push(ok4a);
@@ -226,7 +226,7 @@ async function main() {
   results.push(eventuallyDone || streamDone);
 
   // --- Caso 5: GET proposals refleja applied/conflict ---
-  const proposalsBody = await readJson(await getProposalsRoute(new Request("http://localhost"), { params: Promise.resolve({ id: task.id }) }));
+  const proposalsBody = await readJson<{ ok: boolean; proposals: Array<{ applied: boolean; conflict: boolean; relPath: string }> }>(await getProposalsRoute(new Request("http://localhost"), { params: Promise.resolve({ id: task.id }) }));
   const ok5 = proposalsBody.ok === true && proposalsBody.proposals.length === 1 && proposalsBody.proposals[0].applied === false && proposalsBody.proposals[0].conflict === false && proposalsBody.proposals[0].relPath === "a.ts";
   console.log(ok5 ? "✅ GET proposals devuelve la proposal con applied/conflict en false." : `❌ Falló. ${JSON.stringify(proposalsBody)}`);
   results.push(ok5);
@@ -240,7 +240,7 @@ async function main() {
   results.push(ok6a);
 
   const discardReadyRes = await discardRoute(new Request("http://localhost", { method: "POST" }), { params: Promise.resolve({ id: task.id }) });
-  const discardReadyBody = await readJson(discardReadyRes);
+  const discardReadyBody = await readJson<{ task: { status: string; discardReason: string } }>(discardReadyRes);
   const ok6b = discardReadyRes.status === 200 && discardReadyBody.task.status === "DISCARDED" && discardReadyBody.task.discardReason === "user";
   console.log(ok6b ? "✅ Descartar una task en READY_FOR_REVIEW → 200, status=DISCARDED." : `❌ Falló. ${JSON.stringify(discardReadyBody)}`);
   results.push(ok6b);
@@ -253,14 +253,14 @@ async function main() {
   // --- Caso 7: cancel best-effort cuando no hay corrida activa en memoria ---
   console.log("\n--- Caso 7: POST cancel sin corrida activa en memoria ---");
   const cancelRes = await cancelRoute(new Request("http://localhost", { method: "POST" }), { params: Promise.resolve({ id: otherTask.id }) });
-  const cancelBody = await readJson(cancelRes);
+  const cancelBody = await readJson<{ ok: boolean; cancelled: boolean }>(cancelRes);
   const ok7 = cancelRes.status === 200 && cancelBody.ok === true && cancelBody.cancelled === false;
   console.log(ok7 ? "✅ Cancelar una task sin proceso activo en memoria → 200, cancelled=false (no es un error)." : `❌ Falló. ${JSON.stringify(cancelBody)}`);
   results.push(ok7);
 
   // --- Caso 8: GET tasks filtrado por projectId ---
   const listTasksRes = await listTasksRoute(new Request(`http://localhost/api/agent/tasks?projectId=${projectId}`));
-  const listTasksBody = await readJson(listTasksRes);
+  const listTasksBody = await readJson<{ ok: boolean; tasks: Array<{ projectId: string }> }>(listTasksRes);
   const ok8 = listTasksBody.ok === true && listTasksBody.tasks.length >= 2 && listTasksBody.tasks.every((t: { projectId: string }) => t.projectId === projectId);
   console.log(ok8 ? `✅ GET tasks?projectId= devuelve ${listTasksBody.tasks.length} tasks, todas del proyecto correcto.` : `❌ Falló. ${JSON.stringify(listTasksBody)}`);
   results.push(ok8);
@@ -269,7 +269,7 @@ async function main() {
   console.log("\n--- Caso 9: DELETE /api/agent/projects/[id] (archivar proyecto) ---");
   const dir9 = await makeGitProject("caso9");
   const project9Res = await createProjectRoute(jsonRequest("http://localhost/api/agent/projects", "POST", { name: "Proyecto a archivar", localPath: dir9 }));
-  const project9Body = await readJson(project9Res);
+  const project9Body = await readJson<{ project: { id: string } }>(project9Res);
   const project9Id: string = project9Body.project.id;
   const activeTask9 = createTask({ projectId: project9Id, modelId, prompt: "tarea todavía en curso" });
 
@@ -281,8 +281,8 @@ async function main() {
   transitionAndLog(activeTask9.id, "RUNNING");
   transitionAndLog(activeTask9.id, "FAILED", { error: "cancelada para el test" });
   const deleteOkRes = await deleteProjectRoute(new Request("http://localhost", { method: "DELETE" }), { params: Promise.resolve({ id: project9Id }) });
-  const deleteOkBody = await readJson(deleteOkRes);
-  const listAfterDelete = await readJson(await listProjectsRoute());
+  const deleteOkBody = await readJson<{ ok: boolean }>(deleteOkRes);
+  const listAfterDelete = await readJson<{ projects: Array<{ id: string }> }>(await listProjectsRoute());
   const ok9b = deleteOkRes.status === 200 && deleteOkBody.ok === true && !listAfterDelete.projects.some((p: { id: string }) => p.id === project9Id);
   console.log(ok9b ? "✅ Sin tasks activas → 200, y desaparece del listado (queda archivado, no borrado)." : `❌ Falló. ${JSON.stringify(deleteOkBody)}`);
   results.push(ok9b);

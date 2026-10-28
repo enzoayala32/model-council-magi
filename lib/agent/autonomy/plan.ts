@@ -84,13 +84,6 @@ export type PlanItemInput = {
   paths?: string[];
 };
 
-export type PlanInput = {
-  objective: string;
-  constraints?: string[];
-  acceptance?: AcceptanceCriterion[];
-  items: PlanItemInput[];
-};
-
 export type NormalizedPlanItem = {
   /** Id lógico estable dentro del plan (`t1`, `t2`, ...). */
   logicalId: string;

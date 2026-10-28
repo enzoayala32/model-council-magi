@@ -17,6 +17,7 @@ import { createProject } from "./project-store";
 import { createTask } from "./task-store";
 import { listEvents } from "./event-log";
 import type { SearchProvider, SearchResult } from "./search-provider";
+import { testTool } from "./test-tool-call";
 
 const results: boolean[] = [];
 
@@ -93,7 +94,7 @@ async function main(): Promise<void> {
     const dir = await tempWorkspace();
     const provider = fakeProvider(async () => [{ title: "T", url: "https://x.com", snippet: "s" }]);
     const tools = createAgentTools(dir, () => {}, [], provider);
-    const out = await (tools as any).web_search.execute({ query: "algo" }, undefined);
+    const out = await testTool(tools, "web_search").execute({ query: "algo" }, undefined);
     check("ok:true, results con el shape exacto {title,url,snippet}", out.ok === true && out.results.length === 1 && Object.keys(out.results[0]).sort().join(",") === "snippet,title,url", out);
   }
 
@@ -102,7 +103,7 @@ async function main(): Promise<void> {
     const dir = await tempWorkspace();
     const provider = fakeProvider(async () => Array.from({ length: 20 }, (_, i) => ({ title: `T${i}`, url: `https://x.com/${i}`, snippet: `s${i}` })));
     const tools = createAgentTools(dir, () => {}, [], provider);
-    const out = await (tools as any).web_search.execute({ query: "algo", maxResults: 2 }, undefined);
+    const out = await testTool(tools, "web_search").execute({ query: "algo", maxResults: 2 }, undefined);
     check("la tool recorta a 2 pese a que el proveedor fake devolvió 20 (defensa en profundidad, no confía ciegamente en el proveedor)", out.ok === true && out.results.length === 2, out);
   }
 
@@ -114,7 +115,7 @@ async function main(): Promise<void> {
     // campos de más.
     const provider = fakeProvider(async () => [{ title: "T", url: "https://x.com", snippet: "s", score: 0.9, raw_content: "<html>" } as unknown as SearchResult]);
     const tools = createAgentTools(dir, () => {}, [], provider);
-    const out = await (tools as any).web_search.execute({ query: "algo" }, undefined);
+    const out = await testTool(tools, "web_search").execute({ query: "algo" }, undefined);
     check("el resultado que llega al modelo SOLO tiene title/url/snippet", Object.keys(out.results[0]).sort().join(",") === "snippet,title,url", out.results[0]);
   }
 
@@ -125,7 +126,7 @@ async function main(): Promise<void> {
       throw new Error("Tavily respondió 503: servicio caído");
     });
     const tools = createAgentTools(dir, () => {}, [], provider);
-    const out = await (tools as any).web_search.execute({ query: "algo" }, undefined);
+    const out = await testTool(tools, "web_search").execute({ query: "algo" }, undefined);
     check("ok:false con el mensaje del proveedor", out.ok === false && out.error.includes("503"), out);
   }
 

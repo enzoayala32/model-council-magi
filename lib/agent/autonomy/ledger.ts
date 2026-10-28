@@ -835,24 +835,6 @@ export function listPlanVersions(taskId: string): Array<Pick<PersistedPlan, "id"
   }));
 }
 
-export function prunePlanVersions(taskId: string, keep: number): number {
-  const keepCount = clampInt(keep, 1, 100);
-  const db = getDb();
-  const stale = db
-    .prepare("SELECT id FROM agent_plans WHERE task_id = ? ORDER BY version DESC LIMIT -1 OFFSET ?")
-    .all(taskId, keepCount) as Array<{ id: string }>;
-  if (stale.length === 0) return 0;
-
-  const placeholders = stale.map(() => "?").join(",");
-  const ids = stale.map((row) => row.id);
-  const remove = db.transaction(() => {
-    db.prepare(`DELETE FROM agent_plan_items WHERE plan_id IN (${placeholders})`).run(...ids);
-    db.prepare(`DELETE FROM agent_plans WHERE id IN (${placeholders})`).run(...ids);
-  });
-  remove();
-  return stale.length;
-}
-
 /**
  * Persiste una versión nueva del plan. La versión anterior ACTIVE pasa a
  * ABANDONED; se podan las versiones viejas conservando las últimas

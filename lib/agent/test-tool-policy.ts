@@ -18,6 +18,7 @@ import { createAgentTools } from "./tools";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { testTool } from "./test-tool-call";
 
 const results: boolean[] = [];
 
@@ -131,19 +132,19 @@ async function main(): Promise<void> {
     await fs.writeFile(path.join(dir, "a.ts"), "export const x = 1;\n", "utf-8");
     const tools = createAgentTools(dir, () => {});
 
-    const listResult = await (tools as any).list_files.execute({}, undefined);
+    const listResult = await testTool(tools, "list_files").execute({}, undefined);
     check("list_files: shape exacto de siempre (ok, files, truncated)", listResult.ok === true && Array.isArray(listResult.files) && listResult.files.includes("a.ts") && listResult.truncated === false, listResult);
 
-    const readResult = await (tools as any).read_file.execute({ path: "a.ts" }, undefined);
+    const readResult = await testTool(tools, "read_file").execute({ path: "a.ts" }, undefined);
     check("read_file: shape exacto de siempre (ok, content, truncated, sizeBytes)", readResult.ok === true && readResult.content === "export const x = 1;\n" && readResult.truncated === false, readResult);
 
-    const readMissing = await (tools as any).read_file.execute({ path: "no-existe.ts" }, undefined);
+    const readMissing = await testTool(tools, "read_file").execute({ path: "no-existe.ts" }, undefined);
     check("read_file sobre un archivo inexistente: sigue devolviendo el mismo error legible de siempre (no el genérico de la política)", readMissing.ok === false && readMissing.error === "no-existe.ts no existe.", readMissing);
 
     // Llamada SIN segundo argumento (`options`), igual que ya hacían
     // test-delete-file.ts/test-run-script.ts antes de 6A — debe seguir
     // andando idéntico, sin romperse por el `options?.` defensivo.
-    const readNoOptions = await (tools as any).read_file.execute({ path: "a.ts" });
+    const readNoOptions = await testTool(tools, "read_file").execute({ path: "a.ts" });
     check("llamar .execute(input) SIN el 2do argumento (como ya hacían los tests existentes) sigue andando", readNoOptions.ok === true, readNoOptions);
   }
 
@@ -174,7 +175,7 @@ async function main(): Promise<void> {
     const originalPath = process.env.PATH;
     process.env.PATH = `${fakeBin}:${originalPath}`;
     try {
-      const executePromise = (tools as any).run_typecheck.execute({}, { abortSignal: controller.signal });
+      const executePromise = testTool(tools, "run_typecheck").execute({}, { abortSignal: controller.signal });
       await new Promise((r) => setTimeout(r, 200)); // deja que el fake "npx" arranque y esté en medio del sleep
       controller.abort();
       await executePromise; // el wrapper de 6A ya garantiza que esto resuelve rápido (probado arriba)
@@ -198,7 +199,7 @@ async function main(): Promise<void> {
 
     const tools = createAgentTools(dir, () => {}, ["test"]);
     const controller = new AbortController();
-    const executePromise = (tools as any).run_script.execute({ name: "test" }, { abortSignal: controller.signal });
+    const executePromise = testTool(tools, "run_script").execute({ name: "test" }, { abortSignal: controller.signal });
     await new Promise((r) => setTimeout(r, 200));
     controller.abort();
     await executePromise;
@@ -218,7 +219,7 @@ async function main(): Promise<void> {
     // Llamada SIN options (como ya hacían los tests de 4B/4D antes de 6D)
     // — `options?.abortSignal` debe quedar `undefined`, mismo comportamiento
     // de siempre, sin ningún cambio.
-    const result = await (tools as any).run_script.execute({ name: "test" });
+    const result = await testTool(tools, "run_script").execute({ name: "test" });
     check("run_script sin AbortSignal sigue funcionando exactamente igual que antes de 6D", result.ok === true && result.success === true && result.output.includes("hola"), result);
   }
 

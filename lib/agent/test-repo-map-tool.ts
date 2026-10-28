@@ -22,6 +22,7 @@ import { runAgentLoop, __resetProviderPoolsForTests, type RunAgentLoopOptions } 
 import { createProject } from "./project-store";
 import { createTask } from "./task-store";
 import { listEvents } from "./event-log";
+import type { TestTool, TestToolResult } from "./test-tool-call";
 
 const execFileAsync = promisify(execFile);
 
@@ -59,14 +60,15 @@ async function makeRepo(name: string, files: Record<string, string>): Promise<st
   return dir;
 }
 
-type AnyTool = { execute: (input: unknown, options?: unknown) => Promise<any> };
+type AnyTool = TestTool;
 function makeTools(dir: string, options: { scripts?: string[]; repoMap?: { tracker: ReturnType<typeof createRepoMapTracker>; service: RepoMapService } } = {}) {
   const events: AgentToolEvent[] = [];
   const tools = createAgentTools(dir, (event) => events.push(event), options.scripts ?? [], null, options.repoMap) as unknown as Record<string, AnyTool>;
   return { tools, events };
 }
-const call = (tool: AnyTool, input: unknown, signal?: AbortSignal) => tool.execute(input, { abortSignal: signal });
-const map = (tools: Record<string, AnyTool>, input: RepoMapInput = {}, signal?: AbortSignal): Promise<RepoMapResult> => call(tools.repo_map, input, signal);
+const call = (tool: AnyTool, input: unknown, signal?: AbortSignal): Promise<TestToolResult> => tool.execute(input, { abortSignal: signal });
+const map = (tools: Record<string, AnyTool>, input: RepoMapInput = {}, signal?: AbortSignal): Promise<RepoMapResult> =>
+  call(tools.repo_map, input, signal) as unknown as Promise<RepoMapResult>;
 const paths = (result: RepoMapResult) => (result.ok && result.detail !== "overview" ? result.files.map((f) => f.path) : []);
 const looksLikeAbsolutePath = (text: string) => /[A-Za-z]:\\|\/(home|Users|tmp|var|etc|private)\b/.test(text);
 
@@ -347,12 +349,12 @@ const snapshot = () => ({ typescript: loaded(/node_modules[\\\\/]typescript[\\\\
     let seenInStep: RepoMapResult | null = null;
     let afterWrite: RepoMapResult | null = null;
     const fake: RunAgentLoopOptions["generateTextImpl"] = async (opts) => {
-      const o = opts as { system?: string; tools: Record<string, AnyTool>; abortSignal?: AbortSignal; onStepFinish?: (step: unknown) => void };
+      const o = opts as unknown as { system?: string; tools: Record<string, AnyTool>; abortSignal?: AbortSignal; onStepFinish?: (step: unknown) => void };
       system = o.system ?? "";
-      seenInStep = await call(o.tools.repo_map, { detail: "overview" }, o.abortSignal);
+      seenInStep = (await call(o.tools.repo_map, { detail: "overview" }, o.abortSignal)) as unknown as RepoMapResult;
       o.onStepFinish?.({ text: "miré el mapa", content: [{ type: "tool-result", toolName: "repo_map", input: { detail: "overview" }, output: seenInStep }] } as never);
       await call(o.tools.write_file, { path: "src/nuevo.ts", content: "export const nuevo = 1;\n" }, o.abortSignal);
-      afterWrite = await call(o.tools.repo_map, { detail: "files" }, o.abortSignal);
+      afterWrite = (await call(o.tools.repo_map, { detail: "files" }, o.abortSignal)) as unknown as RepoMapResult;
       o.onStepFinish?.({ text: "", content: [{ type: "tool-result", toolName: "repo_map", input: { detail: "files" }, output: afterWrite }] } as never);
       return {};
     };

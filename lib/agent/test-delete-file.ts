@@ -23,6 +23,7 @@ import { createTask } from "./task-store";
 import { runTask } from "./runner";
 import { applyTask } from "./apply";
 import type { AgentLoopResult } from "./loop";
+import { testTool } from "./test-tool-call";
 
 const execFileAsync = promisify(execFile);
 
@@ -58,7 +59,7 @@ async function main() {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "consenso-ia-test4c-tool-"));
     await fs.writeFile(path.join(dir, "a.ts"), "contenido\n");
     const tools = createAgentTools(dir, () => {});
-    const result = await (tools as any).delete_file.execute({ path: "a.ts" });
+    const result = await testTool(tools, "delete_file").execute({ path: "a.ts" });
     const stillExists = await fs
       .stat(path.join(dir, "a.ts"))
       .then(() => true)
@@ -68,9 +69,9 @@ async function main() {
     results.push(ok);
 
     // Sanity: borrar algo que no existe, o una carpeta, da error controlado.
-    const resultMissing = await (tools as any).delete_file.execute({ path: "no-existe.ts" });
+    const resultMissing = await testTool(tools, "delete_file").execute({ path: "no-existe.ts" });
     await fs.mkdir(path.join(dir, "carpeta"));
-    const resultDir = await (tools as any).delete_file.execute({ path: "carpeta" });
+    const resultDir = await testTool(tools, "delete_file").execute({ path: "carpeta" });
     const okGuards = resultMissing.ok === false && resultDir.ok === false;
     console.log(okGuards ? "✅ Borrar algo inexistente o una carpeta da error controlado, sin tirar." : `❌ Falló. missing=${JSON.stringify(resultMissing)}, dir=${JSON.stringify(resultDir)}`);
     results.push(okGuards);

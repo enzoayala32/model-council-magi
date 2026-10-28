@@ -141,13 +141,3 @@ export function listWorkspacesForTask(taskId: string): PersistedWorkspace[] {
   const rows = getDb().prepare("SELECT * FROM agent_workspaces WHERE task_id = ? ORDER BY created_at ASC").all(taskId) as PersistedWorkspaceRow[];
   return rows.map(rowToWorkspace);
 }
-
-/** Workspaces sin destruir — el candidato natural para un barrido de
- * arranque multi-proyecto (a diferencia del `sweepOrphanedWorkspaces` de
- * Fase 2A/2B, que solo conocía un `repoRoot` a la vez, este ya sabe a qué
- * proyecto pertenece cada uno). El barrido real que lo use es parte de la
- * Fase 2D (task runner) — acá solo se deja disponible el query. */
-export function listLiveWorkspaces(): PersistedWorkspace[] {
-  const rows = getDb().prepare("SELECT * FROM agent_workspaces WHERE destroyed_at IS NULL").all() as PersistedWorkspaceRow[];
-  return rows.map(rowToWorkspace);
-}

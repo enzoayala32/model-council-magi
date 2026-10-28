@@ -32,6 +32,16 @@ function checkEq(actual: unknown, expected: unknown, message: string, detail?: (
   }));
 }
 
+type PlanToolResult = {
+  ok: boolean;
+  version: number;
+  items: Array<{ id: string; status: string }>;
+  errors: Array<{ code: string }>;
+  code: string;
+  item: { status: string };
+  warnings: string[];
+};
+
 type SqliteDb = {
   prepare(sql: string): {
     run(...params: unknown[]): { changes: number };
@@ -117,12 +127,12 @@ async function main(): Promise<void> {
       allowedScripts: ["test"],
     });
     const updatePlan = (input: unknown, signal?: AbortSignal) =>
-      (tools.update_plan as unknown as { execute(input: unknown, options?: { abortSignal?: AbortSignal }): Promise<any> }).execute(
+      (tools.update_plan as unknown as { execute(input: unknown, options?: { abortSignal?: AbortSignal }): Promise<PlanToolResult> }).execute(
         input,
         { abortSignal: signal },
       );
     const updatePlanItem = (input: unknown, signal?: AbortSignal) =>
-      (tools.update_plan_item as unknown as { execute(input: unknown, options?: { abortSignal?: AbortSignal }): Promise<any> }).execute(
+      (tools.update_plan_item as unknown as { execute(input: unknown, options?: { abortSignal?: AbortSignal }): Promise<PlanToolResult> }).execute(
         input,
         { abortSignal: signal },
       );
@@ -153,7 +163,7 @@ async function main(): Promise<void> {
       workspaceRoot: workspace,
       limits: { ...(await import("./contract")).DEFAULT_AUTONOMY_LIMITS, maxPlanItems: 1 },
     });
-    const tooLarge = await (tooLargeTools.update_plan as unknown as { execute(input: unknown): Promise<any> }).execute(validPlanInput);
+    const tooLarge = await (tooLargeTools.update_plan as unknown as { execute(input: unknown): Promise<PlanToolResult> }).execute(validPlanInput);
     checkEq(tooLarge.ok, false, "un plan que excede maxPlanItems se rechaza");
     check(
       Array.isArray(tooLarge.errors) && tooLarge.errors.some((error: { code: string }) => error.code === "plan_too_large"),
@@ -194,7 +204,7 @@ async function main(): Promise<void> {
       allowedScripts: ["test"],
       verifier: async () => ({ status: "passed", evidence: { exitCode: 0 } }),
     });
-    const t2Done = await (toolsWithVerifier.update_plan_item as unknown as { execute(input: unknown): Promise<any> }).execute({
+    const t2Done = await (toolsWithVerifier.update_plan_item as unknown as { execute(input: unknown): Promise<PlanToolResult> }).execute({
       id: "t2",
       status: "DONE",
       evidence: [{ kind: "manual", description: "verificado" }],

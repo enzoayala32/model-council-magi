@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { READ_RANGE_LIMITS, decodeUtf8, describeDecodeFailure, hashBuffer, looksBinary, sliceLines, trimIncompleteUtf8Tail, type LineSlice, type LineSliceError } from "./read-range";
 import { createAgentTools } from "./tools";
+import type { TestTool } from "./test-tool-call";
 
 const results: boolean[] = [];
 function check(ok: boolean, message: string, detail?: () => unknown) {
@@ -104,7 +105,7 @@ async function main() {
       await fs.writeFile(path.join(dir, "texto.txt"), content, "utf-8");
       await fs.writeFile(path.join(dir, "binario.bin"), Buffer.from([0x00, 0x01, 0x02, 0x03]));
       await fs.writeFile(path.join(dir, "invalido.txt"), Buffer.from([0x41, 0xff, 0x42]));
-      const tools = createAgentTools(dir, () => {}, []) as unknown as Record<string, { execute: (input: Record<string, unknown>, options?: unknown) => Promise<any> }>;
+      const tools = createAgentTools(dir, () => {}, []) as unknown as Record<string, TestTool>;
       const readFile = await tools.read_file.execute({ path: "texto.txt" });
       check(readFile.ok === true && readFile.content === content && readFile.truncated === false && readFile.hash === hashBuffer(Buffer.from(content)), "read_file devuelve contenido + hash SHA-256", () => readFile);
       const range = await tools.read_file_range.execute({ path: "texto.txt", startLine: 2, endLine: 3 });
@@ -144,7 +145,7 @@ async function main() {
       const prefix = "a".repeat(READ_RANGE_LIMITS.maxBytes - 1);
       const buffer = Buffer.concat([Buffer.from(prefix, "utf8"), emoji]);
       await fs.writeFile(path.join(dir, "grande.txt"), buffer);
-      const tools = createAgentTools(dir, () => {}, []) as unknown as Record<string, { execute: (input: Record<string, unknown>, options?: unknown) => Promise<any> }>;
+      const tools = createAgentTools(dir, () => {}, []) as unknown as Record<string, TestTool>;
       const result = await tools.read_file.execute({ path: "grande.txt" });
       check(result.ok === true && result.truncated === true && result.hash === null, "archivo > 200KB: truncated y hash null (no identifica una versión completa)", () => result);
       check(result.content.length === READ_RANGE_LIMITS.maxBytes - 1 && !result.content.includes("\uFFFD"), "el prefijo cortado a mitad de emoji se recorta sin carácter de reemplazo", () => ({ length: result.content.length, replacement: result.content.includes("\uFFFD") }));

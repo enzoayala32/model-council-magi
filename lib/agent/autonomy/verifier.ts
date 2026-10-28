@@ -234,10 +234,3 @@ export function createAcceptanceVerifier(options: AcceptanceVerifierOptions = {}
     }
   };
 }
-
-/** Descripción corta para eventos/informes, sin contenido de salida. */
-export function describeVerificationResult(result: AcceptanceVerificationResult): string {
-  if (result.status === "passed") return "passed";
-  if (result.status === "failed") return "failed";
-  return "unavailable";
-}

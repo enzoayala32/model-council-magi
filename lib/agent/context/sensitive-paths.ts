@@ -82,10 +82,6 @@ const SENSITIVE_EXTENSIONS: ReadonlySet<string> = new Set([
 const PRIVATE_KEY_NAME = /^id_(rsa|dsa|ecdsa|ed25519)(\..*)?$/i;
 const SERVICE_ACCOUNT_NAME = /^(service-account|firebase-adminsdk)[^/]*\.json$/i;
 
-export type SensitivePathClassification =
-  | { sensitive: false }
-  | { sensitive: true; rule: string; unsafe?: boolean };
-
 /** Normaliza solo para comparar: separadores, sin `.` inicial, sin barras
  * duplicadas. No resuelve `..` (eso es un error de seguridad, no una ruta a
  * normalizar) ni cambia mayúsculas/Unicode. */

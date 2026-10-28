@@ -206,7 +206,6 @@ app/
   layout.tsx                      # metadata, lang="es"
   globals.css                     # paleta cream/teal + estilos generales
   components/council/              # panel MAGI (autocontenido)
-  api/council/route.ts             # variante no-streaming
   api/council/stream/route.ts      # orquesta las fases, personas MAGI, vía SSE
   api/council/apply-file-change/   # aprobación de cambios (incluye grupos atómicos)
   api/council/model-health/        # snapshot de confiabilidad por modelo

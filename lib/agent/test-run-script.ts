@@ -15,6 +15,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createAgentTools } from "./tools";
+import { testTool } from "./test-tool-call";
 
 async function makeProject(scripts: Record<string, string>): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "consenso-ia-test4b-"));
@@ -47,7 +48,7 @@ async function main() {
     const allowed = await detectAllowedScriptsForTest(dir);
     const tools = createAgentTools(dir, () => {}, allowed);
     const hasRunScript = "run_script" in tools;
-    const result = hasRunScript ? await (tools as any).run_script.execute({ name: "test" }) : null;
+    const result = hasRunScript ? await testTool(tools, "run_script").execute({ name: "test" }) : null;
     const ok = allowed.sort().join(",") === "build,lint,test" && hasRunScript && result?.ok === true && result?.success === true && result?.output.includes("test-ok");
     console.log(ok ? "✅ Los 3 scripts quedaron disponibles y `run_script({name:\"test\"})` corrió de verdad." : `❌ Falló. allowed=${allowed}, result=${JSON.stringify(result)}`);
     results.push(ok);
@@ -82,7 +83,7 @@ async function main() {
     const tools = createAgentTools(dir, () => {}, allowed);
     // Simulamos que igual se invoca con "test" (el enum de Zod lo deja
     // pasar como tipo válido, pero el runtime chequea contra `allowed`).
-    const result = await (tools as any).run_script.execute({ name: "test" });
+    const result = await testTool(tools, "run_script").execute({ name: "test" });
     const ok = result.ok === false && typeof result.error === "string" && result.error.includes("no está disponible");
     console.log(ok ? `✅ Rechazado en runtime sin ejecutar nada: "${result.error}"` : `❌ Falló. result=${JSON.stringify(result)}`);
     results.push(ok);
@@ -110,7 +111,7 @@ async function main() {
     const dir = await makeProject({ lint: 'node -e "process.exit(1)"' });
     const allowed = await detectAllowedScriptsForTest(dir);
     const tools = createAgentTools(dir, () => {}, allowed);
-    const result = await (tools as any).run_script.execute({ name: "lint" });
+    const result = await testTool(tools, "run_script").execute({ name: "lint" });
     const ok = result.ok === true && result.success === false;
     console.log(ok ? "✅ Script con exit code != 0: ok:true (la tool en sí no falló), success:false (el script sí)." : `❌ Falló. result=${JSON.stringify(result)}`);
     results.push(ok);

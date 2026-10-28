@@ -62,7 +62,38 @@ Este documento es acumulativo. Cada fase se agrega acá con su commit, archivos,
 
 ### Fase 3 — Código muerto y duplicado
 
-Pendiente de implementación.
+**Qué se hizo:**
+- Se eliminó `app/api/council/route.ts` (variante no-streaming) después de confirmar que no tenía ninguna referencia interna: la UI usa `/api/council/stream` y solo el README listaba el archivo. Se actualizó el README.
+- Se auditaron los 17 `as any` del repo. Todos estaban en harness de tests que convertían el `ToolSet` para llamar `.execute()` de un tool puntual. Se creó `lib/agent/test-tool-call.ts` (`TestTool`, `TestToolResult`, `testTool(tools, name)`) y se reemplazaron los 17 casts. No había `@ts-ignore` ni `@ts-expect-error` (0).
+- Se eliminaron también los `Promise<any>` residuales de harness (`test-plan-tools`, `test-agent-routes`, `test-read-range`, `test-repo-map-tool`) usando tipos explícitos o genéricos.
+- Auditoría de exports: 195 archivos, 806 exports declarados (sin contar default). 203 no tenían importador por nombre: 6 sin ninguna referencia, 167 solo uso interno y 30 indirectos (namespace, barrel o comentarios). Se eliminaron los 6 sin referencia; el resto queda documentado como deuda.
+
+**Tabla de los 17 `as any`:**
+
+| Archivo | Casos | Reemplazo |
+|---|---:|---|
+| `lib/agent/test-delete-file.ts` | 3 | `testTool(tools, "delete_file").execute(...)` |
+| `lib/agent/test-run-script.ts` | 3 | `testTool(tools, "run_script").execute(...)` |
+| `lib/agent/test-tool-policy.ts` | 7 | `testTool(tools, "<tool>").execute(...)` |
+| `lib/agent/test-web-search-tool.ts` | 4 | `testTool(tools, "web_search").execute(...)` |
+| **Total** | **17** | **0 `as any` restantes** |
+
+**Auditoría de exports:**
+
+| Categoría | Cantidad | Acción |
+|---|---:|---|
+| Sin ninguna referencia | 6 | Eliminados |
+| Solo uso interno (el archivo lo usa, nadie lo importa) | 167 | Se dejan; no son código muerto demostrable |
+| Indirectos (namespace/barrel/comentarios) | 30 | Se dejan; requieren análisis manual |
+
+Los 6 exports eliminados: `prunePlanVersions` (`lib/agent/autonomy/ledger.ts`), `PlanInput` (`lib/agent/autonomy/plan.ts`), `describeVerificationResult` (`lib/agent/autonomy/verifier.ts`), `SensitivePathClassification` (`lib/agent/context/sensitive-paths.ts`), `isRunningSlotConflictError` (`lib/agent/task-store.ts`) y `listLiveWorkspaces` (`lib/agent/workspace-store.ts`).
+
+**Archivos creados:** `lib/agent/test-tool-call.ts`.
+**Archivos eliminados:** `app/api/council/route.ts`.
+**Archivos modificados:** `README.md`, `lib/agent/autonomy/ledger.ts`, `lib/agent/autonomy/plan.ts`, `lib/agent/autonomy/verifier.ts`, `lib/agent/context/sensitive-paths.ts`, `lib/agent/task-store.ts`, `lib/agent/workspace-store.ts`, `lib/agent/autonomy/test-plan-tools.ts`, `lib/agent/test-agent-routes.ts`, `lib/agent/test-delete-file.ts`, `lib/agent/test-read-range.ts`, `lib/agent/test-repo-map-tool.ts`, `lib/agent/test-run-script.ts`, `lib/agent/test-tool-policy.ts`, `lib/agent/test-web-search-tool.ts`.
+**Commit:** pendiente al momento de escribir esta sección; se completa en el commit de la fase.
+
+**Verificación:** `npm run typecheck` exit 0 (el primer intento falló con TS2307 porque `.next/types/validator.ts` todavía apuntaba a la ruta eliminada; se borró `.next` y el build regeneró los tipos). `npm run lint` exit 0 con **0 errores y 39 warnings** (ya no queda ningún `no-explicit-any`). `npm test` **63/63 OK**. `npm run build` exit 0 con los mismos 2 warnings preexistentes de Turbopack; `/api/council` ya no aparece en las rutas compiladas.
 
 ### Fase 4 — Tests del núcleo del consejo
 
@@ -232,6 +263,33 @@ npm notice run consenso-ia@0.1.0 build
 ACCEPTANCE_EXIT=0
 ```
 
+### Fase 3 — ANTES / DESPUÉS
+
+| Comando | ANTES (Fase 2) | DESPUÉS (Fase 3) |
+|---|---|---|
+| `grep -rn "as any" app lib` | 17 coincidencias | **0 coincidencias**. |
+| `grep -rn "@ts-ignore\|@ts-expect-error" app lib` | 0 | 0 (no había supresiones). |
+| `app/api/council/route.ts` | Existía sin referencias internas; solo el README lo listaba. | **Eliminado**; el build ya no lista `/api/council`. |
+| `npm run typecheck` | exit 0 | exit 0. Primer intento con TS2307 por `.next/types/validator.ts` obsoleto; tras borrar `.next` y regenerar, 0. |
+| `npm run lint` | 0 errores, 64 warnings (25 `any`) | 0 errores, **39 warnings** (0 `any`): 30 unused vars, 7 `set-state-in-effect`, 2 `<img>`. |
+| `npm test` | 63/63 OK | **63/63 OK**. |
+| `npm run build` | exit 0, 2 warnings Turbopack | exit 0, mismos 2 warnings preexistentes. |
+| `agent:test-delete-file` | 6/6 | 6/6. |
+| `agent:test-run-script` | 6/6 | 6/6. |
+| `agent:test-tool-policy` | 15/15 | 15/15. |
+| `agent:test-web-search-tool` | 19/19 | 19/19. |
+
+**Salida real resumida:**
+
+```text
+npm notice run consenso-ia@0.1.0 typecheck
+TSC=0
+✖ 39 problems (0 errors, 39 warnings)
+=== Resumen: 63/63 OK ===
+npm notice run consenso-ia@0.1.0 build
+EXIT=0
+```
+
 ---
 
 ## 3. Tests nuevos
@@ -241,6 +299,9 @@ ACCEPTANCE_EXIT=0
 | 0 | — | — | — |
 | 1 | `lib/test-api-security.ts` | 54 | `security:test-proxy` |
 | 2 | `scripts/run-tests.ts` (runner, no casos propios) | — | `npm test` / `npm run test:live` |
+| 3 | — (sin archivos nuevos; harness existentes tipados con `test-tool-call.ts`) | — | `agent:test-delete-file`, `agent:test-run-script`, `agent:test-tool-policy`, `agent:test-web-search-tool` |
+
+Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar que el tipado no cambió el comportamiento (46 casos entre los cuatro scripts).
 
 ---
 
@@ -276,6 +337,15 @@ ACCEPTANCE_EXIT=0
 - **Timeout del runner:** 15 minutos por script por defecto (configurable con `--timeout=segundos`). En la primera corrida `provider-resilience:test-redact` quedó colgado sin emitir salida y se canceló; al repetirlo aislado pasó 20/20 en 2s. Se documenta como evento transitorio de la máquina, no como fallo del test.
 - **Install scripts en CI:** npm 12 bloquea por defecto los scripts de `better-sqlite3`, `esbuild`, `sharp` y `unrs-resolver`. Se aprobaron explícitamente en `package.json` (`allowScripts`, versiones pinneadas) para que `npm ci` en un entorno limpio pueda compilar/instalar las dependencias nativas. Sin esto, la suite que usa SQLite fallaría en CI aunque localmente ande.
 
+### Fase 3
+
+- **Ruta eliminada:** `app/api/council/route.ts` no tenía referencias internas; la UI y los hooks usan `/api/council/stream`, `/api/council/ping` y `/api/council/model-health`. Se eliminó en vez de mantenerla “por si acaso”. Riesgo asumido: un cliente externo que llamara `POST /api/council` recibe ahora 404.
+- **Helper de tests:** `lib/agent/test-tool-call.ts` usa un contrato laxo (`TestToolResult`) en vez de importar el union completo de tools. Los harness ya verificaban el shape a mano; el helper solo evita el `any` y mantiene el test legible. No se exporta desde producción.
+- **6 exports muertos eliminados:** la auditoría fue por AST + conteo de palabras, así que los 6 se confirmaron con `grep` y con typecheck/build. `isRunningSlotConflictError` tenía un comentario que decía que lo usaban `transitionTask`/`runTask`, pero ninguna llamada existía; la restricción real la sigue imponiendo el índice único de SQLite. `listLiveWorkspaces` era una query reservada para un barrido futuro que nunca se implementó. `prunePlanVersions` no se llamaba desde ningún lado; `clampInt` sigue en uso.
+- **167 + 30 exports no eliminados:** “solo uso interno” no es código muerto (el archivo los usa) y los “indirectos” pueden ser re-exports, namespaces o menciones en comentarios. Eliminarlos sin análisis manual rompería contratos. Quedan como deuda explícita, no como deuda silenciosa.
+- **`.next` obsoleto:** borrar una ruta deja `.next/types/validator.ts` apuntando al módulo eliminado. El fallo TS2307 es de caché de build, no del código; se resolvió borrando `.next` y regenerando con `npm run build`. En CI el checkout es limpio, así que no aplica.
+- **`Promise<any>` residuales:** además de los 17 `as any`, se tiparon los retornos de harness (`readJson<T>`, `TestToolResult`, `PlanToolResult`, `RepoMapResult`). No cambia la lógica de los tests; solo el tipo.
+
 ---
 
 ## 5. Riesgos conocidos y deuda
@@ -284,9 +354,12 @@ ACCEPTANCE_EXIT=0
 - Detrás de un reverse proxy hay que preservar el `Host` o configurar `ALLOWED_HOSTS`/`ALLOWED_ORIGINS` con el host público.
 - `agent:test-project` sigue siendo un harness manual: sin argumentos imprime el uso y sale 1; no está en `npm test`. Con argumentos en un repo temporal dio PASS.
 - Los proveedores reales no quedaron validados: `agent:test` y `agent:test-runner-real` fallan con `ByteString ... 8212`; `agent:test-model-registry` no tiene keys. No se declaran como OK y `test:live` no se ejecuta en CI.
-- `npm run lint` queda en 0 errores pero con 64 warnings (25 `any`, 7 `set-state-in-effect`, 30 unused vars, 2 `<img>`). La deuda está a la vista y se ataca en Fases 3 y 5.
+- `npm run lint` queda en 0 errores y 39 warnings (30 unused vars, 7 `set-state-in-effect`, 2 `<img>`); ya no hay `no-explicit-any`. La deuda restante se ataca en la Fase 5 (hooks/`page.tsx`) y en limpieza posterior.
 - El workflow de CI está escrito pero **NO VERIFICADO** en GitHub; la suite local se validó solo en Windows. Si Linux falla, el primer paso es revisar los tests que asumen rutas de Windows.
 - `provider-resilience:test-redact` se colgó una vez sin salida durante la suite completa y se canceló por timeout; en aislamiento pasó 20/20. No se reprodujo.
+- **Ruta `POST /api/council` eliminada:** si existía un cliente externo (fuera del repo) que la usaba, ahora recibe 404. La UI interna no la usaba. Si se necesita compatibilidad, habría que restaurarla como alias de `/api/council/stream`.
+- **Auditoría de exports heurística:** 167 exports “solo internos” y 30 “indirectos” siguen sin poda automática. El análisis por AST no detecta acceso dinámico por nombre (`tools[name]`) ni imports por barrel no resueltos; cualquier poda futura debe repetir la verificación con typecheck/build.
+- **Typecheck tras borrar rutas:** si se elimina una ruta y se corre `tsc` sin rebuild, `.next/types` puede fallar con TS2307. No es un error de producto; se resuelve borrando `.next` o corriendo `npm run build`.
 
 ---
 
@@ -310,7 +383,13 @@ ACCEPTANCE_EXIT=0
 2. `npm test` → debe terminar con `=== Resumen: 63/63 OK ===` y exit 0.
 3. `npm run build` → exit 0; opcionalmente `npm run test:live` si hay proveedores/keys configurados.
 
-### Fases 3–7
+### Fase 3
+
+1. `grep -rn "as any" app lib` → sin resultados; `npm run typecheck && npm run lint` → exit 0 (39 warnings, 0 errores).
+2. `npm test` → `=== Resumen: 63/63 OK ===`; en particular `npm run agent:test-tool-policy` → 15/15.
+3. `npm run build` → exit 0 y `POST /api/council` ya no aparece en la tabla de rutas; la UI sigue funcionando con `/api/council/stream`.
+
+### Fases 4–7
 
 Pendiente de implementación.
 
@@ -324,3 +403,4 @@ Pendiente de implementación.
 - Build de Fase 1: `C:\Users\Admin\AppData\Local\Temp\opencode\fase1-build.log`.
 - Aceptación Fase 1: `C:\Users\Admin\AppData\Local\Temp\opencode\fase1-acceptance.js` (script) y su salida en la sección 2.
 - Logs de Fase 2: `C:\Users\Admin\AppData\Local\Temp\opencode\fase2-acceptance.log`, `fase2-npm-test.log`, `fase2-eslint-first.log`, `fase2-next-lint-before.log`.
+- Logs de Fase 3: `C:\Users\Admin\AppData\Local\Temp\opencode\fase3-npm-test.log`, `fase3-lint-final.log`, `fase3-build.log`, `fase3-exports2.txt`.
