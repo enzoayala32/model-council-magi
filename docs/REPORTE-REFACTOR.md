@@ -125,7 +125,7 @@ Los 6 exports eliminados: `prunePlanVersions` (`lib/agent/autonomy/ledger.ts`), 
 
 **Archivos creados:** `lib/council-orchestrator.ts`, `lib/test-council-orchestrator.ts`, `app/hooks/useCouncilRun.ts`, `docs/ARQUITECTURA-AGENTE.md`.
 **Archivos modificados:** `app/api/council/stream/route.ts`, `app/page.tsx`, `package.json` (script `council:test-orchestrator`).
-**Commit:** pendiente al momento de escribir esta sección; se completa en el commit de la fase.
+**Commit:** `f288253` — `fase 5: orquestador y hook del consejo`.
 
 **Verificación:** `npm run typecheck` exit 0. `npm run lint` exit 0 con **0 errores y 37 warnings** (bajó de 39: se fueron dos unused vars al mover código). `npm run council:test-orchestrator` **54/54**. `npm test` **68/68 scripts OK**. `npm run build` exit 0 con **2 warnings** de Turbopack, ambos con el mismo trace `next.config.ts` → `lib/fs-tools.ts` → `app/api/council/apply-file-change/route.ts` (preexistente; en Fase 4 aparecía una sola vez vía `stream/route.ts`). Smoke test con dev server en `:3100`: `/` 200, prompt vacío devuelve SSE de error, JSON inválido 400, `Content-Type: text/plain` 403. Servidor detenido.
 
