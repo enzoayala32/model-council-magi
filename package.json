@@ -38,6 +38,10 @@
     "agent:test-repo-map-tool": "tsx lib/agent/test-repo-map-tool.ts",
     "agent:test-provider-resilience": "tsx lib/agent/test-provider-resilience.ts",
     "test-council-resilience": "tsx lib/test-council-resilience.ts",
+    "council:test-consensus": "tsx lib/test-council-consensus.ts",
+    "council:test-prompts": "tsx lib/test-council-prompts.ts",
+    "council:test-persona-presets": "tsx lib/test-persona-presets.ts",
+    "council:test-attachment-extraction": "tsx lib/test-attachment-extraction.ts",
     "security:test-proxy": "tsx lib/test-api-security.ts",
     "agent:test-runner-real": "tsx lib/agent/test-runner-real.ts",
     "agent:test-model-registry": "tsx lib/agent/test-model-registry.ts",
@@ -105,6 +109,7 @@
     "@types/react-dom": "^19.0.2",
     "eslint": "^9.17.0",
     "eslint-config-next": "^16.2.4",
+    "jszip": "^3.10.1",
     "tsx": "^4.23.12"
   },
   "engines": {

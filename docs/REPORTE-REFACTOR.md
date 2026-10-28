@@ -97,7 +97,22 @@ Los 6 exports eliminados: `prunePlanVersions` (`lib/agent/autonomy/ledger.ts`), 
 
 ### Fase 4 — Tests del núcleo del consejo
 
-Pendiente de implementación.
+**Qué se hizo:** se escribieron 4 harness de test nuevos, uno por módulo puro del consejo, sin red ni DB. Cada uno tiene su script `council:test-*` y el runner `scripts/run-tests.ts` los descubre solo por prefijo, así que entran a `npm test` sin tocar el runner.
+
+| Módulo | Archivo de test | Casos | Qué cubre |
+|---|---|---:|---|
+| `lib/council-consensus.ts` | `lib/test-council-consensus.ts` | 94 | `splitDebateOutput`, `computeConvergence` (incluye los umbrales exactos 0.25/0.5), `computeMindChange` (umbral 0.4), `parseVote`, `tallyVotes`, `parseFusionJudgeJson`, `normalizeFusionJudgeReport` (topes y filtrado por labels), `fallbackFusionJudgeReport`, `parseFollowUpQuestions`. |
+| `lib/council-prompts.ts` | `lib/test-council-prompts.ts` | 79 | `compactForHistory`, `condenseDraftForPeers` (secciones conservadas/descartadas), `renderHistoryBlock`, `buildDraftMessages` (adjuntos imagen/texto/genérico, skill, persona, web grounding), `debateSystemPrompt` (primera/intermedia/final), `buildSynthesisPrompt`, `buildFusionJudgePrompt`, `buildVotePrompt`, `buildFollowUpMessages`, `buildImagePrompt`, prompts de sistema y `personaPrompt`. |
+| `lib/persona-presets.ts` | `lib/test-persona-presets.ts` | 45 | Integridad del catálogo (5 presets × 3 personas, ids/labels/keys únicos, slugs, lentes no duplicadas), composición exacta por preset, `getPersonaPreset` (incluido case-sensitive) y `assignPersonas` (orden, recorte a 3, duplicados, no mutación). |
+| `lib/attachment-extraction.ts` | `lib/test-attachment-extraction.ts` | 27 | `bufferFromDataUrl` (con y sin prefijo, binario, PDF embebido), `extractPdfText` (válido, inválido, vacío, truncado, escapes), `extractDocxText` (válido, Unicode, XML especial, vacío, ZIP corrupto) y el tope de 40.000 caracteres. |
+
+**Total: 245 casos nuevos.** Los binarios de prueba se generan en memoria: el PDF se arma a mano con xref correcto y el DOCX con `jszip`, para no depender de fixtures opacos.
+
+**Archivos creados:** `lib/test-council-consensus.ts`, `lib/test-council-prompts.ts`, `lib/test-persona-presets.ts`, `lib/test-attachment-extraction.ts`.
+**Archivos modificados:** `package.json` (4 scripts + `jszip` en `devDependencies`), `package-lock.json`.
+**Commit:** pendiente al momento de escribir esta sección; se completa en el commit de la fase.
+
+**Verificación:** `npm run typecheck` exit 0 (los primeros intentos fallaron por la firma de `check` en dos archivos; se unificó a `check(ok, label, detail)` donde hacía falta). `npm run lint` exit 0 con **0 errores y 39 warnings** (los mismos de Fase 3). `npm test` **67/67 scripts OK**. `npm run build` exit 0 con **1 warning** de Turbopack (el mismo trace de `next.config.ts` → `lib/fs-tools.ts` → `route.ts`, que en Fase 3 aparecía duplicado).
 
 ### Fase 5 — Refactors behavior-preserving
 
@@ -290,6 +305,32 @@ npm notice run consenso-ia@0.1.0 build
 EXIT=0
 ```
 
+### Fase 4 — ANTES / DESPUÉS
+
+| Comando | ANTES (Fase 3) | DESPUÉS (Fase 4) |
+|---|---|---|
+| `npm test` | 63/63 scripts OK | **67/67 scripts OK** (+4 scripts `council:test-*`). |
+| Casos de los 4 módulos del consejo | 0 (sin cobertura directa) | **245 casos** (94 + 79 + 45 + 27). |
+| `npm run council:test-consensus` | No existía | 94/94. |
+| `npm run council:test-prompts` | No existía | 79/79. |
+| `npm run council:test-persona-presets` | No existía | 45/45. |
+| `npm run council:test-attachment-extraction` | No existía | 27/27. |
+| `npm run typecheck` | exit 0 | exit 0. |
+| `npm run lint` | 0 errores, 39 warnings | 0 errores, **39 warnings** (sin cambios). |
+| `npm run build` | exit 0, 2 warnings Turbopack | exit 0, **1 warning**: el mismo trace de `next.config.ts` → `lib/fs-tools.ts` → `route.ts` que Turbopack reportaba duplicado en Fase 3. |
+| `package-lock.json` | sin `jszip` directo | `jszip@^3.10.1` en `devDependencies` (ya venía transitivo de `mammoth`). |
+
+**Salida real resumida:**
+
+```text
+npm notice run consenso-ia@0.1.0 typecheck
+TSC=0
+✖ 39 problems (0 errors, 39 warnings)
+=== Resumen: 67/67 OK ===
+npm notice run consenso-ia@0.1.0 build
+EXIT=0
+```
+
 ---
 
 ## 3. Tests nuevos
@@ -300,8 +341,12 @@ EXIT=0
 | 1 | `lib/test-api-security.ts` | 54 | `security:test-proxy` |
 | 2 | `scripts/run-tests.ts` (runner, no casos propios) | — | `npm test` / `npm run test:live` |
 | 3 | — (sin archivos nuevos; harness existentes tipados con `test-tool-call.ts`) | — | `agent:test-delete-file`, `agent:test-run-script`, `agent:test-tool-policy`, `agent:test-web-search-tool` |
+| 4 | `lib/test-council-consensus.ts` | 94 | `council:test-consensus` |
+| 4 | `lib/test-council-prompts.ts` | 79 | `council:test-prompts` |
+| 4 | `lib/test-persona-presets.ts` | 45 | `council:test-persona-presets` |
+| 4 | `lib/test-attachment-extraction.ts` | 27 | `council:test-attachment-extraction` |
 
-Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar que el tipado no cambió el comportamiento (46 casos entre los cuatro scripts).
+Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar que el tipado no cambió el comportamiento (46 casos entre los cuatro scripts). Fase 4 agrega 245 casos y el total de scripts del runner pasa de 63 a 67.
 
 ---
 
@@ -346,6 +391,14 @@ Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar q
 - **`.next` obsoleto:** borrar una ruta deja `.next/types/validator.ts` apuntando al módulo eliminado. El fallo TS2307 es de caché de build, no del código; se resolvió borrando `.next` y regenerando con `npm run build`. En CI el checkout es limpio, así que no aplica.
 - **`Promise<any>` residuales:** además de los 17 `as any`, se tiparon los retornos de harness (`readJson<T>`, `TestToolResult`, `PlanToolResult`, `RepoMapResult`). No cambia la lógica de los tests; solo el tipo.
 
+### Fase 4
+
+- **Tests contra el comportamiento real, no contra la intención:** tres supuestos iniciales chocaron con el código y se corrigió el test, no el módulo. `normalizeFusionJudgeReport` recorta longitudes pero **no** hace `trim()` de `finding`/`evidence`/`topic`/`positions`/`judgment`/`insight` (solo de `panelVerdict`); el test ahora lo documenta. El PDF mínimo con Helvetica no round-tripéa acentos (`Paréntesis` → `ParØntesis`), así que el caso de escapes usa ASCII y el Unicode se cubre con DOCX. `pdf-parse` agrega `-- 1 of 1 --` y no pagina texto largo de una sola página, así que el truncado a 40.000 se prueba con DOCX.
+- **`jszip` como devDependency explícita:** ya venía transitivo de `mammoth`, pero depender de un transitivo para generar fixtures es frágil. Se declaró `^3.10.1` y se actualizó el lock con `npm install --package-lock-only --ignore-scripts` (sin recompilar nativos).
+- **Firma de `check` por archivo:** `test-council-consensus` y `test-attachment-extraction` usan `check(label, ok, detail)`; `test-council-prompts` y `test-persona-presets` usan `check(ok, label, detail)`. No se unificó para no reescribir 245 llamadas; queda como inconsistencia cosmética conocida.
+- **Sin red ni DB:** los cuatro harness son puramente locales. No cubren proveedores reales ni el orquestador SSE; eso es Fase 5. Un verde acá no prueba que el consejo funcione end-to-end.
+- **Runner automático:** `scripts/run-tests.ts` descubre `council:test-*` por prefijo, así que no hubo que registrar los 4 scripts a mano en el runner. El orden es el de `package.json`.
+
 ---
 
 ## 5. Riesgos conocidos y deuda
@@ -360,6 +413,9 @@ Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar q
 - **Ruta `POST /api/council` eliminada:** si existía un cliente externo (fuera del repo) que la usaba, ahora recibe 404. La UI interna no la usaba. Si se necesita compatibilidad, habría que restaurarla como alias de `/api/council/stream`.
 - **Auditoría de exports heurística:** 167 exports “solo internos” y 30 “indirectos” siguen sin poda automática. El análisis por AST no detecta acceso dinámico por nombre (`tools[name]`) ni imports por barrel no resueltos; cualquier poda futura debe repetir la verificación con typecheck/build.
 - **Typecheck tras borrar rutas:** si se elimina una ruta y se corre `tsc` sin rebuild, `.next/types` puede fallar con TS2307. No es un error de producto; se resuelve borrando `.next` o corriendo `npm run build`.
+- **Cobertura nueva sin red:** los 245 casos de Fase 4 prueban funciones puras (parsing, scoring, prompts, extracción). No cubren llamadas a proveedores, streaming SSE ni persistencia. Un verde acá no reemplaza la validación live, que sigue bloqueada.
+- **Fixture PDF mínimo:** el generador de PDF de test solo produce una página y fuente Helvetica/WinAnsi. No sirve para probar paginación real, PDFs escaneados ni fuentes embebidas; eso queda sin cobertura.
+- **`check` con dos firmas:** la inconsistencia entre harnesses (`label` primero vs. `ok` primero) es deuda cosmética. Si alguien copia un bloque de un archivo a otro, typecheck lo detecta, pero conviene unificar en una limpieza futura.
 
 ---
 
@@ -389,7 +445,13 @@ Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar q
 2. `npm test` → `=== Resumen: 63/63 OK ===`; en particular `npm run agent:test-tool-policy` → 15/15.
 3. `npm run build` → exit 0 y `POST /api/council` ya no aparece en la tabla de rutas; la UI sigue funcionando con `/api/council/stream`.
 
-### Fases 4–7
+### Fase 4
+
+1. `npm run council:test-consensus && npm run council:test-prompts && npm run council:test-persona-presets && npm run council:test-attachment-extraction` → 94/94, 79/79, 45/45 y 27/27.
+2. `npm test` → `=== Resumen: 67/67 OK ===` (el runner descubre los 4 scripts por prefijo).
+3. `npm run build` → exit 0 con 1 warning de Turbopack; los tests no agregan rutas ni tocan la UI.
+
+### Fases 5–7
 
 Pendiente de implementación.
 
@@ -404,3 +466,4 @@ Pendiente de implementación.
 - Aceptación Fase 1: `C:\Users\Admin\AppData\Local\Temp\opencode\fase1-acceptance.js` (script) y su salida en la sección 2.
 - Logs de Fase 2: `C:\Users\Admin\AppData\Local\Temp\opencode\fase2-acceptance.log`, `fase2-npm-test.log`, `fase2-eslint-first.log`, `fase2-next-lint-before.log`.
 - Logs de Fase 3: `C:\Users\Admin\AppData\Local\Temp\opencode\fase3-npm-test.log`, `fase3-lint-final.log`, `fase3-build.log`, `fase3-exports2.txt`.
+- Logs de Fase 4: `C:\Users\Admin\AppData\Local\Temp\opencode\fase4-npm-test.log`, `fase4-lint.log`, `fase4-lint2.log`, `fase4-build.log`, `fase4-lock.log`.
