@@ -32,7 +32,7 @@ Este documento es acumulativo. Cada fase se agrega acá con su commit, archivos,
 
 **Archivos creados:** `proxy.ts`, `lib/api-security.ts`, `lib/api-json.ts`, `lib/test-api-security.ts`.
 **Archivos modificados:** `package.json`, `.env.example`, `README.md`, `app/api/threads/migrate/route.ts`, `app/api/threads/route.ts`, `app/api/threads/[id]/favorite/route.ts`, `app/api/council/ping/route.ts`, `app/api/council/route.ts`, `app/api/council/apply-file-change/route.ts`, `app/api/council/stream/route.ts`.
-**Commit:** pendiente al momento de escribir esta sección; se completa en el commit de la fase.
+**Commit:** `22b0700` — `fase 1: proxy de seguridad para /api/*`.
 
 **Política aplicada:**
 1. **Host:** allowlist. Default: `localhost`, `127.0.0.1` y `[::1]` con el puerto de `PORT` (o `3000`). Configurable con `ALLOWED_HOSTS` (coma). Una entrada sin puerto acepta cualquier puerto de ese host. Esto corta DNS rebinding.
