@@ -138,7 +138,7 @@ Los 6 exports eliminados: `prunePlanVersions` (`lib/agent/autonomy/ledger.ts`), 
 - **`.env.example` completo:** ahora documenta las **19 variables** que lee el código de producción: `OPENROUTER_API_KEY`, `OPENROUTER_API_KEY_2..N`, `OPENROUTER_SITE_URL`, `OPENROUTER_APP_NAME`, `OPENROUTER_CODING_MODEL`, `NVIDIA_API_KEY`, `GEMINI_API_KEY`, `SYNTHESIS_MODEL`, `FUSION_JUDGE_MODEL`, `FOLLOWUP_MODEL`, `AGENT_FS_ROOT`, `TAVILY_API_KEY`, `GITHUB_TOKEN`, `MAGI_AUTONOMOUS_LOOP`, `MAGI_CONTEXT_ENGINE_DISABLED`, `ALLOWED_HOSTS`, `ALLOWED_ORIGINS`, `APP_ACCESS_TOKEN` y `PORT`. Cada una con default, obligatoriedad y efecto. La única variable de `process.env` no documentada es `PATH`, que solo aparece en un test de política de tools y no es configuración de la app.
 
 **Archivos modificados:** `README.md`, `.env.example`, `docs/REPORTE-REFACTOR.md`.
-**Commit:** pendiente al momento de escribir esta sección; se completa en el commit de la fase.
+**Commit:** `266f29f` — `fase 6: README y entorno al día`.
 
 **Verificación:** `npm run typecheck` exit 0; `npm run lint` exit 0 con 0 errores y 37 warnings; `npm test` **68/68 scripts OK**. No hubo cambios de código, rutas ni dependencias, así que no se repitió el build de producción (el de Fase 5 sigue siendo el último: exit 0 con 2 warnings de Turbopack). El inventario de variables se verificó con un script que recorre `app/`, `lib/`, `scripts/`, `proxy.ts` y `next.config.ts` y compara contra `.env.example`; no quedan faltantes salvo `PATH`.
 
