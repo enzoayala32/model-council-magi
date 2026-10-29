@@ -1,5 +1,6 @@
 import { readJsonBody } from "@/lib/api-json";
 import { runCouncilStream } from "@/lib/council-orchestrator";
+import { createCouncilRunRecorder } from "@/lib/council-run-store";
 import { logStep } from "@/lib/council-run";
 import type { StreamEvent, StreamRequest } from "@/lib/council-types";
 import { redactSecrets } from "@/lib/provider-resilience/redact";
@@ -24,7 +25,19 @@ export async function POST(request: Request) {
 
   const stream = new ReadableStream({
     async start(controller) {
+      // Fase 7: la traza se persiste best-effort. Si la DB falla, el recorder
+      // se desactiva solo y el SSE sigue sin enterarse.
+      const recorder = createCouncilRunRecorder({
+        id: body.runId,
+        threadId: body.threadId ?? null,
+        turnId: body.turnId ?? null,
+        question: body.prompt ?? "",
+        selectedModels: body.selectedModels ?? [],
+      });
+      recorder.start();
+
       const send = (event: StreamEvent) => {
+        recorder.recordEvent(event);
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
       };
 
@@ -33,14 +46,17 @@ export async function POST(request: Request) {
 
       try {
         await runCouncilStream({ body, signal, send });
+        recorder.finish(isAborted() ? "stopped" : "complete");
       } catch (error) {
         if (isAborted() || (error instanceof Error && error.name === "AbortError")) {
           logStep("⏹ RUN ABORTED (client cancelled)");
+          recorder.finish("stopped");
           // client cancelled; quietly close
         } else {
           const message = redactSecrets(error instanceof Error ? error.message : "Council stream failed.");
           logStep("✗✗ RUN FAILED", { error: message, stack: error instanceof Error ? redactSecrets(error.stack ?? "") : undefined });
           send({ type: "error", error: message });
+          recorder.finish("error");
         }
       } finally {
         try { controller.close(); } catch { /* already closed */ }

@@ -306,6 +306,59 @@ function createConnection(): Database.Database {
       created_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_agent_final_reports_task ON agent_final_reports(task_id, created_at);
+
+    -- Fase 7: trazabilidad de corridas del consejo. Son tablas NUEVAS y
+    -- aditivas (CREATE TABLE IF NOT EXISTS), por eso SCHEMA_VERSION no se
+    -- sube. No reemplazan a threads (que sigue guardando el snapshot del
+    -- turno): acá vive el detalle por evento, el usage por modelo/fase y el
+    -- costo estimado, para timeline/replay/export/comparación.
+    CREATE TABLE IF NOT EXISTS council_runs (
+      id TEXT PRIMARY KEY,
+      thread_id TEXT,
+      turn_id TEXT,
+      question TEXT NOT NULL,
+      selected_models TEXT NOT NULL,
+      status TEXT NOT NULL,
+      started_at INTEGER NOT NULL,
+      finished_at INTEGER,
+      prompt_tokens INTEGER NOT NULL DEFAULT 0,
+      completion_tokens INTEGER NOT NULL DEFAULT 0,
+      total_tokens INTEGER NOT NULL DEFAULT 0,
+      cost_usd REAL,
+      synthesis TEXT,
+      fusion_judge TEXT,
+      trace_json TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_council_runs_started ON council_runs(started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_council_runs_thread ON council_runs(thread_id, started_at DESC);
+
+    CREATE TABLE IF NOT EXISTS council_run_usage (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES council_runs(id),
+      model_id TEXT NOT NULL,
+      label TEXT NOT NULL,
+      phase TEXT NOT NULL,
+      prompt_tokens INTEGER NOT NULL DEFAULT 0,
+      completion_tokens INTEGER NOT NULL DEFAULT 0,
+      total_tokens INTEGER NOT NULL DEFAULT 0,
+      cost_usd REAL,
+      calls INTEGER NOT NULL DEFAULT 0,
+      latency_ms INTEGER,
+      fallbacks INTEGER NOT NULL DEFAULT 0,
+      retries INTEGER NOT NULL DEFAULT 0,
+      UNIQUE (run_id, model_id, phase)
+    );
+    CREATE INDEX IF NOT EXISTS idx_council_run_usage_run ON council_run_usage(run_id);
+
+    CREATE TABLE IF NOT EXISTS council_run_events (
+      run_id TEXT NOT NULL REFERENCES council_runs(id),
+      seq INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      at INTEGER NOT NULL,
+      payload TEXT NOT NULL,
+      PRIMARY KEY (run_id, seq)
+    );
   `);
 
   // `restart_retry_count` puede faltar en una DB creada por una versión

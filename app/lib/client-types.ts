@@ -8,7 +8,7 @@ import type { ReasoningEffort } from "@/lib/models";
 
 export type Phase = "entry" | "thinking" | "results";
 export type ModelRunState = "queued" | "thinking" | "complete";
-export type ResultTab = "answer" | "debate" | "sources" | "steps";
+export type ResultTab = "answer" | "debate" | "sources" | "steps" | "traces";
 export type RunPhase = "drafting" | "debating" | "synthesizing" | "done";
 export type SettingsTab = "connectors" | "skills" | "research" | "images";
 
@@ -95,12 +95,12 @@ export type CouncilStreamEvent =
   | { type: "model_debate_complete"; modelId: string; label: string; critique: string; revisedAnswer?: string; steps: number; usage?: TokenUsage; round: number; maxRounds: number }
   | { type: "model_error"; modelId: string; label: string; error: string; steps: number; phase: RunPhase }
   | { type: "synthesis_started"; step: string }
-  | { type: "fusion_judge_complete"; report: FusionJudgeReport; usage?: TokenUsage }
-  | { type: "synthesis_complete"; content: string; usage?: TokenUsage }
+  | { type: "fusion_judge_complete"; report: FusionJudgeReport; usage?: TokenUsage; model?: string }
+  | { type: "synthesis_complete"; content: string; usage?: TokenUsage; model?: string }
   | { type: "image_started"; model: string; prompt: string }
   | { type: "image_complete"; model: string; prompt: string; images: string[]; usage?: TokenUsage }
   | { type: "image_error"; error: string }
-  | { type: "followups_complete"; questions: string[]; usage?: TokenUsage }
+  | { type: "followups_complete"; questions: string[]; usage?: TokenUsage; model?: string }
   | { type: "file_proposal"; modelId: string; proposal: { id: string; groupId: string; kind: "write" | "edit" | "delete"; path: string; diff: string; typeCheck: TypeCheckResult } }
   | { type: "file_proposal_verified"; proposalId: string; typeCheck: TypeCheckResult }
   | { type: "debate_skipped"; score: number; threshold: number; participantCount: number }

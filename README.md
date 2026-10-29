@@ -142,6 +142,18 @@ El estado del consejo (en espera, deliberando, completo) se muestra en un panel 
 
 ---
 
+## Trazas, export y comparación de corridas
+
+Cada corrida del consejo se persiste en SQLite (`council_runs`, `council_run_usage`, `council_run_events`) con tokens y costo estimado por modelo/fase, latencia, fallbacks, reintentos y todos los eventos del debate. La pestaña **Trazas** de la vista de resultados permite:
+
+- ver el timeline de la corrida y el replay del debate (crítica, respuesta revisada, rationale del voto);
+- exportar la corrida como Markdown o JSON (`/api/council/runs/<id>/export?format=...`);
+- comparar dos corridas del mismo prompt (deltas de tokens, duración y costo, y modelos que solo aparecen en una).
+
+La persistencia es best-effort: si la DB falla, la corrida sigue y la traza se desactiva. El costo sale de una tabla explícita (`lib/model-pricing.ts`): los modelos `:free` cuestan USD 0 y un modelo pago sin tabla se muestra como “—”, no como 0. Las corridas se pueden listar y borrar por API (`GET/DELETE /api/council/runs...`), y todas las rutas pasan por el proxy de seguridad.
+
+---
+
 ## Stack técnico
 
 - **Framework:** Next.js 16 (App Router) + React 19
@@ -256,6 +268,7 @@ app/
   api/
     council/
       stream/route.ts             # plomería HTTP/SSE → lib/council-orchestrator.ts
+      runs/                       # trazas: listado, detalle, export md/json, compare
       apply-file-change/          # aprobación de cambios (grupos atómicos)
       model-health/, ping/
     agent/
@@ -270,6 +283,9 @@ lib/
   council-consensus.ts            # convergencia, votos, mind-change, parsing
   council-prompts.ts              # prompts de cada fase
   council-types.ts                # StreamRequest/StreamEvent compartidos
+  council-run-store.ts            # recorder + persistencia de corridas (best-effort)
+  council-run-trace.ts            # timeline, replay, comparación y export Markdown
+  model-pricing.ts                # tabla de precios y costo estimado por modelo
   persona-presets.ts              # presets MAGI/code-review/research/writing/strategy
   models.ts                       # catálogo, fallbackModelId, paneles de fusión
   openrouter.ts, nvidia.ts, google-ai-studio.ts, llm-shared.ts

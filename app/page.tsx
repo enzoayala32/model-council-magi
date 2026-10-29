@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Gavel, Globe, Layers3, Sparkles } from "lucide-react";
+import { Activity, Gavel, Globe, Layers3, Sparkles } from "lucide-react";
 import CouncilPanel from "./components/council/CouncilPanel";
 import type { NodeState } from "./components/council/types";
 import { DEFAULT_FUSION_PANEL_ID, FUSION_PANELS, IMAGE_MODELS, REASONING_EFFORTS } from "@/lib/models";
@@ -23,6 +23,7 @@ import { SettingsDrawer } from "./components/main/settings-drawer";
 import { ThinkingStage } from "./components/main/agent-panels";
 import { DebateView, SourcesView } from "./components/main/council-views";
 import { ResultsDashboard, ModelResponseModal } from "./components/main/results";
+import { RunTraces } from "./components/main/run-traces";
 import {
   compactQuestion,
   formatElapsed,
@@ -111,6 +112,7 @@ export default function Home() {
     resultTab,
     setResultTab,
     runPhase,
+    currentRunId,
     elapsedMs,
     runCouncil,
     stopGeneration,
@@ -140,6 +142,7 @@ export default function Home() {
     selectedFusionPanelId,
     liveStateRef,
     activeThreadIdRef,
+    threads,
     setThreads,
     setActiveThreadId,
     syncThread,
@@ -497,6 +500,13 @@ export default function Home() {
                   >
                     <Layers3 /> Pasos <em className="count">{activeModels.length}</em>
                   </button>
+                  <button
+                    role="tab"
+                    className={resultTab === "traces" ? "phaseTab active" : "phaseTab"}
+                    onClick={() => setResultTab("traces")}
+                  >
+                    <Activity /> Trazas
+                  </button>
                 </div>
 
                 {resultTab === "answer" ? (
@@ -518,6 +528,8 @@ export default function Home() {
                   <DebateView models={activeModels} debateRounds={debateRounds} votes={votes} voteTally={voteTally} seatPersonas={seatPersonas} debateSkipped={debateSkipped} />
                 ) : resultTab === "sources" ? (
                   <SourcesView models={activeModels} />
+                ) : resultTab === "traces" ? (
+                  <RunTraces runId={currentRunId} threadId={activeThreadId} question={query} />
                 ) : (
                   <ThinkingStage
                     models={activeModels}

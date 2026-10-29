@@ -6,6 +6,7 @@ import {
   Check,
   Copy,
   Download,
+  FileJson,
   Gavel,
   Trophy,
   Plus,
@@ -61,6 +62,34 @@ export function ResultsDashboard({
     downloadTextFile(`${slugify(query)}.md`, markdown);
   }
 
+  /** Fase 7B: export JSON de la vista actual (aún antes de que el server
+   *  termine de persistir la corrida). El detalle completo con eventos vive
+   *  en la pestaña Trazas. */
+  function handleDownloadJson() {
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      query,
+      synthesis,
+      fusionPanelId,
+      followUps,
+      fusionJudge,
+      models: models.map((model) => ({
+        id: model.id,
+        label: model.label,
+        maker: model.maker,
+        response: model.response ?? null,
+        critique: model.critique ?? null,
+        revisedAnswer: model.revisedAnswer ?? null,
+        error: model.error ?? null,
+        viaFallbackFrom: model.viaFallbackFrom ?? null,
+        steps: model.steps,
+      })),
+      tokenUsage,
+      tokenBreakdown,
+    };
+    downloadTextFile(`${slugify(query)}.json`, JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
+  }
+
   return (
     <div className="resultsDashboard">
       <section className="summaryBlock">
@@ -81,6 +110,9 @@ export function ResultsDashboard({
             </button>
             <button className="iconBtn" type="button" aria-label="Download as Markdown" onClick={handleDownloadMarkdown} title="Download full transcript as a .md file">
               <Download size={16} />
+            </button>
+            <button className="iconBtn" type="button" aria-label="Download as JSON" onClick={handleDownloadJson} title="Download full transcript as a .json file">
+              <FileJson size={16} />
             </button>
             <button className="iconBtn" type="button" aria-label="Share"><Share2 size={16} /></button>
             <button className="iconBtn" type="button" aria-label="Save"><Bookmark size={16} /></button>

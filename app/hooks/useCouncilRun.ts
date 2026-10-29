@@ -53,6 +53,7 @@ export type CouncilRunOptions = {
   selectedFusionPanelId: string;
   liveStateRef: MutableRefObject<LiveState>;
   activeThreadIdRef: MutableRefObject<string | null>;
+  threads: StoredThread[];
   setThreads: Dispatch<SetStateAction<StoredThread[]>>;
   setActiveThreadId: (id: string | null) => void;
   syncThread: (thread: StoredThread) => void;
@@ -91,6 +92,7 @@ export function useCouncilRun({
   selectedFusionPanelId,
   liveStateRef,
   activeThreadIdRef,
+  threads,
   setThreads,
   setActiveThreadId,
   syncThread,
@@ -122,6 +124,7 @@ export function useCouncilRun({
   const [resultTab, setResultTab] = useState<ResultTab>("answer");
   const [runPhase, setRunPhase] = useState<RunPhase>("drafting");
   const [elapsedMs, setElapsedMs] = useState(0);
+  const [currentRunId, setCurrentRunId] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const runStartRef = useRef<number | null>(null);
@@ -165,8 +168,10 @@ export function useCouncilRun({
     let threadId = activeThreadIdRef.current;
     let history: Array<{ question: string; synthesis: string }> = [];
     let syncedThread: StoredThread | null = null;
+    const runId = newId("run");
     const newTurn: StoredTurn = {
       id: newId("turn"),
+      runId,
       question: nextQuery,
       synthesis: "",
       followUps: [],
@@ -181,14 +186,13 @@ export function useCouncilRun({
       status: "complete",
     };
 
-    setThreads((current) => {
-      const existing = threadId ? current.find((t) => t.id === threadId) : null;
-      if (existing) {
-        history = buildHistory(existing);
-        const updated = { ...existing, updatedAt: Date.now(), turns: [...existing.turns, newTurn] };
-        syncedThread = updated;
-        return current.map((thread) => (thread.id === threadId ? updated : thread));
-      }
+    const existingThread = threadId ? threads.find((t) => t.id === threadId) : null;
+    if (existingThread) {
+      history = buildHistory(existingThread);
+      const updated = { ...existingThread, updatedAt: Date.now(), turns: [...existingThread.turns, newTurn] };
+      syncedThread = updated;
+      setThreads((current) => current.map((thread) => (thread.id === threadId ? updated : thread)));
+    } else {
       // New thread
       const created: StoredThread = {
         id: newId("thread"),
@@ -202,9 +206,10 @@ export function useCouncilRun({
       setActiveThreadId(created.id);
       history = [];
       syncedThread = created;
-      return [created, ...current];
-    });
+      setThreads((current) => [created, ...current]);
+    }
     if (syncedThread) syncThread(syncedThread);
+    setCurrentRunId(runId);
 
     setQuery(nextQuery);
     setCouncilEnabled(true);
@@ -254,6 +259,9 @@ export function useCouncilRun({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt: nextQuery,
+          runId,
+          threadId: threadId ?? undefined,
+          turnId: newTurn.id,
           selectedModels: nextRunModelIds,
           fusionPanelId: nextFusionPanelId ?? undefined,
           attachments: attachments.map(({ id: _id, ...attachment }) => attachment),
@@ -568,6 +576,7 @@ export function useCouncilRun({
     setRunModelIds([]);
     setResultTab("answer");
     setRunFusionPanelId(selectedFusionPanelId === "custom" ? null : selectedFusionPanelId);
+    setCurrentRunId(null);
   }
 
   /** Hidrata el estado de resultados desde un turno guardado. */
@@ -584,6 +593,7 @@ export function useCouncilRun({
     setResultTab("answer");
     setStreamError("");
     setSynthesisActivity("");
+    setCurrentRunId(turn.runId ?? null);
   }
 
   return {
@@ -607,6 +617,7 @@ export function useCouncilRun({
     resultTab,
     setResultTab,
     runPhase,
+    currentRunId,
     elapsedMs,
     runCouncil,
     stopGeneration,

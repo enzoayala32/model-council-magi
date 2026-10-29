@@ -46,6 +46,12 @@ export type ConnectorSettings = {
 export type StreamRequest = {
   prompt?: string;
   selectedModels?: string[];
+  /** Fase 7: IDs generados por el cliente para correlacionar la corrida con
+   *  el hilo/turno y persistir la traza en `council_runs`. Opcionales: si no
+   *  vienen, el servidor genera un runId y la corrida queda sin hilo. */
+  runId?: string;
+  threadId?: string;
+  turnId?: string;
   fusionPanelId?: string;
   apiKey?: string;
   attachments?: UploadedAttachment[];
@@ -80,12 +86,12 @@ export type StreamEvent =
   | { type: "model_debate_complete"; modelId: string; label: string; critique: string; revisedAnswer?: string; steps: number; usage?: unknown; round: number; maxRounds: number }
   | { type: "model_error"; modelId: string; label: string; error: string; steps: number; phase: Phase }
   | { type: "synthesis_started"; step: string }
-  | { type: "fusion_judge_complete"; report: FusionJudgeReport; usage?: unknown }
-  | { type: "synthesis_complete"; content: string; usage?: unknown }
+  | { type: "fusion_judge_complete"; report: FusionJudgeReport; usage?: unknown; model?: string }
+  | { type: "synthesis_complete"; content: string; usage?: unknown; model?: string }
   | { type: "image_started"; model: string; prompt: string }
   | { type: "image_complete"; model: string; prompt: string; images: string[]; usage?: unknown }
   | { type: "image_error"; error: string }
-  | { type: "followups_complete"; questions: string[]; usage?: unknown }
+  | { type: "followups_complete"; questions: string[]; usage?: unknown; model?: string }
   | { type: "file_proposal"; modelId: string; proposal: { id: string; groupId: string; kind: "write" | "edit" | "delete"; path: string; diff: string; typeCheck: TypeCheckResult } }
   | { type: "file_proposal_verified"; proposalId: string; typeCheck: TypeCheckResult }
   | { type: "debate_skipped"; score: number; threshold: number; participantCount: number }

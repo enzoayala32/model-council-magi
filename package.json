@@ -43,6 +43,7 @@
     "council:test-persona-presets": "tsx lib/test-persona-presets.ts",
     "council:test-attachment-extraction": "tsx lib/test-attachment-extraction.ts",
     "council:test-orchestrator": "tsx lib/test-council-orchestrator.ts",
+    "council:test-runs": "tsx lib/test-council-run-store.ts",
     "security:test-proxy": "tsx lib/test-api-security.ts",
     "agent:test-runner-real": "tsx lib/agent/test-runner-real.ts",
     "agent:test-model-registry": "tsx lib/agent/test-model-registry.ts",

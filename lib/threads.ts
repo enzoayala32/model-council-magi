@@ -18,6 +18,9 @@ export type StoredModelTurn = {
 
 export type StoredTurn = {
   id: string;
+  /** Fase 7: id de la corrida persistida en `council_runs` (opcional en
+   *  turnos viejos, que se guardaron antes de existir la trazabilidad). */
+  runId?: string;
   question: string;
   synthesis: string;
   followUps?: string[];

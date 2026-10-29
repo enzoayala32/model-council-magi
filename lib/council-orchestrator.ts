@@ -425,7 +425,12 @@ export async function runCouncilStream({ body, signal, send, deps: overrides }: 
   deps.logStep("✓ fusion judge DONE", { ms: Date.now() - judgeStartedAt });
 
   if (isAborted()) return;
-  send({ type: "fusion_judge_complete", report: fusionJudge.report, usage: fusionJudge.usage });
+  send({
+    type: "fusion_judge_complete",
+    report: fusionJudge.report,
+    usage: fusionJudge.usage,
+    model: process.env.FUSION_JUDGE_MODEL ?? "nvidia/nemotron-3.5-lightning:free",
+  });
 
   // ---------- Synthesis ----------
   send({ type: "synthesis_started", step: "Grounding the final answer in the judge report and council transcripts" });
@@ -486,6 +491,7 @@ export async function runCouncilStream({ body, signal, send, deps: overrides }: 
 
   deps.logStep("→ synthesis START", { model: SYNTHESIS_PRIMARY_MODEL });
   let synthesis: Awaited<ReturnType<typeof deps.createAgentCompletion>>;
+  let synthesisModelUsed = SYNTHESIS_PRIMARY_MODEL;
   const primaryStartedAt = Date.now();
   try {
     synthesis = await deps.withWatchdog(
@@ -516,6 +522,7 @@ export async function runCouncilStream({ body, signal, send, deps: overrides }: 
         SYNTHESIS_WATCHDOG_MS,
         "Synthesis (fallback)",
       );
+      synthesisModelUsed = SYNTHESIS_FALLBACK_MODEL;
       deps.logStep("✓ synthesis DONE (fallback)", { ms: Date.now() - fallbackStartedAt, tokens: synthesis.usage });
     } catch (fallbackError) {
       const message = redactSecrets(fallbackError instanceof Error ? fallbackError.message : "Synthesis failed.");
@@ -525,7 +532,7 @@ export async function runCouncilStream({ body, signal, send, deps: overrides }: 
   }
 
   if (isAborted()) return;
-  send({ type: "synthesis_complete", content: synthesis.content, usage: synthesis.usage });
+  send({ type: "synthesis_complete", content: synthesis.content, usage: synthesis.usage, model: synthesisModelUsed });
 
   if (imageSettings.enabled) {
     const imageModel = imageSettings.model;
@@ -555,10 +562,11 @@ export async function runCouncilStream({ body, signal, send, deps: overrides }: 
   }
 
   deps.logStep("→ follow-ups START");
+  const followUpModel = process.env.FOLLOWUP_MODEL ?? FOLLOWUP_MODEL;
   try {
     const followUps = await deps.withWatchdog(
       deps.createChatCompletion({
-        model: process.env.FOLLOWUP_MODEL ?? FOLLOWUP_MODEL,
+        model: followUpModel,
         apiKey,
         maxTokens: 1400,
         temperature: 0.35,
@@ -576,12 +584,13 @@ export async function runCouncilStream({ body, signal, send, deps: overrides }: 
       type: "followups_complete",
       questions: parseFollowUpQuestions(followUps.content),
       usage: followUps.usage,
+      model: followUpModel,
     });
   } catch (error) {
     if (isAborted()) return;
     const message = redactSecrets(error instanceof Error ? error.message : String(error));
     deps.logStep("✗ follow-ups FAILED (non-fatal, continuing)", { error: message });
-    send({ type: "followups_complete", questions: [] });
+    send({ type: "followups_complete", questions: [], model: followUpModel });
   }
 
   deps.logStep("✓✓ RUN COMPLETE");

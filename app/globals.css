@@ -3195,3 +3195,64 @@ tbody tr:hover { background: var(--bg-soft); }
 }
 .mindChangeBadge.firm { background: rgba(26, 163, 122, 0.12); color: var(--success); }
 .mindChangeBadge.changed { background: rgba(214, 84, 61, 0.12); color: var(--danger); }
+
+/* =========================================================
+   Fase 7 — Trazas de la corrida (timeline, replay, compare)
+   ========================================================= */
+
+.runTraces { display: grid; gap: 18px; }
+.traceHead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.traceActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.traceBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-soft);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+.traceBtn:hover:not(:disabled) { border-color: var(--line-strong); transform: translateY(-1px); }
+.traceBtn:disabled { opacity: 0.45; cursor: not-allowed; }
+.traceBtn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.traceSelect {
+  max-width: 360px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-soft);
+  color: var(--ink);
+  font-size: 12px;
+}
+.traceStats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+.traceStats > div { display: grid; gap: 3px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-soft); }
+.traceStats span { color: var(--muted); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+.traceStats b { font-size: 14px; }
+.traceQuestion { margin: 0; color: var(--muted); font-size: 13px; }
+.traceEmpty { margin: 0; color: var(--muted); font-size: 13px; }
+.traceWarning { margin: 0; padding: 9px 12px; border: 1px solid #d9a441; border-radius: 10px; background: #fdf4df; color: #7a5310; font-size: 12px; }
+.traceTimeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; max-height: 460px; overflow: auto; }
+.traceEvent { display: grid; grid-template-columns: 92px 1fr; gap: 10px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-soft); }
+.traceEvent.debate { border-left: 3px solid var(--accent); }
+.traceEvent b { font-size: 12px; }
+.traceEvent p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.traceEvent details { margin-top: 5px; }
+.traceEvent summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+.traceEvent pre { margin: 6px 0 0; max-height: 220px; overflow: auto; padding: 8px; border-radius: 8px; background: var(--bg); font-size: 11px; white-space: pre-wrap; word-break: break-word; }
+.traceOffset { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.replayCard { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg-soft); }
+.replayMeta { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; }
+.replayBlock { display: grid; gap: 3px; }
+.replayBlock span { color: var(--muted); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+.replayBlock p { margin: 0; max-height: 260px; overflow: auto; white-space: pre-wrap; font-size: 13px; line-height: 1.5; }
+.replayControls { display: flex; flex-wrap: wrap; gap: 8px; }
+.compareControls { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
+.compareControls label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; }
+.compareResult { display: grid; gap: 10px; margin-top: 10px; }
+.compareModels { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.compareModels p { margin: 0; }
