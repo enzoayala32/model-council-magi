@@ -581,6 +581,7 @@ Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar q
 - **UI sin tests de render:** `run-traces.tsx` se validó con typecheck, lint, build y smoke HTTP, pero no hay Testing Library/jsdom en el repo. Un cambio de estado que no rompa tipos podría pasar desapercibido.
 - **Export JSON de la vista actual:** no incluye los eventos ni el usage por fase; para eso está el export por corrida, que requiere que la persistencia haya funcionado. Si la DB falló, la pestaña Trazas muestra el error y el export por corrida no existe.
 - **Borrar corridas no borra turnos:** el `DELETE` es solo de la traza. El hilo sigue mostrando el turno con su `runId`, que pasa a apuntar a una corrida inexistente; la UI lo trata como “sin traza”.
+- **Tasks de prueba en la DB de desarrollo:** las suites que usan SQLite dejan filas de prueba en `data/council.db` (comportamiento preexistente, no de Fase 7). La corrida final dejó tasks con prompts como “tarea de prueba 2C”; no se borraron para no tocar datos que podrían ser del usuario. La tabla `council_runs` sí quedó en 0 después del smoke.
 
 ---
 
