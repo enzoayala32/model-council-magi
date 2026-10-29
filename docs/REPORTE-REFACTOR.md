@@ -145,7 +145,22 @@ Los 6 exports eliminados: `prunePlanVersions` (`lib/agent/autonomy/ledger.ts`), 
 
 ### Fase 7 — Funcionalidades nuevas
 
-Pendiente de implementación.
+**Qué se hizo:**
+- **Persistencia aditiva de corridas:** tres tablas nuevas (`council_runs`, `council_run_usage`, `council_run_events`) creadas con `CREATE TABLE IF NOT EXISTS`; `SCHEMA_VERSION` no se sube porque no se altera ninguna tabla existente. `lib/council-run-store.ts` contiene el recorder (best-effort) y el CRUD/listado/comparación; `lib/council-run-trace.ts`, los tipos y las funciones puras (`buildRunTrace`, `compareCouncilRuns`, `describeEvent`, `renderRunMarkdown`).
+- **7A — Tokens y costo por modelo:** `lib/model-pricing.ts` con tabla explícita de precios por millón de tokens. Los modelos `:free` cuestan USD 0; un modelo pago sin tabla devuelve `null` (la UI muestra “—”, no un falso USD 0). El usage se agrupa por modelo y fase (`draft`, `debate rN`, `vote`, `judge`, `synthesis`, `image`, `followups`) con prompt/completion/total, llamadas, latencia, fallbacks y reintentos.
+- **7B — Export:** `GET /api/council/runs/[id]/export?format=markdown|json` devuelve la corrida completa con `Content-Disposition: attachment`. La vista de resultados agrega un botón de export JSON además del Markdown existente.
+- **7C — Comparación:** `GET /api/council/runs/compare?a=<id>&b=<id>` devuelve ambas corridas y los deltas de tokens, duración y costo, más los modelos que solo aparecen en A o en B. La UI avisa si las preguntas no coinciden.
+- **7D — Timeline y replay:** `GET /api/council/runs/[id]` devuelve la corrida, el usage y todos los eventos. La pestaña **Trazas** muestra el timeline con offset desde el inicio, permite ver el payload de cada evento y reproducir el debate (crítica, respuesta revisada, rationale del voto, convergencia).
+- **7E — Trazas por corrida:** latencia desde el primer `Calling ` hasta el evento de cierre, fallbacks desde `viaFallbackFrom` y reintentos contando re-llamadas visibles. No cuenta los retries HTTP internos de los clientes de proveedor.
+- **Correlación cliente/servidor:** `useCouncilRun` genera `runId`, `threadId` y `turnId`, los manda en el body del SSE y guarda `runId` en `StoredTurn` (opcional en turnos viejos). Si el body no trae `runId`, el servidor genera uno.
+- **Atribución real del modelo:** los eventos `fusion_judge_complete`, `synthesis_complete` y `followups_complete` ahora incluyen `model` (incluido el modelo de fallback de síntesis). Sin eso, el usage quedaba a nombre de `fusion-judge`/`synthesis` y el costo no se podía estimar.
+- **Rutas nuevas:** `app/api/council/runs/route.ts` (listado por hilo), `runs/[id]/route.ts` (detalle/delete), `runs/[id]/export/route.ts` (Markdown/JSON) y `runs/compare/route.ts`. Todas pasan por el proxy de Fase 1.
+
+**Archivos creados:** `lib/model-pricing.ts`, `lib/council-run-trace.ts`, `lib/council-run-store.ts`, `lib/test-council-run-store.ts`, `app/components/main/run-traces.tsx`, `app/api/council/runs/route.ts`, `app/api/council/runs/[id]/route.ts`, `app/api/council/runs/[id]/export/route.ts`, `app/api/council/runs/compare/route.ts`.
+**Archivos modificados:** `lib/db.ts`, `lib/council-types.ts`, `lib/council-orchestrator.ts`, `app/api/council/stream/route.ts`, `app/hooks/useCouncilRun.ts`, `app/page.tsx`, `app/lib/client-types.ts`, `app/components/main/results.tsx`, `app/globals.css`, `lib/threads.ts`, `package.json`, `README.md`, `docs/REPORTE-REFACTOR.md`.
+**Commit:** `b3ba92f` — `fase 7: trazabilidad y comparación de corridas`.
+
+**Verificación:** `npm run typecheck` exit 0; `npm run lint` exit 0 con 0 errores y 37 warnings (los mismos de Fase 6); `npm test` **69/69 scripts OK** (incluye `council:test-runs` 95/95); `npm run build` exit 0 con 2 warnings de Turbopack: el mismo trace preexistente de `apply-file-change` en sus variantes app route y output asset (en la corrida previa Turbopack había reportado 1). Smoke HTTP en `:3101`: dos POST al stream con prompt vacío persistieron dos corridas `error`, y list/detail/export Markdown/export JSON/compare/delete respondieron 200; la DB se limpió a 0 corridas y el servidor se detuvo. Una corrida completa con proveedores reales sigue **NO VERIFICADA** (keys y `ByteString ... 8212`).
 
 ---
 
@@ -402,6 +417,35 @@ TSC=0
 === Resumen: 68/68 OK ===
 ```
 
+### Fase 7 — ANTES / DESPUÉS
+
+| Comando / artefacto | ANTES (Fase 6) | DESPUÉS (Fase 7) |
+|---|---|---|
+| `npm test` | 68/68 OK | **69/69 OK** (incluye `council:test-runs`). |
+| `npm run council:test-runs` | No existía | **95/95**. |
+| `npm run typecheck` | exit 0 | exit 0. |
+| `npm run lint` | 0 errores, 37 warnings | 0 errores, **37 warnings** (27 unused, 8 set-state, 2 `<img>`). |
+| `npm run build` | Último válido de Fase 5 (2 warnings). | exit 0, **2 warnings** de Turbopack: el mismo trace preexistente de `apply-file-change` (app route + output asset). |
+| Tablas SQLite | `threads` + tablas del Coding Agent. | + `council_runs`, `council_run_usage`, `council_run_events` (aditivas). |
+| `SCHEMA_VERSION` | — | Sin cambios: no se alteró ninguna tabla existente. |
+| Rutas de API | `/api/council/stream`, `/ping`, `/model-health`, `/apply-file-change`. | + `/api/council/runs`, `/runs/[id]`, `/runs/[id]/export`, `/runs/compare`. |
+| Export | Solo Markdown de la vista actual. | Markdown y JSON por corrida + JSON de la vista actual. |
+| UI de resultados | Pestañas Respuesta / Debate / Fuentes / Pasos. | + pestaña **Trazas** (timeline, replay, comparación, export). |
+| Trazabilidad | Ninguna: el turno guardaba solo el snapshot final. | Tokens/costo/latencia/fallbacks/reintentos por modelo y fase, eventos y debate completo. |
+| Smoke HTTP | — | `:3101`: 2 corridas persistidas; list/detail/export md+json/compare/delete 200; DB limpiada a 0. |
+
+**Salida real resumida:**
+
+```text
+npm notice run consenso-ia@0.1.0 typecheck
+TSC=0
+✖ 37 problems (0 errors, 37 warnings)
+95/95 casos OK.
+=== Resumen: 69/69 OK ===
+npm notice run consenso-ia@0.1.0 build
+EXIT=0
+```
+
 ---
 
 ## 3. Tests nuevos
@@ -417,8 +461,9 @@ TSC=0
 | 4 | `lib/test-persona-presets.ts` | 45 | `council:test-persona-presets` |
 | 4 | `lib/test-attachment-extraction.ts` | 27 | `council:test-attachment-extraction` |
 | 5 | `lib/test-council-orchestrator.ts` | 54 | `council:test-orchestrator` |
+| 7 | `lib/test-council-run-store.ts` | 95 | `council:test-runs` |
 
-Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar que el tipado no cambió el comportamiento (46 casos entre los cuatro scripts). Fase 4 agrega 245 casos y el total de scripts del runner pasa de 63 a 67. Fase 5 agrega 54 casos con un proveedor falso y el total pasa a 68 scripts.
+Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar que el tipado no cambió el comportamiento (46 casos entre los cuatro scripts). Fase 4 agrega 245 casos y el total de scripts del runner pasa de 63 a 67. Fase 5 agrega 54 casos con un proveedor falso y el total pasa a 68 scripts. Fase 7 agrega 95 casos (pricing, trazas puras y persistencia en una DB temporal con migración aditiva) y el total pasa a **69 scripts**.
 
 ---
 
@@ -490,6 +535,21 @@ Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar q
 - **`PATH` queda fuera:** aparece en `lib/agent/test-tool-policy.ts` para simular un entorno sin scripts; no es configuración de la app y no debe ir en `.env`.
 - **Sin cambios de código:** la fase es solo documentación/configuración. No se repitió el build porque no cambió ningún archivo que Next compile; el último build válido sigue siendo el de Fase 5. `typecheck`, `lint` y `npm test` sí se corrieron.
 
+### Fase 7
+
+- **Migración aditiva, sin subir `SCHEMA_VERSION`:** las tres tablas son nuevas y se crean con `CREATE TABLE IF NOT EXISTS`; ninguna tabla existente cambia de forma. El test abre una DB “vieja” con `threads` y una fila, importa `lib/db.ts` después del `chdir` y verifica que la fila sobrevive. Si en el futuro se agrega una columna a `council_runs`, ahí sí hará falta una migración real.
+- **Persistencia best-effort:** el recorder nunca propaga un error de DB al SSE. Si `start`, un `INSERT` de evento o `finish` fallan, se marca `disabled`, se emite un único `console.warn` y la corrida sigue. Un fallo de DB no debe tumbar la respuesta del consejo.
+- **Estados:** un evento `error` deja la corrida en `error`; un abort del cliente en `stopped`; `finish()` no pisa un estado que ya no sea `running`. El `run_complete` no cierra la transacción por sí solo: `finish()` es el único que escribe usage y resumen, así un error posterior al evento no deja la corrida marcada como completa.
+- **Costo:** se usa una tabla explícita, no una API de precios. `:free` = USD 0; modelo pago sin tabla = `null` → “—”; Gemini se marca como estimado. No se inventan precios para modelos desconocidos ni se redondea un `null` a 0.
+- **Reintentos y fallbacks:** `retries` cuenta re-llamadas visibles (cada `model_step` que empieza con `Calling `) por modelo y fase; no cuenta los retries HTTP internos de los clientes. `fallbacks` sale de `viaFallbackFrom`. Es una traza de lo que ve el usuario, no telemetría interna del proveedor.
+- **Replay vs. tamaño:** se guardan completos `critique` y `revisedAnswer` (son el contenido del replay); se recorta `content` de los borradores a un preview de 280 caracteres y el `diff` de las propuestas a id/groupId/kind/path. El debate es lo que importa para reconstruir la deliberación; el borrador completo ya vive en el hilo.
+- **IDs generados en el cliente:** permiten correlacionar la corrida con el hilo/turno y consultar la traza apenas termina, sin una vuelta extra. `StoredTurn.runId` es opcional para no romper turnos viejos; un turno sin `runId` simplemente no ofrece traza.
+- **`model` en eventos de juez/síntesis/follow-ups:** se agregó al contrato del stream para atribuir el usage al modelo real. En síntesis, si se usa el fallback, el evento manda el modelo de fallback, no el primario. Es un campo opcional: un cliente viejo lo ignora.
+- **Dos exports distintos:** el export por corrida (`/runs/[id]/export`) sale de la DB y es el que tiene eventos y usage; el botón JSON de la vista actual serializa lo que hay en memoria y funciona aunque la persistencia esté desactivada. No son el mismo contrato y se documenta así.
+- **Agrupación de usage:** la clave única es `(run_id, model_id, phase)`. Si dos asientos usan el mismo modelo, o un fallback coincide con otro asiento, sus filas se fusionan; el total de tokens sigue siendo correcto, pero el desglose por asiento no. Se acepta para esta fase.
+- **Sin FK a `threads`:** borrar un hilo no borra sus corridas. Es intencional: la traza sirve para auditar incluso después de borrar el hilo. El costo es que quedan filas huérfanas de `thread_id`; se pueden borrar por API.
+- **Rutas protegidas por el proxy:** los GET nuevos no exigen Origin (son lecturas), pero el DELETE de una corrida sí pasa por la regla de métodos mutantes de Fase 1. No se agregó autorización por usuario porque la app sigue siendo single-user.
+
 ---
 
 ## 5. Riesgos conocidos y deuda
@@ -513,6 +573,14 @@ Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar q
 - **El README puede desactualizarse otra vez:** no hay un chequeo automático de que `.env.example` cubra todas las `process.env` ni de que el árbol de estructura coincida con el repo. El inventario de Fase 6 se hizo con un script ad hoc; si se agrega una variable nueva, hay que actualizar `.env.example` a mano.
 - **`.env.example` no valida nada:** son placeholders (`sk-or-v1-your-key`, `nvapi-your-key`, etc.). La app no verifica formato; una key inválida falla recién en la primera llamada al proveedor.
 - **Build de Fase 6 no ejecutado:** al no haber cambios de código, se aceptó el build de Fase 5 como último válido. Si se toca `README.md`/`.env.example` no hace falta, pero cualquier cambio futuro de código sí debe recompilar.
+- **Fase 7 sin corrida real:** el smoke usó prompt vacío, así que persistió corridas `error` con 1 evento y 0 usage. Los 95 casos prueban pricing, trazas y el recorder contra una DB temporal, pero **no** una corrida SSE completa con tokens, latencia y debate reales. Eso sigue **NO VERIFICADO** por las keys faltantes y el `ByteString ... 8212`.
+- **Crecimiento de la DB:** cada corrida guarda todos sus eventos. No hay retención automática ni límite de tamaño; solo `DELETE /api/council/runs/[id]` (sin botón en la UI). En uso intensivo `data/council.db` puede crecer más rápido que antes.
+- **Precios manuales:** `lib/model-pricing.ts` es una tabla escrita a mano. Si un proveedor cambia precios o se agrega un modelo pago, el costo queda desactualizado o en “—”. No hay test contra una fuente externa.
+- **Uso fusionado por modelo+fase:** dos asientos con el mismo modelo (o un fallback que coincide) comparten fila de usage. El total es correcto; el desglose por asiento no. Si se necesita por asiento, la clave tendría que incluir el seat/label.
+- **Reintentos heurísticos:** dependen de que el texto del paso siga empezando con `Calling `. Un cambio de copy en `council-run.ts` haría que los reintentos se cuenten como 0 sin que ningún test lo note (el test fija el texto actual).
+- **UI sin tests de render:** `run-traces.tsx` se validó con typecheck, lint, build y smoke HTTP, pero no hay Testing Library/jsdom en el repo. Un cambio de estado que no rompa tipos podría pasar desapercibido.
+- **Export JSON de la vista actual:** no incluye los eventos ni el usage por fase; para eso está el export por corrida, que requiere que la persistencia haya funcionado. Si la DB falló, la pestaña Trazas muestra el error y el export por corrida no existe.
+- **Borrar corridas no borra turnos:** el `DELETE` es solo de la traza. El hilo sigue mostrando el turno con su `runId`, que pasa a apuntar a una corrida inexistente; la UI lo trata como “sin traza”.
 
 ---
 
@@ -562,7 +630,9 @@ Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar q
 
 ### Fase 7
 
-Pendiente de implementación.
+1. `npm run council:test-runs` → **95/95**; `npm test` → **69/69**. El test de DB corre en un directorio temporal y no toca `data/council.db`.
+2. `npm run dev` y abrir `http://localhost:3000`. Hacer una pregunta al consejo (requiere keys): al terminar, abrir la pestaña **Trazas**, elegir la corrida y verificar stats, tabla de tokens/costo/latencia/fallbacks/reintentos, timeline y replay. Probar los botones Markdown/JSON y comparar dos corridas. Sin keys, un prompt vacío igual persiste una corrida `error` visible en la pestaña.
+3. Por API: `curl "http://localhost:3000/api/council/runs"`; `curl "http://localhost:3000/api/council/runs/<id>/export?format=markdown"`; `curl "http://localhost:3000/api/council/runs/compare?a=<id>&b=<id>"`; `curl -X DELETE "http://localhost:3000/api/council/runs/<id>"`. Con `APP_ACCESS_TOKEN` definido, agregar `-H "Authorization: Bearer <token>"`.
 
 ---
 
@@ -578,4 +648,5 @@ Pendiente de implementación.
 - Logs de Fase 4: `C:\Users\Admin\AppData\Local\Temp\opencode\fase4-npm-test.log`, `fase4-lint.log`, `fase4-lint2.log`, `fase4-build.log`, `fase4-lock.log`.
 - Logs de Fase 5: `C:\Users\Admin\AppData\Local\Temp\opencode\fase5-npm-test.log`, `fase5-lint.log`, `fase5-build.log`, `fase5-dev.log`.
 - Logs de Fase 6: `C:\Users\Admin\AppData\Local\Temp\opencode\fase6-npm-test.log`.
+- Logs de Fase 7: `C:\Users\Admin\AppData\Local\Temp\opencode\fase7-npm-test-final.log` (69/69, `council:test-runs` 95/95), `fase7-build-final.log` (exit 0, 2 warnings del mismo trace preexistente), `fase7-dev.log`, `fase7-eslint.json` y `fase7-smoke.mjs` (script del smoke HTTP).
 - Arquitectura del Coding Agent: `docs/ARQUITECTURA-AGENTE.md`.
