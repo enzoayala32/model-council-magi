@@ -2,6 +2,20 @@ import { NextResponse, type NextRequest } from "next/server";
 import { evaluateApiRequest } from "./lib/api-security";
 
 /**
+ * Rutas que NO pueden exigir token, porque existen justamente para
+ * conseguirlo. Siguen sujetas a Host, Origin y Content-Type: solo se
+ * salta el chequeo de `APP_ACCESS_TOKEN`.
+ *
+ * Se compara por prefijo exacto de segmento (no `startsWith` suelto) para
+ * que `/api/auth/tokenX` no quede exento por accidente.
+ */
+const TOKEN_EXEMPT_PATHS = ["/api/auth/token"] as const;
+
+function isTokenExempt(pathname: string): boolean {
+  return TOKEN_EXEMPT_PATHS.some((path) => pathname === path);
+}
+
+/**
  * Fase 1 — puerta de entrada de `/api/*`.
  *
  * Next 16 renombró `middleware.ts` a `proxy.ts`; el runtime es siempre
@@ -26,6 +40,7 @@ export function proxy(request: NextRequest) {
       authorization: request.headers.get("authorization"),
       cookie: request.headers.get("cookie"),
       hasBody,
+      tokenExempt: isTokenExempt(request.nextUrl.pathname),
     },
     {
       ALLOWED_HOSTS: process.env.ALLOWED_HOSTS,

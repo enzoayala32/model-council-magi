@@ -23,6 +23,7 @@ import { SettingsDrawer } from "./components/main/settings-drawer";
 import { ThinkingStage } from "./components/main/agent-panels";
 import { DebateView, SourcesView } from "./components/main/council-views";
 import { ResultsDashboard, ModelResponseModal } from "./components/main/results";
+import { TokenAccessGate } from "./components/auth/token-access-gate";
 import { RunTraces } from "./components/main/run-traces";
 import {
   compactQuestion,
@@ -594,6 +595,11 @@ export default function Home() {
           />
         ) : null}
       </div>
+
+      {/* Fase 1.2: puerta de acceso por token. Sin cookie válida con
+          APP_ACCESS_TOKEN definido, el proxy bloquea toda /api/* y la app
+          no serviría de nada. Se reemplaza por el emparejamiento (Fase 4). */}
+      <TokenAccessGate />
     </main>
   );
 }

@@ -164,6 +164,43 @@ Los 6 exports eliminados: `prunePlanVersions` (`lib/agent/autonomy/ledger.ts`), 
 
 ---
 
+## 1B. Misión 2 — correcciones, control remoto y MCP
+
+Commit base de esta misión: `e4bcb2c`. Todo lo de abajo es verificable con los comandos citados.
+
+### Fase 1.1 — Headers HTTP saneados (fix ByteString 8212)
+
+**Qué se hizo:** el default de `X-Title` en `lib/agent/loop.ts` traía una raya larga (U+2014). Los valores de header son `ByteString` (Latin-1), así que `fetch` lanzaba `Cannot convert argument to a ByteString ... value of 8212` y mataba la llamada al proveedor. Es la causa de raíz de los fallos de `agent:test` y `agent:test-runner-real` que estaban registrados como "preexistentes".
+
+- Se creó `lib/http-headers.ts`: `sanitizeHeaderValue` translitera a Latin-1 imprimible (rayas y comillas tipográficas a ASCII, acentos sin diacrítico, ß→ss, ø→o), descarta lo no representable y elimina CR/LF y caracteres de control.
+- `openRouterHeaders()` es el ÚNICO lugar del repo que arma `HTTP-Referer`/`X-Title`. Se reemplazaron los cuatro sitios que los escribían a mano: `lib/agent/loop.ts`, `lib/openrouter.ts` (dos llamadas) y `lib/model-ping.ts`.
+- El default quedó ASCII: `Consenso IA - Coding Agent`.
+
+**Archivos creados:** `lib/http-headers.ts`, `lib/test-http-headers.ts`.
+**Archivos modificados:** `lib/agent/loop.ts` (permitido explícitamente por esta fase), `lib/openrouter.ts`, `lib/model-ping.ts`, `package.json`, `scripts/run-tests.ts` (nuevo script descubierto por el runner).
+**Commit:** `fase 1.1: sanear valores de header a Latin-1 (fix ByteString 8212)`.
+
+**Verificación:** `npm run security:test-http-headers` → **46/46 casos OK**. `npm run agent:test` → **exit 0** (antes fallaba con el ByteString; es la prueba directa del fix). `npm run agent:test-runner-real` y `agent:test-model-registry` → **NO VERIFICADO**: el primero pide una ruta y un prompt por argumentos y el segundo salta cada modelo por falta de `NVIDIA_API_KEY`/`GEMINI_API_KEY` (no hay `.env` en este entorno).
+
+### Fase 1.2 — Login del token de acceso (APP_ACCESS_TOKEN)
+
+**Qué se hizo:** con `APP_ACCESS_TOKEN` definido, toda `/api/*` quedaba bloqueada y la UI no tenía forma de canjear el token. Se agregó lo mínimo funcional hasta que el emparejamiento por dispositivos (Fase 4) lo reemplace.
+
+- `POST /api/auth/token` compara el token recibido con el configurado en tiempo constante y setea la cookie `magi_access_token` (`HttpOnly`, `SameSite=Strict`, `Path=/`, `Max-Age=86400`, `Secure` solo si la request vino por HTTPS o `x-forwarded-proto: https`). Sin token configurado responde 200 sin setear nada, para no delatar la configuración.
+- `DELETE /api/auth/token` borra la cookie (logout local).
+- El proxy exceptúa solo el path `/api/auth/token` del chequeo de token (`tokenExempt`), conservando Host, Origin y Content-Type. Se compara por path exacto, no por prefijo, para no eximir variantes.
+- La UI muestra un diálogo cuando un GET real responde 403 con `reason: "token"` (la respuesta del proxy es la fuente de verdad; no se inventó un endpoint de estado). Cuando hay sesión, aparece un botón de logout local.
+
+**Archivos creados:** `app/api/auth/token/route.ts`, `app/components/auth/token-access-gate.tsx`, `lib/test-auth-token.ts`.
+**Archivos modificados:** `lib/api-security.ts` (exporta `constantTimeEqual`, `buildTokenCookie` y `APP_ACCESS_TOKEN_COOKIE`; nuevo campo `tokenExempt`), `proxy.ts`, `app/page.tsx`, `app/globals.css`, `package.json`, `scripts/run-tests.ts`.
+**Commit:** pendiente.
+
+**Verificación:** `npm run security:test-token-route` → **35/35 casos OK**. `npm run typecheck` exit 0; `npm run lint` 0 errores / 37 warnings. Smoke con dev server en `:3102` (`APP_ACCESS_TOKEN=smoke-secreto-123`), todo con curl/fetch: sin cookie `GET /api/threads` 403; login correcto 200 con `Set-Cookie: magi_access_token=…; HttpOnly; SameSite=Strict`; con cookie `GET /api/threads` 200; token inválido 403 sin `Set-Cookie`; `text/plain` en el login 403; Origin ajeno 403; JSON inválido 400; logout 200 con `Max-Age=0`.
+
+**Deuda:** no hay rate limiting por IP (la app no tiene estado por IP y es single-user); se anota en Riesgos.
+
+---
+
 ## 2. Tabla de verificación
 
 ### Fase 0 — ANTES (línea base)

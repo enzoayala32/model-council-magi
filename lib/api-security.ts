@@ -24,6 +24,10 @@ export type ApiSecurityRequest = {
   cookie?: string | null;
   /** El proxy lo calcula con Content-Length / Transfer-Encoding. */
   hasBody: boolean;
+  /** Rutas como el login del token: se saltan el chequeo de token (no
+   *  podrían existir sin poder canjearlo) pero conservan Host, Origin y
+   *  Content-Type. Lo setea el proxy, no el cliente. */
+  tokenExempt?: boolean;
 };
 
 export type ApiSecurityReason = "host" | "token" | "origin" | "sec-fetch-site" | "content-type";
@@ -41,6 +45,29 @@ export type ApiSecurityDecision =
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const DEFAULT_PORT = "3000";
 const TOKEN_COOKIE = "magi_access_token";
+
+/**
+ * Nombre de la cookie del token de acceso. Se exporta porque
+ * `app/api/auth/token/route.ts` la escribe y la borra, y el proxy la lee:
+ * si cada uno tuviera su propia constante, un rename silencioso rompería
+ * el login sin que ningún test lo note.
+ */
+export const APP_ACCESS_TOKEN_COOKIE = TOKEN_COOKIE;
+
+/** Atributos de la cookie del token. `Secure` solo si la request vino por
+ * HTTPS (o lo dijo `x-forwarded-proto` detrás de un túnel); en HTTP local
+ * marcarla Secure haría que el navegador la descarte y el login falle. */
+export function buildTokenCookie(token: string, opts: { secure: boolean }): string {
+  const parts = [
+    `${APP_ACCESS_TOKEN_COOKIE}=${encodeURIComponent(token)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Strict",
+    "Max-Age=86400",
+  ];
+  if (opts.secure) parts.push("Secure");
+  return parts.join("; ");
+}
 
 function parseList(value: string | undefined): string[] {
   return (value ?? "")
@@ -168,8 +195,13 @@ function readCookie(cookieHeader: string | null, name: string): string | null {
   return null;
 }
 
-/** Comparación de tiempo constante para no filtrar el token por timing. */
-function safeEqual(a: string, b: string): boolean {
+/**
+ * Comparación de tiempo constante para no filtrar el token por timing.
+ * Se exporta porque el endpoint de login compara lo que escribe el
+ * usuario contra `APP_ACCESS_TOKEN`, y si tuviera su propia copia podría
+ * divergir (p. ej. sin padding de longitud).
+ */
+export function constantTimeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
   for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
@@ -215,11 +247,11 @@ export function evaluateApiRequest(
   }
 
   const token = env.APP_ACCESS_TOKEN?.trim() ?? "";
-  if (token) {
+  if (token && !request.tokenExempt) {
     const bearer = readBearer(request.authorization ?? null);
     const cookie = readCookie(request.cookie ?? null, TOKEN_COOKIE);
-    const bearerOk = bearer !== null && safeEqual(bearer, token);
-    const cookieOk = cookie !== null && safeEqual(cookie, token);
+    const bearerOk = bearer !== null && constantTimeEqual(bearer, token);
+    const cookieOk = cookie !== null && constantTimeEqual(cookie, token);
     if (!bearerOk && !cookieOk) {
       return {
         ok: false,

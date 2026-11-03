@@ -42,7 +42,12 @@ const MANUAL_SCRIPTS = ["agent:test-project"] as const;
 const AGGREGATOR_SCRIPTS = ["agent:test-phase8", "agent:test-phase9"] as const;
 
 const OFFLINE_PREFIXES = ["agent:test-", "provider-resilience:test-", "council:test-"];
-const OFFLINE_EXACT = ["test-council-resilience", "security:test-proxy", "security:test-http-headers"];
+const OFFLINE_EXACT = [
+  "test-council-resilience",
+  "security:test-proxy",
+  "security:test-http-headers",
+  "security:test-token-route",
+];
 
 const liveSet = new Set<string>(LIVE_SCRIPTS);
 const manualSet = new Set<string>(MANUAL_SCRIPTS);
