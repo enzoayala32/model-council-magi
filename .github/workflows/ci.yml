@@ -34,7 +34,10 @@ jobs:
         run: npm run typecheck
 
       - name: Lint
-        run: npm run lint
+        # Tope de warnings: hoy hay 37 y no pueden crecer en silencio. La
+        # idea es bajarlo a medida que se limpia cada regla (ver deuda en
+        # docs/REPORTE-REFACTOR.md, sección 5).
+        run: npm run lint -- --max-warnings 37
 
       - name: Tests offline
         run: npm test

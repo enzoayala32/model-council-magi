@@ -20,3 +20,13 @@ data/*.db-shm
 .playwright-mcp/
 .DS_Store
 tsconfig.tsbuildinfo
+
+# Salidas de investigación descartables (Fase 1.6). Son archivos de
+# trabajo, no documentación del producto: si algo merece conservarse va a
+# docs/ con nombre claro, commiteado a mano.
+salidas/
+
+# Configuración MCP del usuario (Fase 7+): vive fuera del repo. Se ignora
+# también por si alguien la crea dentro por error.
+mcp.config.json
+.env.local
