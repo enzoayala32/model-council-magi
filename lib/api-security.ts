@@ -11,6 +11,8 @@ export type ApiSecurityEnv = {
   ALLOWED_HOSTS?: string;
   ALLOWED_ORIGINS?: string;
   APP_ACCESS_TOKEN?: string;
+  /** Solo se usa para elegir el puerto default de Next; ya no decide el
+   *  default de hosts (loopback se acepta en cualquier puerto). */
   PORT?: string;
 };
 
@@ -43,7 +45,6 @@ export type ApiSecurityDecision =
     };
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-const DEFAULT_PORT = "3000";
 const TOKEN_COOKIE = "magi_access_token";
 
 /**
@@ -140,15 +141,25 @@ function hostMatches(actual: string, entry: string): boolean {
   return a.port === null && (e.port === "80" || e.port === "443");
 }
 
-function defaultAllowedHosts(env: ApiSecurityEnv): string[] {
-  const configuredPort = env.PORT?.trim() ?? "";
-  const port = /^\d+$/.test(configuredPort) ? configuredPort : DEFAULT_PORT;
-  return [`localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`];
+/**
+ * Defaults: loopback en CUALQUIER puerto. Next puede arrancar en 3000, en
+ * 3001 porque el 3000 está ocupado, o con `-p 8080`, y atar el default a
+ * `PORT` rompía el acceso apenas el usuario cambiaba de puerto. La regla
+ * `hostMatches` de arriba ya trata una entrada sin puerto como
+ * "cualquier puerto de ese host".
+ *
+ * Esto NO afloja el Origin: el origen permitido se calcula con el host
+ * REAL de la request (ver `resolveAllowedOrigins`), así que
+ * `http://localhost:8080` sigue rechazándose cuando el server corre en
+ * otro puerto.
+ */
+function defaultAllowedHosts(): string[] {
+  return ["localhost", "127.0.0.1", "[::1]"];
 }
 
 function resolveAllowedHosts(env: ApiSecurityEnv): string[] {
   const raw = parseList(env.ALLOWED_HOSTS);
-  if (raw.length === 0) return defaultAllowedHosts(env);
+  if (raw.length === 0) return defaultAllowedHosts();
   return raw.map(normalizeHostEntry).filter((host): host is string => Boolean(host));
 }
 

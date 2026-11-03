@@ -59,7 +59,38 @@ async function main(): Promise<void> {
   check("Host en mayúsculas se normaliza", isOk(decide(getRequest({ host: "LOCALHOST:3000" }))));
   check("Host con punto final se normaliza", isOk(decide(getRequest({ host: "localhost.:3000" }))));
   check("Host con esquema accidental se tolera", isOk(decide(getRequest({ host: "http://localhost:3000" }))));
-  check("Host con otro puerto se rechaza", isFailure(decide(getRequest({ host: "localhost:4000" })), "host", 403));
+  // 1.3: el default acepta loopback en CUALQUIER puerto (Next puede
+  // arrancar con -p, o en 3001 si 3000 está ocupado).
+  check("Host localhost:3001 permitido por default", isOk(decide(getRequest({ host: "localhost:3001" }))));
+  check("Host localhost:8080 permitido por default", isOk(decide(getRequest({ host: "localhost:8080" }))));
+  check("Host 127.0.0.1:4000 permitido por default", isOk(decide(getRequest({ host: "127.0.0.1:4000" }))));
+  check("Host [::1]:4000 permitido por default", isOk(decide(getRequest({ host: "[::1]:4000" }))));
+  // …pero el Origin por default sigue siendo EXACTO al host:puerto de la
+  // request: un origen de otro puerto no se acepta "por las dudas".
+  check(
+    "Origin http://localhost:8080 con Host localhost:3000 se bloquea",
+    isFailure(
+      decide({ origin: "http://localhost:8080", host: "localhost:3000" }),
+      "origin",
+      403,
+    ),
+  );
+  check(
+    "Origin del mismo host y puerto se acepta",
+    isOk(decide({ origin: "http://localhost:3000", host: "localhost:3000" })),
+  );
+  check(
+    "Origin de OTRO host se bloquea aunque el host sea loopback",
+    isFailure(
+      decide({ origin: "http://127.0.0.1:3000", host: "localhost:3000" }),
+      "origin",
+      403,
+    ),
+  );
+  check(
+    "mismo host y puerto en https también se acepta",
+    isOk(decide({ origin: "https://localhost:3000", host: "localhost:3000" })),
+  );
   check("Host ajeno se rechaza", isFailure(decide(getRequest({ host: "evil.example" })), "host", 403));
   check("Host ausente se rechaza", isFailure(decide(getRequest({ host: null })), "host", 403));
   check(
@@ -82,10 +113,23 @@ async function main(): Promise<void> {
     "ALLOWED_HOSTS inválido falla cerrado",
     isFailure(decide(getRequest(), { ALLOWED_HOSTS: "bad host" }), "host", 403),
   );
-  check("PORT cambia el puerto default", isOk(decide(getRequest({ host: "localhost:4000" }), { PORT: "4000" })));
+  // 1.3: PORT ya NO participa del default de hosts — loopback se acepta en
+  // cualquier puerto, así que cambiar PORT no puede romper el acceso.
   check(
-    "PORT distinto rechaza el puerto 3000",
-    isFailure(decide(getRequest(), { PORT: "4000" }), "host", 403),
+    "PORT sigue aceptando localhost en su puerto",
+    isOk(decide(getRequest({ host: "localhost:4000" }), { PORT: "4000" })),
+  );
+  check(
+    "PORT distinto sigue aceptando el 3000 (default any-port)",
+    isOk(decide(getRequest(), { PORT: "4000" })),
+  );
+  check(
+    "PORT no afloja el Origin por default",
+    isFailure(
+      decide({ origin: "http://localhost:4000" }, { PORT: "4000" }),
+      "origin",
+      403,
+    ),
   );
 
   // Origin / Sec-Fetch-Site en métodos que mutan.
