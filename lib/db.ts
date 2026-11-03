@@ -3,7 +3,16 @@ import fs from "node:fs";
 import path from "node:path";
 
 // Un único archivo .db local en data/. Nada de servicios externos.
-const DATA_DIR = path.join(process.cwd(), "data");
+//
+// `MAGI_DATA_DIR` sobreescribe la ubicación. Existe para que la suite de
+// tests pueda correr contra una DB desechable sin tocar la del usuario:
+// `scripts/run-tests.ts` le asigna a cada script su propio directorio
+// temporal y lo borra al terminar. Fuera de los tests, si no está
+// definida, la ruta no cambia. Se resuelve con path.resolve para que una
+// ruta relativa sea relativa al cwd del proceso, no a algo ambiguo.
+const DATA_DIR = process.env.MAGI_DATA_DIR?.trim()
+  ? path.resolve(process.env.MAGI_DATA_DIR.trim())
+  : path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "council.db");
 
 /** Fase 3, sección 7 del diseño: versión de schema trackeada vía

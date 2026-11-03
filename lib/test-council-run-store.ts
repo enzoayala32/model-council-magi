@@ -202,9 +202,17 @@ async function main(): Promise<void> {
   let db: SqliteDb | null = null;
   let store: typeof import("./council-run-store") | null = null;
 
+  // `MAGI_DATA_DIR` manda sobre el cwd en `lib/db.ts`. Cuando el runner
+  // (Fase 1.5) ya aisló la DB, hay que escribir la "DB vieja" en ESE
+  // directorio; si no, la migración aditiva corre contra la DB del
+  // usuario. Solo cuando la variable no está puesta se hace el chdir,
+  // que es el mecanismo original de este test.
+  const inheritedDataDir = process.env.MAGI_DATA_DIR?.trim();
+  const dataRoot = inheritedDataDir ? path.resolve(inheritedDataDir) : temp;
+
   try {
-    await fs.mkdir(path.join(temp, "data"), { recursive: true });
-    const legacy = new Database(path.join(temp, "data", "council.db"));
+    await fs.mkdir(path.join(dataRoot), { recursive: true });
+    const legacy = new Database(path.join(dataRoot, "council.db"));
     legacy.exec(`
       CREATE TABLE threads (
         id TEXT PRIMARY KEY,
@@ -221,8 +229,12 @@ async function main(): Promise<void> {
     legacy.close();
     console.log("(DB pre-existente con threads y una fila creada)\n");
 
-    process.chdir(temp);
-    checkEq(process.cwd(), temp, "el test corre en un cwd temporal");
+    if (inheritedDataDir) {
+      checkEq(path.resolve(process.env.MAGI_DATA_DIR ?? ""), path.resolve(dataRoot), "el test respeta MAGI_DATA_DIR del runner");
+    } else {
+      process.chdir(temp);
+      checkEq(process.cwd(), temp, "el test corre en un cwd temporal");
+    }
 
     const dbModule = (await import("./db")) as { getDb(): SqliteDb };
     db = dbModule.getDb();
@@ -367,8 +379,9 @@ async function main(): Promise<void> {
       // best-effort
     }
     (globalThis as unknown as { __councilDb?: unknown }).__councilDb = undefined;
-    process.chdir(originalCwd);
+    if (!inheritedDataDir) process.chdir(originalCwd);
     await fs.rm(temp, { recursive: true, force: true }).catch(() => undefined);
+    if (inheritedDataDir) await fs.rm(inheritedDataDir, { recursive: true, force: true }).catch(() => undefined);
   }
 
   const passed = results.filter(Boolean).length;

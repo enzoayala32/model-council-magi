@@ -7,11 +7,22 @@
  *   npx tsx scripts/run-tests.ts --filter=council
  *
  * Descubre los scripts de `package.json` por prefijo, corre uno por vez
- * (varias suites escriben `data/council.db` y no deben pisarse) y devuelve
+ * (varias suites escriben en SQLite y no deben pisarse) y devuelve
  * exit 1 si alguno falla. No usa bash: funciona igual en Windows y Linux.
+ *
+ * Aislamiento de datos (Fase 1.5): cada script corre con `MAGI_DATA_DIR`
+ * apuntando a un directorio temporal propio, que se borra al terminar.
+ * Antes, las suites que usan SQLite escribían en el `data/council.db`
+ * REAL del usuario y dejaban proyectos y tasks de prueba. Ahora
+ * `npm test` no puede tocar la DB del usuario: el hash de
+ * `data/council.db` es idéntico antes y después.
+ *
+ * Se puede desactivar con `--no-isolate` para debuggear contra la DB real
+ * (no se usa en CI).
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const root = process.cwd();
@@ -22,6 +33,7 @@ const scripts = pkg.scripts ?? {};
 
 const cli = process.argv.slice(2);
 const live = cli.includes("--live");
+const isolate = !cli.includes("--no-isolate");
 const filterArg = cli.find((arg) => arg.startsWith("--filter="));
 const filter = filterArg ? filterArg.slice("--filter=".length) : null;
 const timeoutArg = cli.find((arg) => arg.startsWith("--timeout="));
@@ -83,12 +95,29 @@ function killTree(child: ChildProcess) {
   }
 }
 
-function runOne(name: string): Promise<{ name: string; ok: boolean; seconds: number; timedOut: boolean }> {
+/** Directorio temporal por script: `MAGI_DATA_DIR` hace que `lib/db.ts`
+ * abra la DB ahí dentro en vez de `<cwd>/data`. Se nombra con el script
+ * para que un fallo deje rastro legible. */
+function makeIsolatedDataDir(name: string): string {
+  const safe = name.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return fs.mkdtempSync(path.join(os.tmpdir(), `magi-test-${safe}-`));
+}
+
+function runOne(
+  name: string,
+  opts: { isolate: boolean },
+): Promise<{ name: string; ok: boolean; seconds: number; timedOut: boolean }> {
   return new Promise((resolve) => {
     const started = Date.now();
     const env = { ...process.env };
     // Evita que una suite herede un loop autónomo de una corrida manual.
     delete env.MAGI_AUTONOMOUS_LOOP;
+
+    let dataDir: string | null = null;
+    if (opts.isolate) {
+      dataDir = makeIsolatedDataDir(name);
+      env.MAGI_DATA_DIR = dataDir;
+    }
 
     const child = spawn(npmCommand, ["run", name], {
       cwd: root,
@@ -107,6 +136,15 @@ function runOne(name: string): Promise<{ name: string; ok: boolean; seconds: num
 
     const finish = (ok: boolean) => {
       clearTimeout(timer);
+      // La limpieza va en un catch: si el proceso dejó archivos abiertos,
+      // no borrar el directorio no debe tumbar el runner.
+      if (dataDir) {
+        try {
+          fs.rmSync(dataDir, { recursive: true, force: true });
+        } catch {
+          /* el SO lo limpiará; no es un fallo del test */
+        }
+      }
       resolve({ name, ok, seconds: Math.round((Date.now() - started) / 1000), timedOut });
     };
 
@@ -127,6 +165,7 @@ function runOne(name: string): Promise<{ name: string; ok: boolean; seconds: num
   const mode = live ? "live" : "offline";
   console.log(`\n=== Tests ${mode} — ${candidates.length} script(s) ===`);
   if (live) console.log("Requieren proveedor/red/API keys. No se ejecutan en CI.");
+  if (!live && isolate) console.log("Cada script corre con MAGI_DATA_DIR propio (data/council.db del usuario no se toca).");
   if (!live && manualSet.size > 0) {
     console.log(`Omitidos por manuales: ${[...manualSet].join(", ")}`);
   }
@@ -139,7 +178,7 @@ function runOne(name: string): Promise<{ name: string; ok: boolean; seconds: num
   for (let i = 0; i < candidates.length; i++) {
     const name = candidates[i];
     console.log(`\n[${i + 1}/${candidates.length}] ${name}`);
-    const result = await runOne(name);
+    const result = await runOne(name, { isolate: !live && isolate });
     results.push(result);
     console.log(`${result.ok ? "✅" : "❌"} ${name} (${result.seconds}s)`);
   }
