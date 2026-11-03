@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { generateText, stepCountIs, type ModelMessage, type StopCondition, type ToolSet } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
+import { openRouterHeaders } from "../http-headers";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createAgentTools, isWebSearchCompatible, type AgentToolEvent } from "./tools";
 import type { SearchProvider } from "./search-provider";
@@ -229,10 +230,7 @@ function buildOpenRouterModel(modelId: string, apiKey: string) {
   const provider = createOpenAI({
     baseURL: "https://openrouter.ai/api/v1",
     apiKey,
-    headers: {
-      "HTTP-Referer": process.env.OPENROUTER_SITE_URL ?? "http://localhost:3000",
-      "X-Title": process.env.OPENROUTER_APP_NAME ?? "Consenso IA — Coding Agent",
-    },
+    headers: openRouterHeaders(),
   });
   return provider.chat(modelId);
 }

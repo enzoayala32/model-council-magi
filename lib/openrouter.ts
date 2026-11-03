@@ -1,3 +1,4 @@
+import { openRouterHeaders } from "./http-headers";
 import { createNvidiaChatCompletion, mapToNvidiaModel } from "./nvidia";
 import {
   OpenRouterError,
@@ -125,8 +126,7 @@ export async function createChatCompletion({
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
-          "HTTP-Referer": process.env.OPENROUTER_SITE_URL ?? "http://localhost:3000",
-          "X-Title": process.env.OPENROUTER_APP_NAME ?? "Consenso IA",
+          ...openRouterHeaders(),
         },
         body: JSON.stringify(body),
       });
@@ -334,8 +334,7 @@ export async function createImageGeneration({
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-      "HTTP-Referer": process.env.OPENROUTER_SITE_URL ?? "http://localhost:3000",
-      "X-Title": process.env.OPENROUTER_APP_NAME ?? "Consenso IA",
+      ...openRouterHeaders(),
     },
     body: JSON.stringify({
       model,

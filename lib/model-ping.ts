@@ -1,3 +1,4 @@
+import { openRouterHeaders } from "./http-headers";
 import { getCouncilModel } from "./models";
 
 export type ModelPingResult = {
@@ -36,10 +37,7 @@ function resolveEndpoint(modelId: string): { endpoint: Endpoint; nativeModelId: 
     endpoint: {
       url: "https://openrouter.ai/api/v1/chat/completions",
       apiKey,
-      extraHeaders: {
-        "HTTP-Referer": process.env.OPENROUTER_SITE_URL ?? "http://localhost:3000",
-        "X-Title": process.env.OPENROUTER_APP_NAME ?? "Consenso IA",
-      },
+      extraHeaders: openRouterHeaders(),
     },
     nativeModelId: modelId,
   };
