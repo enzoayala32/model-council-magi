@@ -11,8 +11,10 @@
  * - Cualquier id terminado en `:free` cuesta 0, sin importar la tabla.
  * - Un id sin entrada y sin sufijo `:free` devuelve `null` (desconocido),
  *   NO 0: mostrar "USD 0" para un modelo pago sería peor que mostrar "—".
- * - Los valores son USD por millón de tokens. Se documenta la fecha de la
- *   referencia; si cambian los precios, se actualiza la tabla.
+ * - Los valores son USD por millón de tokens, tomados de una tarifa
+ *   publicada. Si un proveedor cambia precios, se actualiza la tabla a
+ *   mano; no hay fuente automática.
+ * - Fuera de la tabla y sin `:free`, `costUsd` es `null` ("—"), nunca 0.
  */
 
 export type ModelPricing = {
@@ -46,19 +48,24 @@ const FREE_PRICING: ModelPricing = {
 };
 
 /**
- * Precios de referencia (USD / 1M tokens), consultados 2026-10-28.
- * Gemini: tarifa pública de AI Studio para el tier pago; el free tier no
- * factura, así que la estimación es un techo, no lo que se cobra.
- * Los modelos sin entrada se consideran desconocidos (costUsd null).
+ * Precios que se pueden verificar contra una tarifa publicada.
+ *
+ * Regla de esta fase: NADA de "estimado sobre otro modelo". Un precio
+ * inventado se muestra como costo real y el usuario terminaría tomando
+ * decisiones con un número falso. Si un modelo no tiene precio público
+ * verificable, no entra en esta tabla y `estimateCostUsd` devuelve
+ * `null`, que la UI muestra como "—".
+ *
+ * Incluidos: la familia Gemini 2.5, cuya tarifa (tier pago de Google AI
+ * Studio) es pública y estable. Gemini 3.x/3.5/3.1 NO tiene precio propio
+ * publicado: sus entradas se eliminaron y ahora devuelven "—".
+ * El tier gratuito no factura, así que estos números son el techo de lo
+ * que podría costar una llamada, no lo que se cobra.
  */
 export const MODEL_PRICING: Record<string, ModelPricing> = {
-  "gemini-2.5-flash": { inputPerMillionUsd: 0.3, outputPerMillionUsd: 2.5, source: "Google AI Studio, tarifa pública 2026-10" },
-  "gemini-2.5-flash-lite": { inputPerMillionUsd: 0.1, outputPerMillionUsd: 0.4, source: "Google AI Studio, tarifa pública 2026-10" },
-  "gemini-3.5-flash": { inputPerMillionUsd: 0.3, outputPerMillionUsd: 2.5, source: "estimado sobre Gemini 2.5 Flash" },
-  "gemini-3.5-flash-lite": { inputPerMillionUsd: 0.1, outputPerMillionUsd: 0.4, source: "estimado sobre Gemini 2.5 Flash-Lite" },
-  "gemini-3.7-flash": { inputPerMillionUsd: 0.3, outputPerMillionUsd: 2.5, source: "estimado sobre Gemini 2.5 Flash" },
-  "gemini-3.1-pro-preview": { inputPerMillionUsd: 2, outputPerMillionUsd: 12, source: "estimado sobre Gemini 2.5 Pro" },
-  "nvidia/nemotron-3.5-lightning-30b-a3b": { inputPerMillionUsd: 0, outputPerMillionUsd: 0, source: "NVIDIA NIM free developer tier" },
+  "gemini-2.5-flash": { inputPerMillionUsd: 0.3, outputPerMillionUsd: 2.5, source: "tarifa pública de Google AI Studio (tier pago)" },
+  "gemini-2.5-flash-lite": { inputPerMillionUsd: 0.1, outputPerMillionUsd: 0.4, source: "tarifa pública de Google AI Studio (tier pago)" },
+  "gemini-2.5-pro": { inputPerMillionUsd: 1.25, outputPerMillionUsd: 10, source: "tarifa pública de Google AI Studio (tier pago)" },
 };
 
 export function isFreeModelId(modelId: string): boolean {

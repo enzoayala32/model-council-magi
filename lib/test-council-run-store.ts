@@ -110,6 +110,15 @@ async function main(): Promise<void> {
     checkClose(gemini.costUsd, 0.000016, "estima Gemini 2.5 Flash con la tabla");
     checkEq(gemini.estimated, true, "el costo de tabla se marca estimated");
     checkEq(estimateCostUsd("openai/gpt-oss-20b:free", undefined).costUsd, 0, "sin usage un :free sigue costando 0");
+    // Fase 1.4: los modelos sin precio público verificable devuelven null.
+    // Se eliminaron las entradas "estimado sobre otro modelo".
+    for (const id of ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.7-flash", "gemini-3.1-pro-preview", "nvidia/nemotron-3.5-lightning-30b-a3b"]) {
+      checkEq(pricingForModel(id), null, `${id} no tiene precio inventado`);
+      checkEq(estimateCostUsd(id, { prompt_tokens: 1000, completion_tokens: 1000 }).costUsd, null, `${id} cuesta null (—), no 0`);
+    }
+    // La tarifa pública sí queda.
+    checkClose(estimateCostUsd("gemini-2.5-pro", { prompt_tokens: 1000, completion_tokens: 1000 }).costUsd, 0.01125, "Gemini 2.5 Pro usa la tarifa pública");
+    checkEq(pricingForModel("gemini-2.5-flash-lite") !== null, true, "Gemini 2.5 Flash-Lite conserva su precio público");
     checkEq(formatUsd(null), "—", "formatUsd(null) muestra —");
     checkEq(formatUsd(0), "USD 0", "formatUsd(0) muestra USD 0");
     checkEq(formatUsd(0.000016), "USD 0.0000", "formatUsd redondea costos chicos a 4 decimales");
@@ -265,7 +274,12 @@ async function main(): Promise<void> {
     checkEq(run?.totalTokens, 255, "suma los tokens de todas las fases");
     checkEq(run?.promptTokens, 165, "suma prompt tokens");
     checkEq(run?.completionTokens, 90, "suma completion tokens");
-    checkClose(run?.costUsd ?? null, 0.000089, "suma el costo estimado de las filas pagas");
+    // La corrida mezcla modelos con precio público (gemini-2.5-flash) y uno
+    // sin tabla (el nvidia del fallback). La regla de la Fase 1.4 es: si una
+    // fila no tiene precio verificable, el total es null ("—"), no un número
+    // parcial que parezca real. La suma parcial verificable queda en el test
+    // de la fila de usage de abajo.
+    checkEq(run?.costUsd, null, "con una fila sin precio verificable el costo total es null");
     checkEq(run?.synthesis, "Síntesis final", "guarda la síntesis en la corrida");
     checkEq((run?.fusionJudge as { panelVerdict?: string } | null)?.panelVerdict, "Consenso", "guarda el reporte del juez");
     checkEq(run?.trace?.eventCount, 16, "el trace cuenta los 16 eventos");
