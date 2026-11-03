@@ -149,3 +149,70 @@ cambios de comportamiento. No reemplaza a `loop.ts`.
 4. Cualquier escritura nueva a las 7 tablas del ledger debe pasar por una
    función del ledger, no por SQL suelto en otro módulo.
 5. Los payloads nuevos siguen la regla de metadatos: nada de contenido.
+
+---
+
+## Propuesta de división (Fase 1.7 — solo análisis, sin tocar código)
+
+Dos archivos quedaron grandes: `lib/agent/autonomy/dispatcher.ts` (2017
+líneas) y `lib/agent/autonomy/ledger.ts` (1749). No se parte nada en esta
+fase: esto es el plan, para que el próximo refactor sea mecánico y
+verificable, no una cirugía a ciegas.
+
+**Regla general del reparto:** nada cambia de comportamiento. Cada
+extracción mueve código textual a un módulo nuevo y deja un re-export o
+una llamada. Después de cada paso corren los mismos harness que ya
+existen (`agent:test-dispatcher`, `test-contract-db`, `test-ledger`,
+`test-tool-policy`, `npm test` completo). Si un paso no da verde
+idéntico, se revierte.
+
+### Módulos propuestos para `dispatcher.ts`
+
+| Orden | Módulo nuevo | Se mueve desde | Líneas aprox. | Responsabilidad |
+|---:|---|---|---:|---|
+| 1 | ` autonomy/trace-hash.ts` | `isPlainObject`, `stableStringify`, `hashJson`, `safeText`, `sanitizeError`, `sanitizeToolInput`, `filesForTool`, `describeToolResult`, `extractUsage` | ~170 | Normalizar y hashear lo que se persiste: mismo resultado, sin tocar la DB. Es el bloque más puro y el más fácil de testear aislado. |
+| 2 | `autonomy/workspace-state.ts` | `resolveInsideWorkspace`, `fileStateFingerprint`, `hashFileStates`, `hashWorkspaceState`, `buildFileCheckpoint`, `currentHeadCommit` | ~150 | Huella del estado de archivos y checkpoints. Lee disco/git, no persiste. |
+| 3 | `autonomy/autonomy-budget.ts` | `snapshotBudget`, `checkBudget`, `abortDecision`, `summarizePlan`, `currentPlan` | ~120 | Decidir si el loop sigue. Funciones puras sobre `LoopContext`. |
+| 4 | `autonomy/briefing-builder.ts` | `briefingBudget`, `buildBriefing`, `buildPlanningSystemPrompt`, `buildReplanningSystemPrompt`, `buildExecutingSystemPrompt`, `recentSteps`, `recordContextUsage` | ~200 | Armar el briefing y los system prompts por fase. |
+| 5 | `autonomy/model-phase-handler.ts` | `handleModelStep` (282 líneas) + `callModel` (129) | ~420 | La parte más difícil: mueve el estado del loop. Va última y con test de dispatcher como red. |
+| 6 | `autonomy/dispatcher-finalize.ts` | `finalize`, `finalizeUnexpected`, `cleanup`, `collectProposals` | ~180 | Cierre de la corrida y recolección de propuestas. |
+
+Resultado estimado: `dispatcher.ts` baja de ~2000 a ~700 líneas y queda
+como lo que su nombre dice: PLANNING → EXECUTING → VERIFYING y el armado
+de `LoopContext` (`createLoopContext`, 179 líneas, se puede dividir
+después en `autonomy/loop-context.ts`).
+
+### Módulos propuestos para `ledger.ts`
+
+| Orden | Módulo nuevo | Se mueve desde | Líneas aprox. | Responsabilidad |
+|---:|---|---|---:|---|
+| 1 | `autonomy/ledger-rows.ts` | tipos de fila (`RunRow`, `PlanRow`, `PlanItemRow`, `StepRow`, `VerificationRow`) y los `rowTo*` + `parse*` | ~230 | Traducción fila ↔ objeto de dominio. Cero SQL. |
+| 2 | `autonomy/ledger-runs.ts` | `createRun`, `getRun`, `getActiveRunForTask`, `listRunsForTask`, `getResumeSourceForTask`, `getResumeChainLength`, `requestResumeAndClose`, `closeRunForRestart`, `cancelResumeRequest`, `transitionRun`, `updateRunProgress` | ~330 | Ciclo de vida de `AutonomyRun` y sus transiciones. |
+| 3 | `autonomy/ledger-plans.ts` | `getPlanItemRows`, `getPlanById`, `getPlanVersion`, `getActivePlan`, `getPlanForRun`, `listPlanVersions`, `savePlanVersion`, `markPlanStatus`, `getPlanItemById`, `resetPlanItemToPending`, `invalidatePlanItemsForPaths`, `resetPlanForRestart` | ~330 | Versiones de plan y sus ítems. |
+| 4 | `autonomy/ledger-steps.ts` | `sanitizeResults`, `sanitizeFiles`, `sanitizeActions`, `recordStep`, `getStepByIndex`, `getStepsForRun`, `toolCallIdExists`, `upsertFileCheckpoint`, `recordStepCheckpoint` | ~330 | Pasos, checkpoints y saneo de payloads. |
+| 5 | `autonomy/ledger-verify.ts` | `validateEvidenceReferences`, `updatePlanItem`, `recordVerification`, `saveFinalReport`, `appendFinalReport` | ~350 | Lo que depende de las reglas de evidencia/acceptance. |
+
+Resultado estimado: `ledger.ts` queda en ~200 líneas como fachada que
+abre la DB y re-exporta (para no romper los imports existentes), y el
+SQL vive en cinco módulos con una responsabilidad clara cada uno.
+
+### Orden seguro de ejecución
+
+1. Primero los módulos **sin SQL** (`trace-hash`, `autonomy-budget`):
+   se pueden testear solos y el riesgo de romper el loop es casi nulo.
+2. Después los de **estado de workspace** (`workspace-state`) y
+   **briefing** (`briefing-builder`).
+3. Recién ahí los que **mueven estado del loop** (`model-phase-handler`,
+   `dispatcher-finalize`), con `agent:test-dispatcher` y el resto de la
+   suite como red.
+4. Para `ledger.ts`, el orden de la tabla: los `rowTo*` son mecánicos y
+   verificables por diff; `runs` y `plans` tienen transiciones con
+   invariantes (van con `test-ledger` y `test-contract` al día).
+5. Cada paso: commit propio, `npm test` completo verde antes de seguir.
+
+**Riesgo principal:** `handleModelStep` y `updatePlanItem` son los dos
+lugares donde el dispatcher y el ledger están acoplados por side effects
+(uno escribe pasos, el otro ítems y evidencia). Si el reparto se hace
+mal, es fácil terminar con un módulo que importa del otro y volver al
+acoplamiento circular. La mitigación es que estos dos pasos van últimos y
+con test.
