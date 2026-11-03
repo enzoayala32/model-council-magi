@@ -199,6 +199,49 @@ Commit base de esta misión: `e4bcb2c`. Todo lo de abajo es verificable con los 
 
 **Deuda:** no hay rate limiting por IP (la app no tiene estado por IP y es single-user); se anota en Riesgos.
 
+### Fase 1.3 — Host loopback en cualquier puerto
+
+**Qué se hizo:** el default de `ALLOWED_HOSTS` ataba loopback al puerto de `PORT` (o 3000). Next arranca en 3001 cuando el 3000 está ocupado o con `-p`, y en esos casos el default rechazaba el acceso legítimo. Ahora el default es `localhost`, `127.0.0.1` y `[::1]` **sin puerto**, y `hostMatches` ya interpreta "entrada sin puerto = cualquier puerto de ese host". El Origin por default sigue calculándose con el host **real** de la request, así que `http://localhost:8080` contra un server en `:3000` se sigue rechazando: no se aflojó el origen, solo el host.
+
+**Archivos modificados:** `lib/api-security.ts`, `lib/test-api-security.ts`.
+**Commit:** `ddd9dc0` — `fase 1.3: hosts loopback en cualquier puerto sin aflojar Origin`.
+
+**Verificación:** `npm run security:test-proxy` → **62/62 casos OK** (eran 61; se agregaron los que pide la fase y se sustituyó el caso obsoleto de `PORT`). Casos nuevos clave: `Host localhost:3001 permitido por default`, `Host [::1]:4000 permitido por default`, `Origin http://localhost:8080 con Host localhost:3000 se bloquea`, `mismo host y puerto en https también se acepta`. `npm run typecheck` exit 0; `npm run lint` 0 errores / 37 warnings.
+
+### Fase 1.4 — Sin precios inventados
+
+**Qué se hizo:** `lib/model-pricing.ts` tenía cuatro entradas "estimado sobre Gemini 2.5 Flash/Pro" para modelos sin precio propio publicado. Un costo inventado se muestra al usuario como si fuera real, así que se eliminaron: esos modelos ahora devuelven `costUsd: null` y la UI muestra "—". Se corrigió el comentario que afirmaba precios "consultados 2026-10-28" para toda la tabla. Quedan solo las tarifas públicas verificables de Google AI Studio (Gemini 2.5 Flash / Flash-Lite / Pro).
+
+**Archivos modificados:** `lib/model-pricing.ts`, `lib/test-council-run-store.ts`.
+**Commit:** `cb7c1b4` — `fase 1.4: quitar precios inventados, solo tarifas públicas verificables`.
+
+**Verificación:** `npm run council:test-runs` → **107/107 casos OK** (95 previos + 12 nuevos que fijan la regla). Se agregó la comprobación de que `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.7-flash`, `gemini-3.1-pro-preview` y `nvidia/nemotron-3.5-lightning-30b-a3b` devuelven `null` (no 0), y que una corrida que mezcla modelos con y sin precio pública un costo total `null` en vez de una suma parcial que pareciera real.
+
+### Fase 1.5 — Aislamiento de datos de los tests
+
+**Qué se hizo:** las suites que usan SQLite escribían en el `data/council.db` REAL del usuario y dejaban proyectos y tasks de prueba. Se agregó `MAGI_DATA_DIR` en `lib/db.ts` (override de `DATA_DIR`, default `<cwd>/data`) y `scripts/run-tests.ts` le asigna a cada script un directorio temporal propio, borrado al terminar. `lib/test-council-run-store.ts` ya se aislaba con `chdir`; ahora respeta la variable si está puesta (si no, seguiría usando el chdir) sin cambiar lo que prueba.
+
+**Archivos modificados:** `lib/db.ts`, `scripts/run-tests.ts`, `lib/test-council-run-store.ts`.
+**Commit:** `5c18896` — `fase 1.5: aislar la DB de cada test con MAGI_DATA_DIR`.
+
+**Verificación (aceptación pedida):** hash SHA-256 de `data/council.db` **idéntico antes y después** de `npm test` completo: `f42d5d0f4b5c34e37e35fdeb14807f6ff3d53309abfa9e837e18edf448767cc5` en ambos casos. `npm test` → **71/71 OK** (sube de 69 por los dos scripts nuevos de Fase 1.1/1.2). `--no-isolate` permite debuggear contra la DB real.
+
+### Fase 1.6 — Housekeeping
+
+**Qué se hizo:** `salidas/` pasa a `.gitignore` (son archivos de trabajo del usuario, no documentación del producto; nada se borró). Se agregó un tope de warnings en CI (`npm run lint -- --max-warnings 37`) para que la deuda de lint no crezca en silencio. También se ignoraron `mcp.config.json` y `.env.local` por adelantado para la Fase 7+.
+
+**Archivos modificados:** `.gitignore`, `.github/workflows/ci.yml`.
+**Commit:** `f946b9c` — `fase 1.6: ignorar salidas/ y tope de warnings en CI`.
+
+**Verificación:** `npm run lint -- --max-warnings 37` → exit 0; con `--max-warnings 10` → exit 1 con "ESLint found too many warnings". El tope queda documentado en el workflow y en la sección 5.
+
+### Fase 1.7 — Plan de división (análisis, sin refactor)
+
+**Qué se hizo:** se documentó en `docs/ARQUITECTURA-AGENTE.md` una propuesta concreta para partir `dispatcher.ts` (2017 líneas; `handleModelStep` 282, `createLoopContext` 179, `callModel` 129) y `ledger.ts` (1749): seis módulos para el dispatcher y cinco para el ledger, con responsabilidades, tamaños estimados y un orden de extracción seguro (primero lo puro, después lo que mueve estado, con `npm test` como red). No se tocó código.
+
+**Archivos modificados:** `docs/ARQUITECTURA-AGENTE.md`.
+**Commit:** `a44067d` — `fase 1.7: plan de división de dispatcher y ledger (sin tocar código)`.
+
 ---
 
 ## 2. Tabla de verificación
