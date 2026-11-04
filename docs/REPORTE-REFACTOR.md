@@ -242,6 +242,91 @@ Commit base de esta misión: `e4bcb2c`. Todo lo de abajo es verificable con los 
 **Archivos modificados:** `docs/ARQUITECTURA-AGENTE.md`.
 **Commit:** `a44067d` — `fase 1.7: plan de división de dispatcher y ledger (sin tocar código)`.
 
+### Corrección — rotación de credenciales de NVIDIA
+
+**Hallazgo primero, antes de tocar nada** (verificado con un script que
+corre el pool y un draft real con cliente falso): la rotación de NVIDIA
+**ya funcionaba** en draft/debate/voto del consejo y en el Coding Agent —
+`withCredentialFailover(providerName, …)` y `getProviderPool(providerName)`
+son genéricos desde la Fase 5E/5D, y el descubrimiento de
+`NVIDIA_API_KEY`/`NVIDIA_API_KEY_2…` ya existía en `resolveCredentials`. El
+sondeo con dos keys y un 429 mostró: usa `nv-key-1`, luego `nv-key-2`, y el
+modelo **no cambia**. No se reescribió lo que ya andaba.
+
+**Los huecos reales que se corrigieron:**
+
+| Dónde | Antes | Ahora |
+|---|---|---|
+| Síntesis | `withCredentialFailover("openrouter", …)` fijo | el pool se elige con `councilProviderForModel(SYNTHESIS_MODEL)` |
+| Juez de fusión (`createFusionJudgeReportResilient`) | `"openrouter"` fijo | idem, con `FUSION_JUDGE_MODEL` |
+| Follow-ups | usaba la primera key de OpenRouter de la corrida | rota por el pool del provider del modelo |
+| `model-ping.ts` (salud de modelos) | `process.env.NVIDIA_API_KEY` a secas | rota por pool; 401/403 marca la credencial inválida y no insiste |
+| Fallback OpenRouter → NVIDIA directo (`openrouter.ts`) | una sola key | rota por pool con la primitiva de 5A, sin importar `council-run.ts` (habría ciclo) |
+
+Con `SYNTHESIS_MODEL`/`FUSION_JUDGE_MODEL`/`FOLLOWUP_MODEL` apuntando a
+un id **nativo** de NVIDIA, antes se tomaban keys de OpenRouter: la cuota
+equivocada. Ahora rota las `NVIDIA_API_KEY`.
+
+**Sobre "el mismo modelo":** la rotación nunca cambia el modelo — es el
+objetivo y está fijado por test (`EL MODELO NO CAMBIÓ al rotar`). La única
+excepción, y es de diseño, es el fallback OpenRouter → NVIDIA directo: ahí
+el id pasa del slug de OpenRouter al id nativo vía `NVIDIA_MODEL_MAP`
+(`nvidia/nemotron-3.5-lightning:free` → `nvidia/nemotron-3.5-lightning-30b-a3b`),
+porque son namespaces distintos de proveedor. No es una rotación, es un
+cambio de proveedor documentado.
+
+**Archivos modificados:** `lib/council-run.ts` (exporta
+`councilProviderForModel`), `lib/council-orchestrator.ts`,
+`lib/model-ping.ts`, `lib/openrouter.ts`.
+**Archivos creados:** `lib/test-nvidia-rotation.ts`.
+**Commits:** `5f36fe5` — `nvidia: rotar credenciales sin cambiar el modelo
+(síntesis, juez, follow-ups, ping y fallback)`; `ab6a71b` — `test: verificar
+la rotación del fallback OpenRouter a NVIDIA`.
+
+**Verificación:** `npm run security:test-nvidia-rotation` → **36/36 casos OK**
+(incluye el fallback real con `fetch` interceptado: 3 keys distintas, mismo
+modelo, pool con 2 en cooldown y 1 disponible). `npm run typecheck` exit 0;
+`npm run lint` 0 errores / 45 warnings; `npm test` **73/73 OK**;
+`npm run build` exit 0.
+
+### Corrección — catálogo automático de modelos (gratis vs. pago)
+
+**Qué se hizo:** `lib/model-catalog.ts` descubre el listado real de los dos
+proveedores y separa gratis de pago con un dato verificado, no con una
+suposición.
+
+- **OpenRouter** `GET /api/v1/models`: público, sin API key, 455 modelos el
+  2026-11-04. Cada uno trae `pricing.prompt`/`pricing.completion` como
+  strings en USD por token. Gratis = ambos exactamente `"0"` (18 modelos hoy).
+  La key se manda solo si está configurada, para evitar rate limits; nunca se
+  loguea.
+- **NVIDIA** `GET /v1/models`: público, sin API key, 85 modelos. **No trae
+  `pricing`** (la forma es `{id, object, created, owned_by}`). Por eso sus
+  modelos quedan en `free: null` y la UI los muestra como “precio
+  desconocido”: marcarlos gratis sería inventar un dato.
+- Caché en memoria con TTL de 30 minutos, `?refresh=1` para forzar. Un fallo
+  de red nunca lanza: devuelve el último listado conocido más el aviso.
+- La key es opcional en los dos casos.
+
+**Archivos creados:** `lib/model-catalog.ts`, `lib/test-model-catalog.ts`,
+`app/api/models/catalog/route.ts`, `app/components/main/model-catalog.tsx`.
+**Archivos modificados:** `app/components/main/settings-drawer.tsx`
+(pestaña “Catálogo”), `app/lib/client-types.ts`, `app/globals.css`,
+`package.json`.
+**Commit:** `0dd3c56` — `catalogo: listado automatico de modelos con
+separacion gratis/pago`.
+
+**Verificación:** `npm run council:test-catalog` → **45/45 casos OK** con un
+`fetch` falso que replica la forma real de los dos endpoints (incluye filas
+sin `pricing`, filas sin id, payload inesperado, HTTP 500, caída de red, y
+que la key viaje solo en el header). `npm run typecheck` exit 0;
+`npm run lint` 0 errores; `npm test` **72/72 OK**; `npm run build` exit 0 con
+la ruta `/api/models/catalog` y `/m` servidas.
+
+**Prueba manual:** abrir Ajustes → pestaña **Catálogo** → “Gratis”
+(18 modelos de OpenRouter con precio 0), “De pago” (precio > 0) y “Precio
+desconocido” (los 85 de NVIDIA).
+
 ---
 
 ## 2. Tabla de verificación
