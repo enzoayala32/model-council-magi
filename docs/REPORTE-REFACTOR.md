@@ -432,6 +432,73 @@ y que hoy la regla efectiva es la del proxy.
 **Archivos modificados:** `README.md` (enlace).
 **Commit:** `36bd272`.
 
+### Ajustes previos a la Fase 4 (un commit por bloque)
+
+#### A. Tope de warnings de CI: 46 → 37
+
+**Qué se hizo:** bajar el tope de `--max-warnings` de 46 a 37 arreglando los
+9 warnings que había agregado la Fase 3 y el catálogo, sin silenciar reglas
+ni cambiar `eslint.config.mjs`.
+
+| Warning | Arreglo |
+|---|---|
+| `model-ping.ts` tipo `Endpoint` sin uso | se elimina (lo reemplazó `ResolvedEndpoint`) |
+| `test-model-catalog.ts` variable sin uso | se usa en una aserción real en vez de descartarla |
+| `m/tasks/new/page.tsx` `exhaustive-deps` | se agregan `prefillProjectId`/`prefillModelId` a las dependencias |
+| 5 pantallas móviles + `model-catalog.tsx` `set-state-in-effect` | el fetch al montar pasa a un IIFE async: el setState corre dentro de un callback, no en el cuerpo sincrónico del effect (la forma que la propia regla pide) |
+| `useTaskEventStream.ts` `set-state-in-effect` | se elimina un `setState("connecting")` que era redundante: el estado inicial ya es `connecting` y `onerror` lo restaura |
+
+**Commits:** `72a13c8`. **Verificación:** `npm run lint -- --max-warnings 37`
+→ exit 0; el desglose queda en **8** `set-state-in-effect`, **27**
+`no-unused-vars` y **2** `no-img-element` — exactamente el mínimo desde que
+se habilitó el lint. `typecheck` exit 0; `npm test` 73/73; `build` exit 0.
+
+#### B. Test de corte y reanudación del SSE
+
+**Qué se hizo:** `lib/test-agent-sse.ts` invoca el handler `GET` de
+`/api/agent/tasks/[id]/events` **directo** (construye un `Request` y lee el
+`ReadableStream`), sin levantar Next. Inserta eventos a mano con
+`appendEvent` sobre una task `RUNNING` real en una DB aislada. No hace falta
+proveedor.
+
+Cubre: replay completo; reanudación por `?sinceSeq=` y por el header
+`Last-Event-ID`; que el header tenga prioridad sobre el query; eventos
+nuevos entrando con el stream abierto, sin perder ni duplicar; heartbeat;
+headers anti-buffering; abort limpio; 404 de task inexistente; cierre solo
+cuando la task sale de `RUNNING`.
+
+**Hallazgo del test:** `appendEvent` asigna `seq` desde **0**, no desde 1.
+Mis primeras expectativas asumían 1-based y el test las corrigió — el
+comportamiento del servidor era el correcto.
+
+Se agregó `MAGI_SSE_HEARTBEAT_MS` (default 15s) para poder verificar el
+heartbeat sin esperar 15 segundos reales. El test lo fija en 250ms cuando
+no viene definido.
+
+**Commits:** `98d428f`. **Verificación:** `npm run security:test-agent-sse`
+→ **21/21 casos OK**; `npm test` → **74/74 OK** (sube de 73 por el script
+nuevo); `typecheck` exit 0; `build` exit 0.
+
+#### C. Clasificador único de 401/403
+
+**Qué se hizo:** la misma decisión estaba duplicada en `lib/model-ping.ts` y
+`lib/openrouter.ts` con dos regex escritas a mano y **ligeramente
+distintas**, ambas con el mismo bug: comparaban `401`/`403` contra el texto
+sin delimitar, así que `HTTP 4010` se clasificaba como auth. Se agregó
+`credentialOutcomeForError()` e `isAuthFailure()` a
+`lib/provider-resilience/classify.ts` (puro, sin importar nada: duck typing
+sobre `{status?: number}` + texto) y se reemplazaron los dos usos.
+`isAuthPingError` se mantiene como nombre, ahora delegando.
+
+Es conservador a propósito: 401 y 403 desconocido → `invalid` (no se
+reintenta); 403 de cuota conocida, 429, 5xx y timeouts → `cooldown`.
+
+**Commits:** `7d6a3b7`. **Verificación:**
+`npm run provider-resilience:test-classify` → **50/50 casos OK** (32 previos
++ 18 nuevos, incluido el `HTTP 4010` que antes clasificaba mal);
+`npm test` 74/74; `typecheck` exit 0; `lint` 0 errores/37 warnings;
+`build` exit 0.
+
 ---
 
 ## 2. Tabla de verificación
