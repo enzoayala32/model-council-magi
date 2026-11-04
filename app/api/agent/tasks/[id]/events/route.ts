@@ -5,6 +5,11 @@ export const dynamic = "force-dynamic";
 
 const POLL_INTERVAL_MS = 400;
 
+/** Fase 3.3: comentario SSE (~15s) para que ni el proxy del túnel ni el
+ *  navegador del teléfono cierren la conexión por inactividad. No lleva
+ *  `event:` ni datos: es ignorada por el cliente y no ensucia el log. */
+const HEARTBEAT_MS = 15_000;
+
 /** Mientras la task está en uno de estos estados puede seguir llegando
  * eventos nuevos — el stream se mantiene abierto. Cualquier otro estado
  * (terminal, o `READY_FOR_REVIEW`/`APPLYING` que ya no emiten eventos de
@@ -59,6 +64,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const encoder = new TextEncoder();
   let closed = false;
   let intervalHandle: ReturnType<typeof setInterval> | undefined;
+  let heartbeatHandle: ReturnType<typeof setInterval> | undefined;
 
   const stream = new ReadableStream({
     start(controller) {
@@ -79,6 +85,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
         if (closed) return;
         closed = true;
         if (intervalHandle) clearInterval(intervalHandle);
+        if (heartbeatHandle) clearInterval(heartbeatHandle);
         try {
           controller.close();
         } catch {
@@ -119,11 +126,18 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
         if (!isStreaming(current.status)) closeStream();
       }, POLL_INTERVAL_MS);
 
+      // El heartbeat arranca junto con el polling: el problema que evita
+      // es el timeout de inactividad, no la falta de datos.
+      heartbeatHandle = setInterval(() => {
+        safeEnqueue(": heartbeat\n\n");
+      }, HEARTBEAT_MS);
+
       request.signal.addEventListener("abort", closeStream);
     },
     cancel() {
       closed = true;
       if (intervalHandle) clearInterval(intervalHandle);
+      if (heartbeatHandle) clearInterval(heartbeatHandle);
     },
   });
 

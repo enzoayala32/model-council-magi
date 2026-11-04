@@ -2,9 +2,16 @@
  * Fase 1 — política de seguridad para `/api/*`.
  *
  * Se extrae como función pura a propósito: `proxy.ts` solo traduce el
- * resultado a una respuesta HTTP y toda la matriz host/origin/token/
+ * resultado a una respuesta HTTP y toda la matriz host/origen/token/
  * content-type se puede testear sin levantar Next.js. El proxy corre en
  * runtime Node.js en Next 16, así que `process.env` está disponible.
+ *
+ * Fase 3: el mismo servidor se puede exponer en la LAN (o por un túnel).
+ * La regla que gobierna eso: **loopback es de confianza implícita, todo
+ * lo demás exige autenticación siempre**, aunque `APP_ACCESS_TOKEN` no
+ * esté definido. Sin ninguna forma de autenticar, un Host que no sea
+ * loopback se rechaza con un mensaje que explica cómo habilitarla, en
+ * vez de quedar abierto por default. Es fail-closed deliberado.
  */
 
 export type ApiSecurityEnv = {
@@ -14,6 +21,8 @@ export type ApiSecurityEnv = {
   /** Solo se usa para elegir el puerto default de Next; ya no decide el
    *  default de hosts (loopback se acepta en cualquier puerto). */
   PORT?: string;
+  /** Fase 5: `REMOTE_ACCESS=off` rechaza todo Host que no sea loopback. */
+  REMOTE_ACCESS?: string;
 };
 
 export type ApiSecurityRequest = {
@@ -32,7 +41,14 @@ export type ApiSecurityRequest = {
   tokenExempt?: boolean;
 };
 
-export type ApiSecurityReason = "host" | "token" | "origin" | "sec-fetch-site" | "content-type";
+export type ApiSecurityReason =
+  | "host"
+  | "token"
+  | "origin"
+  | "sec-fetch-site"
+  | "content-type"
+  /** Fase 3: Host no-loopback y ninguna autenticación configurada. */
+  | "remote-access-disabled";
 
 export type ApiSecurityDecision =
   | { ok: true }
@@ -229,6 +245,29 @@ function isMutating(method: string): boolean {
   return MUTATING_METHODS.has(method.trim().toUpperCase());
 }
 
+/** Hostnames que significan "esta misma máquina". */
+const LOOPBACK_HOSTNAMES = ["localhost", "127.0.0.1", "[::1]"];
+
+/** Nombre de la cookie de dispositivo emparejado (Fase 4). */
+const DEVICE_COOKIE = "magi_device_token";
+
+/**
+ * ¿Hay algo con lo que autenticar un acceso remoto? Se acepta
+ * `APP_ACCESS_TOKEN` o una cookie de dispositivo. La validez real de la
+ * cookie se comprueba en la capa de autorización de la Fase 4 (necesita
+ * la DB); acá solo se responde "hay o no hay forma de autenticar", para
+ * no abrir el acceso cuando no hay ninguna configurada.
+ *
+ * No se lee el valor de la cookie acá: la política pura no depende de
+ * SQLite.
+ */
+function hasAnyCredential(request: ApiSecurityRequest, env: ApiSecurityEnv): boolean {
+  if (env.APP_ACCESS_TOKEN?.trim()) return true;
+  if (readCookie(request.cookie ?? null, TOKEN_COOKIE)) return true;
+  if (readCookie(request.cookie ?? null, DEVICE_COOKIE)) return true;
+  return false;
+}
+
 /**
  * Orden deliberado: primero Host (corta DNS rebinding antes de tocar
  * nada), después token (si está configurado), y recién al final las
@@ -255,6 +294,36 @@ export function evaluateApiRequest(
   const allowedHosts = resolveAllowedHosts(env);
   if (!allowedHosts.some((entry) => hostMatches(host, entry))) {
     return { ok: false, status: 403, error: "Host no permitido.", reason: "host" };
+  }
+
+  // ---------- Fase 3: loopback vs. resto del mundo ----------
+  // Loopback es de confianza implícita (es esta PC). Cualquier otro Host
+  // — la IP de LAN, el nombre MagicDNS de Tailscale, el hostname de un
+  // túnel — equivale a control remoto y exige autenticación SIEMPRE,
+  // exista APP_ACCESS_TOKEN o no.
+  const isLoopback = LOOPBACK_HOSTNAMES.includes(splitHostPort(host).hostname);
+  if (!isLoopback) {
+    const remoteAccess = env.REMOTE_ACCESS?.trim().toLowerCase();
+    if (remoteAccess === "off") {
+      return {
+        ok: false,
+        status: 403,
+        error: "Acceso remoto deshabilitado (REMOTE_ACCESS=off). Solo se acepta acceso desde esta PC.",
+        reason: "remote-access-disabled",
+      };
+    }
+    if (!hasAnyCredential(request, env)) {
+      // Sin nada que verificar no se puede autorizar. El mensaje dice
+      // cómo habilitarlo, en vez de un "prohibido" opaco.
+      return {
+        ok: false,
+        status: 403,
+        error:
+          "Acceso desde fuera de esta PC requiere autenticación. Definí APP_ACCESS_TOKEN en .env " +
+          "o emparejá un dispositivo (ver README, sección Dispositivos).",
+        reason: "remote-access-disabled",
+      };
+    }
   }
 
   const token = env.APP_ACCESS_TOKEN?.trim() ?? "";

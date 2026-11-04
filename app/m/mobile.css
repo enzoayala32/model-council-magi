@@ -1,0 +1,209 @@
+/* Fase 3.2 — estilos de la PWA móvil (/m).
+   Solo lo específico de móvil: la paleta y las variables ya vienen de
+   app/globals.css, que carga en el layout raíz. Prefijo `.m*` para no
+   pisar nada de la vista de escritorio. */
+
+.mShell {
+  --m-pad: 14px;
+  min-height: 100dvh;
+  padding-bottom: calc(76px + env(safe-area-inset-bottom));
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.mHeader {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  padding: calc(env(safe-area-inset-top) + 14px) var(--m-pad) 12px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(10px);
+}
+.mHeader h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }
+.mBrand { display: block; color: var(--muted); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; }
+.mHeaderActions { display: flex; align-items: center; gap: 8px; }
+
+.mBack {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.mStats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 12px var(--m-pad) 0;
+}
+.mStats > div {
+  display: grid;
+  gap: 2px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-soft);
+}
+.mStats span { color: var(--muted); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+.mStats b { font-size: 18px; }
+
+.mSection { margin: 18px var(--m-pad) 0; display: grid; gap: 10px; }
+.mSectionHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.mSectionHead h2 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 14px; }
+.mLink { color: var(--accent); font-size: 12px; font-weight: 600; text-decoration: none; }
+
+.mFilters { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px var(--m-pad) 0; }
+.mChip {
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+.mChip.active { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+
+.mSelect { display: grid; gap: 4px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+.mSelect select {
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-soft);
+  color: var(--ink);
+  font-size: 14px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.mList { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.mList a { display: grid; gap: 4px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg-soft); text-decoration: none; color: inherit; }
+.mList a:active { transform: scale(0.995); }
+.mListHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mListTitle { margin: 0; font-size: 14px; }
+.mListMeta { display: flex; align-items: center; gap: 5px; margin: 0; color: var(--muted); font-size: 11px; }
+.mTime { color: var(--muted); font-size: 11px; }
+
+.mPill {
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.mPill.attention { border-color: #d9a441; background: #fdf4df; color: #7a5310; }
+
+.mEmpty, .mError, .mNote, .mNotice { margin: 0; font-size: 13px; }
+.mEmpty { color: var(--muted); }
+.mError { padding: 9px 11px; border: 1px solid #c0533f; border-radius: 10px; background: #fbe9e6; color: #7d2a1c; font-size: 12px; }
+.mNote { color: var(--muted); font-size: 12px; }
+.mNotice { padding: 9px 11px; border: 1px solid #d9a441; border-radius: 10px; background: #fdf4df; color: #7a5310; font-size: 12px; }
+
+.mPrompt { margin: 0; white-space: pre-wrap; font-size: 14px; line-height: 1.5; }
+.mMeta { display: grid; gap: 6px; margin: 0; }
+.mMeta > div { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
+.mMeta dt { color: var(--muted); }
+.mMeta dd { margin: 0; text-align: right; }
+.mMetaError dd { color: #7d2a1c; }
+
+.mActions { display: flex; gap: 8px; }
+.mBtn {
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-soft);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+.mBtn.primary { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+.mBtn:disabled { opacity: 0.5; }
+.mBtn.small { padding: 7px 11px; font-size: 12px; text-decoration: none; }
+.mIconBtn {
+  display: inline-grid;
+  place-items: center;
+  width: 38px; height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-soft);
+  color: var(--ink);
+}
+
+.mForm { margin: 18px var(--m-pad) 0; display: grid; gap: 14px; }
+.mField { display: grid; gap: 5px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+.mField textarea {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-soft);
+  color: var(--ink);
+  font-size: 14px;
+  text-transform: none;
+  letter-spacing: normal;
+  resize: vertical;
+}
+
+.mProposal { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg-soft); }
+.mProposal pre {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.mTimeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.mTimeline li { display: grid; grid-template-columns: 64px 1fr; gap: 8px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-soft); }
+.mTimeline b { font-size: 12px; }
+.mTimeline p { margin: 2px 0 0; color: var(--muted); font-size: 11px; white-space: pre-wrap; word-break: break-word; }
+
+.mStreamState { color: var(--muted); font-size: 11px; }
+.mLinks { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.mLinks a { color: var(--accent); font-size: 13px; }
+
+.mNav {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 2px;
+  padding: 8px 6px calc(8px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
+  backdrop-filter: blur(10px);
+}
+.mNavItem {
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+  padding: 6px 2px;
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 10px;
+  text-decoration: none;
+}
+.mNavItem.active { background: var(--bg-soft); color: var(--ink); font-weight: 600; }
+
+@media (min-width: 720px) {
+  /* En una tablet o ventana ancha se aprovecha el espacio, sin cambiar la
+     estructura: mismo shell, columnas más anchas. */
+  .mShell { --m-pad: 28px; font-size: 16px; }
+  .mStats { grid-template-columns: repeat(3, minmax(0, 220px)); }
+}

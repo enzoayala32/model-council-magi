@@ -46,7 +46,7 @@ export function proxy(request: NextRequest) {
       ALLOWED_HOSTS: process.env.ALLOWED_HOSTS,
       ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS,
       APP_ACCESS_TOKEN: process.env.APP_ACCESS_TOKEN,
-      PORT: process.env.PORT,
+      REMOTE_ACCESS: process.env.REMOTE_ACCESS,
     },
   );
 

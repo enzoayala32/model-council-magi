@@ -93,9 +93,72 @@ async function main(): Promise<void> {
   );
   check("Host ajeno se rechaza", isFailure(decide(getRequest({ host: "evil.example" })), "host", 403));
   check("Host ausente se rechaza", isFailure(decide(getRequest({ host: null })), "host", 403));
+  // Fase 3: permitir el Host no alcanza. Un Host que no es loopback exige
+  // autenticación siempre, aunque esté en ALLOWED_HOSTS.
   check(
-    "ALLOWED_HOSTS permite un host explícito",
-    isOk(decide(getRequest({ host: "app.local:3000" }), { ALLOWED_HOSTS: "app.local:3000" })),
+    "ALLOWED_HOSTS sin autenticación se rechaza (fail-closed)",
+    isFailure(
+      decide(getRequest({ host: "app.local:3000" }), { ALLOWED_HOSTS: "app.local:3000" }),
+      "remote-access-disabled",
+      403,
+    ),
+  );
+  check(
+    "ALLOWED_HOSTS + APP_ACCESS_TOKEN con cookie se permite",
+    isOk(
+      decide(
+        getRequest({ host: "app.local:3000", cookie: "magi_access_token=sec%72eto" }),
+        { ALLOWED_HOSTS: "app.local:3000", APP_ACCESS_TOKEN: "secreto" },
+      ),
+    ),
+  );
+  check(
+    "ALLOWED_HOSTS + cookie de dispositivo se permite",
+    isOk(
+      decide(
+        getRequest({ host: "app.local:3000", cookie: "magi_device_token=abc" }),
+        { ALLOWED_HOSTS: "app.local:3000" },
+      ),
+    ),
+  );
+  check(
+    "ALLOWED_HOSTS sin ninguna credencial sigue rechazado",
+    isFailure(
+      decide(getRequest({ host: "app.local:3000", cookie: "tema=oscuro" }), { ALLOWED_HOSTS: "app.local:3000" }),
+      "remote-access-disabled",
+      403,
+    ),
+  );
+  check(
+    "IP de LAN sin credencial se rechaza",
+    isFailure(decide(getRequest({ host: "192.168.0.50:3000" }), { ALLOWED_HOSTS: "192.168.0.50:3000" }), "remote-access-disabled", 403),
+  );
+  check(
+    "REMOTE_ACCESS=off rechaza incluso con credencial",
+    isFailure(
+      decide(
+        getRequest({ host: "app.local:3000", cookie: "magi_access_token=sec%72eto" }),
+        { ALLOWED_HOSTS: "app.local:3000", APP_ACCESS_TOKEN: "secreto", REMOTE_ACCESS: "off" },
+      ),
+      "remote-access-disabled",
+      403,
+    ),
+  );
+  check(
+    "REMOTE_ACCESS=off acepta mayúsculas/minúsculas",
+    isFailure(
+      decide(getRequest({ host: "app.local:3000" }), { ALLOWED_HOSTS: "app.local:3000", REMOTE_ACCESS: "OFF" }),
+      "remote-access-disabled",
+      403,
+    ),
+  );
+  check(
+    "REMOTE_ACCESS=off no afecta a loopback",
+    isOk(decide(getRequest(), { REMOTE_ACCESS: "off" })),
+  );
+  check(
+    "loopback sin credencial sigue permitido (uso local)",
+    isOk(decide(getRequest())),
   );
   check(
     "ALLOWED_HOSTS reemplaza los defaults",
