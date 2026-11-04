@@ -17,6 +17,7 @@
  * Uso: npm run security:test-nvidia-rotation
  */
 import { OpenRouterError } from "./llm-shared";
+import { createAgentCompletion } from "./openrouter";
 import { councilProviderForModel, runDraft } from "./council-run";
 import { isAuthPingError } from "./model-ping";
 import { getProviderPool, __resetProviderPoolsForTests } from "./provider-resilience/registry";
@@ -215,6 +216,79 @@ async function main(): Promise<void> {
     );
     check("un modelo sin mapping devuelve null", NVIDIA_MODEL_MAP["openai/gpt-4o"] === undefined);
   }
+
+  console.log("\n== fallback OpenRouter → NVIDIA directo también rota ==\n");
+  await withEnv(
+    {
+      OPENROUTER_API_KEY: "or-key",
+      NVIDIA_API_KEY: "nv-key-1",
+      NVIDIA_API_KEY_2: "nv-key-2",
+      NVIDIA_API_KEY_3: "nv-key-3",
+    },
+    async () => {
+      const hits: Array<{ nvidia: boolean; auth: string; model: string }> = [];
+      const realFetch = globalThis.fetch;
+      // Intercepto `fetch` a propósito: es el único punto por donde salen
+      // `openrouter.ts` y `nvidia.ts`, y así se prueba el fallback real
+      // (con sus reintentos internos incluidos) sin red.
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+        const isNvidia = url.includes("integrate.api.nvidia.com");
+        hits.push({ nvidia: isNvidia, auth: headers.Authorization ?? "", model: String(body.model ?? "") });
+
+        if (!isNvidia) {
+          // 400 NO es retryable: dispara el fallback sin esperar 15s.
+          return new Response(JSON.stringify({ error: { message: "openrouter saturado" } }), { status: 400 });
+        }
+        if (headers.Authorization?.includes("nv-key-1") || headers.Authorization?.includes("nv-key-2")) {
+          return new Response(JSON.stringify({ error: { message: "rate limited" } }), { status: 429 });
+        }
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "respuesta via fallback nvidia" }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 },
+          }),
+          { status: 200 },
+        );
+      }) as unknown as typeof fetch;
+
+      try {
+        const result = await createAgentCompletion({
+          model: OPENROUTER_SEAT,
+          apiKey: "or-key",
+          messages: [{ role: "user", content: "hola" }],
+          maxTokens: 40,
+          signal: new AbortController().signal,
+          // Sin tools: `executeTool` es obligatorio en el tipo pero no se
+          // usa en este camino.
+          executeTool: async () => ({ name: "x", content: "" }),
+        });
+
+        const nvidiaHits = hits.filter((hit) => hit.nvidia);
+        check("el fallback devuelve contenido", result.content === "respuesta via fallback nvidia", result.content);
+        check("se llamó a OpenRouter primero", hits.some((hit) => !hit.nvidia));
+        check("rotó por las TRES keys de NVIDIA", [...new Set(nvidiaHits.map((h) => h.auth))].length === 3, nvidiaHits);
+        check(
+          "las keys se probaron en orden",
+          [...new Set(nvidiaHits.map((h) => h.auth))].join(",") === "Bearer nv-key-1,Bearer nv-key-2,Bearer nv-key-3",
+          nvidiaHits.map((h) => h.auth),
+        );
+        check(
+          "EL MODELO NO CAMBIÓ entre keys (mismo id nativo)",
+          new Set(nvidiaHits.map((h) => h.model)).size === 1 && nvidiaHits[0].model === NVIDIA_SEAT,
+          [...new Set(nvidiaHits.map((h) => h.model))],
+        );
+        const pool = getProviderPool("nvidia");
+        const states = pool.snapshot();
+        check("las keys con 429 quedan en cooldown", states.filter((st) => st.id !== "nvidia-3").every((st) => st.status === "COOLDOWN"), states);
+        check("la key que respondió queda disponible", states.find((st) => st.id === "nvidia-3")?.status === "AVAILABLE", states);
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+    },
+  );
 
   console.log(`\n${passed}/${passed + failed} casos OK`);
   if (failed > 0) process.exit(1);
