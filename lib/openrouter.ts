@@ -1,5 +1,6 @@
 import { openRouterHeaders } from "./http-headers";
 import { createNvidiaChatCompletion, mapToNvidiaModel } from "./nvidia";
+import { getProviderPool } from "./provider-resilience/registry";
 import {
   OpenRouterError,
   type OpenRouterMessage,
@@ -245,33 +246,54 @@ export async function createChatCompletion({
     // the deployment has its own NVIDIA developer key configured, try
     // NVIDIA's own API directly — a separate quota from OpenRouter's shared
     // free pool, so it's often still available even when OpenRouter isn't.
-    const nvidiaApiKey = process.env.NVIDIA_API_KEY;
-    const nvidiaModelId = nvidiaApiKey ? mapToNvidiaModel(model) : null;
-    if (!nvidiaApiKey || !nvidiaModelId) {
+    const nvidiaModelId = mapToNvidiaModel(model);
+    if (!nvidiaModelId) {
       throw openRouterError;
     }
     console.log(`[openrouter] ${model} exhausted OpenRouter — falling back to NVIDIA NIM direct (${nvidiaModelId})`);
-    try {
-      const nvidiaResult = await createNvidiaChatCompletion({
-        model: nvidiaModelId,
-        messages,
-        apiKey: nvidiaApiKey,
-        maxTokens,
-        temperature,
-        reasoningEffort,
-        signal,
-        tools,
-        toolChoice,
-      });
-      console.log(`[openrouter] NVIDIA NIM direct fallback succeeded for ${nvidiaModelId}`);
-      return nvidiaResult;
-    } catch (nvidiaError) {
-      console.error(`[openrouter] NVIDIA NIM direct fallback also failed for ${nvidiaModelId}:`, nvidiaError instanceof Error ? nvidiaError.message : nvidiaError);
-      // Surface the ORIGINAL OpenRouter error — it's the one tied to the
-      // model the caller actually asked for, and callers already know how
-      // to handle OpenRouterError instances.
-      throw openRouterError;
+
+    // El fallback también rota las NVIDIA_API_KEY: antes tomaba la primera
+    // a secas, así que con el pool free de OpenRouter saturado Y la primera
+    // key de NVIDIA rate-limitada, el fallback "de última instancia" nacía
+    // muerto. Mismo modelo (el mapping 1:1 de `nvidia.ts`), otra cuota.
+    //
+    // No se usa `withCredentialFailover` de `council-run.ts` a propósito:
+    // importarlo acá sería un ciclo (`council-run.ts` importa este módulo).
+    // Se usa el pool/cursor directo, que es la misma primitiva de 5A.
+    const nvidiaPool = getProviderPool("nvidia");
+    const nvidiaCursor = nvidiaPool.beginOperation();
+    while (true) {
+      const acquired = nvidiaCursor.next();
+      if (acquired.status !== "AVAILABLE") break;
+      const { id: credentialId, value: nvidiaApiKey, healthGeneration } = acquired.lease;
+      try {
+        const nvidiaResult = await createNvidiaChatCompletion({
+          model: nvidiaModelId,
+          messages,
+          apiKey: nvidiaApiKey,
+          maxTokens,
+          temperature,
+          reasoningEffort,
+          signal,
+          tools,
+          toolChoice,
+        });
+        console.log(`[openrouter] NVIDIA NIM direct fallback succeeded for ${nvidiaModelId}`);
+        nvidiaPool.release(credentialId, "success", Date.now(), undefined, healthGeneration);
+        return nvidiaResult;
+      } catch (nvidiaError) {
+        const message = nvidiaError instanceof Error ? nvidiaError.message : String(nvidiaError);
+        console.error(`[openrouter] NVIDIA NIM direct fallback failed for ${nvidiaModelId}:`, message);
+        // 401/403 = la key no sirve, no insita. Cualquier otro error (429,
+        // 503, timeout) prueba la siguiente.
+        nvidiaPool.release(credentialId, /(?:^|[^0-9])(?:401|403)(?:[^0-9]|$)|invalid api key|unauthorized/i.test(message) ? "invalid" : "cooldown", Date.now(), undefined, healthGeneration);
+      }
     }
+
+    // Surface the ORIGINAL OpenRouter error — it's the one tied to the
+    // model the caller actually asked for, and callers already know how
+    // to handle OpenRouterError instances.
+    throw openRouterError;
   }
 }
 

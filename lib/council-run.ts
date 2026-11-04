@@ -113,7 +113,14 @@ export function withWatchdog<T>(promise: Promise<T>, ms: number, label: string, 
  * `withCredentialFailover` (Fase 5E) pueda resolverlo ANTES de decidir de
  * qué pool pedir una credential.
  */
-function resolveProviderName(modelId: string): ProviderName {
+/**
+ * Exportado (Fase 1.1 de la misión de correcciones): el orquestador
+ * necesitaba el mismo resolvedor para saber de qué pool sacar credenciales
+ * en síntesis/juez/follow-ups, y tenía el nombre del provider escrito a
+ * mano ("openrouter"). Con un modelo NVIDIA nativo configurado en
+ * `SYNTHESIS_MODEL` eso tomaba la key equivocada.
+ */
+export function councilProviderForModel(modelId: string): ProviderName {
   const model = getCouncilModel(modelId);
   if (model?.provider === "nvidia") return "nvidia";
   if (model?.provider === "google") return "google";
@@ -407,7 +414,7 @@ export async function runDraft({
       phase: "drafting",
     });
 
-    const providerName = resolveProviderName(callModelId);
+    const providerName = councilProviderForModel(callModelId);
     const completionImpl = runCouncilCompletionImpl ?? runCouncilCompletion;
     return withCredentialFailover(
       providerName,
@@ -555,7 +562,7 @@ export async function runDebate({
       phase: "debating",
     });
 
-    const providerName = resolveProviderName(self.modelId);
+    const providerName = councilProviderForModel(self.modelId);
     const completionImpl = runCouncilCompletionImpl ?? runCouncilCompletion;
     const completion = await withCredentialFailover(
       providerName,
@@ -800,9 +807,14 @@ export async function createFusionJudgeReportResilient({
   createFusionJudgeReportImpl?: typeof createFusionJudgeReport;
 }): Promise<{ report: FusionJudgeReport; usage?: unknown }> {
   const impl = createFusionJudgeReportImpl ?? createFusionJudgeReport;
+  // El pool se elige por el modelo, no por un nombre fijo: con
+  // FUSION_JUDGE_MODEL apuntando a un id nativo de NVIDIA, rotar las
+  // NVIDIA_API_KEY (y no las de OpenRouter) es la diferencia entre
+  // funcionar y agotar la cuota equivocada.
+  const judgeProvider = councilProviderForModel(process.env.FUSION_JUDGE_MODEL ?? FUSION_JUDGE_MODEL);
   try {
     return await withCredentialFailover(
-      "openrouter",
+      judgeProvider,
       signal,
       (apiKey) => impl({ prompt, drafts, debates, apiKey, signal }),
       { explicitApiKey: explicitOpenRouterKey },

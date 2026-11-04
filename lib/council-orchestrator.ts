@@ -55,6 +55,7 @@ import {
   runDraft,
   runVoteResilient,
   withCredentialFailover,
+  councilProviderForModel,
   withWatchdog,
 } from "@/lib/council-run";
 import { registerSecret, redactSecrets } from "@/lib/provider-resilience/redact";
@@ -495,7 +496,10 @@ export async function runCouncilStream({ body, signal, send, deps: overrides }: 
   const primaryStartedAt = Date.now();
   try {
     synthesis = await deps.withWatchdog(
-      deps.withCredentialFailover("openrouter", signal, (synthesisApiKey) => runSynthesis(SYNTHESIS_PRIMARY_MODEL, synthesisApiKey, prompt), {
+      // El pool se elige por el modelo, no por un nombre fijo: si
+      // SYNTHESIS_MODEL es un id nativo de NVIDIA, tiene que rotar las
+      // NVIDIA_API_KEY y no las de OpenRouter.
+      deps.withCredentialFailover(councilProviderForModel(SYNTHESIS_PRIMARY_MODEL), signal, (synthesisApiKey) => runSynthesis(SYNTHESIS_PRIMARY_MODEL, synthesisApiKey, prompt), {
         explicitApiKey: explicitOpenRouterKey,
       }),
       SYNTHESIS_WATCHDOG_MS,
@@ -516,7 +520,7 @@ export async function runCouncilStream({ body, signal, send, deps: overrides }: 
     const fallbackStartedAt = Date.now();
     try {
       synthesis = await deps.withWatchdog(
-        deps.withCredentialFailover("openrouter", signal, (synthesisApiKey) => runSynthesis(SYNTHESIS_FALLBACK_MODEL, synthesisApiKey, prompt), {
+        deps.withCredentialFailover(councilProviderForModel(SYNTHESIS_FALLBACK_MODEL), signal, (synthesisApiKey) => runSynthesis(SYNTHESIS_FALLBACK_MODEL, synthesisApiKey, prompt), {
           explicitApiKey: explicitOpenRouterKey,
         }),
         SYNTHESIS_WATCHDOG_MS,
@@ -565,15 +569,22 @@ export async function runCouncilStream({ body, signal, send, deps: overrides }: 
   const followUpModel = process.env.FOLLOWUP_MODEL ?? FOLLOWUP_MODEL;
   try {
     const followUps = await deps.withWatchdog(
-      deps.createChatCompletion({
-        model: followUpModel,
-        apiKey,
-        maxTokens: 1400,
-        temperature: 0.35,
-        reasoningEffort: "low",
-        signal,
-        messages: buildFollowUpMessages(prompt, synthesis.content),
-      }),
+      // Antes usaba `apiKey` a secas (la primera key de OpenRouter de la
+      // corrida). Ahora rota por el pool del provider del modelo: los
+      // follow-ups son baratos, pero son la última llamada del run y
+      // fallarlos por una key cansada deja al usuario sin las preguntas
+      // de seguimiento después de una corrida completa y exitosa.
+      deps.withCredentialFailover(councilProviderForModel(followUpModel), signal, (followUpApiKey) =>
+        deps.createChatCompletion({
+          model: followUpModel,
+          apiKey: followUpApiKey,
+          maxTokens: 1400,
+          temperature: 0.35,
+          reasoningEffort: "low",
+          signal,
+          messages: buildFollowUpMessages(prompt, synthesis.content),
+        }),
+      ),
       FOLLOWUP_WATCHDOG_MS,
       "Follow-ups",
     );

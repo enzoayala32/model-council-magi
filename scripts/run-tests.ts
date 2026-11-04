@@ -59,6 +59,7 @@ const OFFLINE_EXACT = [
   "security:test-proxy",
   "security:test-http-headers",
   "security:test-token-route",
+  "security:test-nvidia-rotation",
 ];
 
 const liveSet = new Set<string>(LIVE_SCRIPTS);
