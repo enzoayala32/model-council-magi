@@ -21,12 +21,12 @@ export default function MobileRuns() {
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
-    setError("");
     try {
       const res = await fetch("/api/council/runs?limit=50");
       if (!res.ok) throw new Error("corridas");
       const data = (await res.json()) as { runs: typeof runs };
       setRuns(data.runs ?? []);
+      setError("");
     } catch {
       setError("No se pudieron cargar las corridas.");
     } finally {
@@ -35,7 +35,13 @@ export default function MobileRuns() {
   }, []);
 
   useEffect(() => {
-    load();
+    // IIFE async: el setState de `load` corre dentro de un callback, no en
+    // el cuerpo sincrónico del effect — que es exactamente lo que pide
+    // `react-hooks/set-state-in-effect` ("calling setState in a callback
+    // function when external state changes").
+    void (async () => {
+      await load();
+    })();
   }, [load]);
 
   return (

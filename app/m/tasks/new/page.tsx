@@ -71,7 +71,9 @@ function MobileNewTaskForm() {
         setError("No se pudieron cargar proyectos y modelos.");
       }
     })();
-  }, []);
+    // Los valores precargados van en las dependencias: si la URL cambia
+    // (otra task a reintentar), hay que releer proyectos y modelos.
+  }, [prefillProjectId, prefillModelId]);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();

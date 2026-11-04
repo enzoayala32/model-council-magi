@@ -36,8 +36,6 @@ export default function MobileTasks() {
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
-    setError("");
-    setLoading(true);
     try {
       const params = new URLSearchParams();
       if (statusFilter) params.set("status", statusFilter);
@@ -51,6 +49,7 @@ export default function MobileTasks() {
       const map: Record<string, MobileProject> = {};
       for (const project of projectRes.projects ?? []) map[project.id] = project;
       setProjects(map);
+      setError("");
     } catch {
       setError("No se pudieron cargar las tareas.");
     } finally {
@@ -59,7 +58,13 @@ export default function MobileTasks() {
   }, [statusFilter, projectFilter]);
 
   useEffect(() => {
-    load();
+    // IIFE async: el setState de `load` corre dentro de un callback, no en
+    // el cuerpo sincrónico del effect — que es exactamente lo que pide
+    // `react-hooks/set-state-in-effect` ("calling setState in a callback
+    // function when external state changes").
+    void (async () => {
+      await load();
+    })();
   }, [load]);
 
   const grouped = useMemo(() => {

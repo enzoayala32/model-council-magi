@@ -13,8 +13,6 @@ export type ModelPingResult = {
 const PING_TIMEOUT_MS = 12000;
 const PING_MESSAGE = [{ role: "user" as const, content: "ping" }];
 
-type Endpoint = { url: string; apiKey: string; extraHeaders?: Record<string, string> };
-
 type ResolvedEndpoint = { url: string; provider: ProviderName; extraHeaders?: Record<string, string>; nativeModelId: string };
 
 /**

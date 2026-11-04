@@ -52,7 +52,6 @@ export default function MobileHome() {
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
-    setError("");
     try {
       const [taskRes, projectRes, runRes] = await Promise.all([
         fetch("/api/agent/tasks").then((r) => (r.ok ? r.json() : Promise.reject(new Error("tareas")))),
@@ -64,6 +63,7 @@ export default function MobileHome() {
       for (const project of projectRes.projects ?? []) map[project.id] = project;
       setProjects(map);
       setRuns(runRes.runs ?? []);
+      setError("");
     } catch {
       setError("No se pudieron cargar los datos. ¿Sesión válida?");
     } finally {
@@ -72,7 +72,11 @@ export default function MobileHome() {
   }, []);
 
   useEffect(() => {
-    load();
+    // IIFE async: el setState de `load` queda dentro de un callback, no en
+    // el cuerpo sincrónico del effect (que es lo que marca la regla).
+    void (async () => {
+      await load();
+    })();
   }, [load]);
 
   const visible = useMemo(() => {

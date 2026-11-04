@@ -62,7 +62,6 @@ export default function MobileTaskDetail() {
   const [note, setNote] = useState("");
 
   const load = useCallback(async () => {
-    setError("");
     try {
       const res = await fetch(`/api/agent/tasks/${encodeURIComponent(taskId)}`);
       if (!res.ok) throw new Error("task");
@@ -74,13 +73,20 @@ export default function MobileTaskDetail() {
         const propData = (await propRes.json()) as { proposals: Proposal[] };
         setProposals(propData.proposals ?? []);
       }
+      setError("");
     } catch {
       setError("No se pudo cargar la tarea.");
     }
   }, [taskId]);
 
   useEffect(() => {
-    load();
+    // IIFE async: el setState de `load` corre dentro de un callback, no en
+    // el cuerpo sincrónico del effect — que es exactamente lo que pide
+    // `react-hooks/set-state-in-effect` ("calling setState in a callback
+    // function when external state changes").
+    void (async () => {
+      await load();
+    })();
   }, [load]);
 
   const stream = useTaskEventStream({

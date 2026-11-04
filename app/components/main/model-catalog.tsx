@@ -38,6 +38,10 @@ function priceLabel(model: CatalogModel): string {
 }
 
 export function ModelCatalogPane() {
+  // `loading` arranca en true a propósito: así el efecto del montaje no
+  // necesita un setState sincrónico para mostrar el spinner. El error solo
+  // se escribe cuando la respuesta NO es buena — si salió bien, la ausencia
+  // de error ya es el estado correcto y no hay que limpiarlo.
   const [data, setData] = useState<CatalogResponse | null>(null);
   const [bucket, setBucket] = useState<Bucket>("free");
   const [query, setQuery] = useState("");
@@ -45,13 +49,12 @@ export function ModelCatalogPane() {
   const [error, setError] = useState("");
 
   const load = useCallback(async (refresh: boolean) => {
-    setLoading(true);
-    setError("");
     try {
       const response = await fetch(`/api/models/catalog${refresh ? "?refresh=1" : ""}`);
       const payload = (await response.json()) as CatalogResponse;
       if (!response.ok) throw new Error(payload.errors?.openrouter ?? "No se pudo cargar el catálogo.");
       setData(payload);
+      setError("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo cargar el catálogo.");
     } finally {
@@ -60,8 +63,18 @@ export function ModelCatalogPane() {
   }, []);
 
   useEffect(() => {
-    load(false);
+    // Idem: el setState queda dentro del callback asincrónico.
+    void (async () => {
+      await load(false);
+    })();
   }, [load]);
+
+  /** Refresco manual: evento de usuario, no efecto, así que acá sí se
+   *  puede mostrar el spinner de inmediato. */
+  function refresh() {
+    setLoading(true);
+    void load(true);
+  }
 
   const models = (data?.[bucket] ?? []).filter((model) => {
     const term = query.trim().toLowerCase();
@@ -98,7 +111,7 @@ export function ModelCatalogPane() {
             </button>
           ))}
         </div>
-        <button type="button" className="iconBtn" onClick={() => load(true)} disabled={loading} title="Refrescar el listado">
+        <button type="button" className="iconBtn" onClick={refresh} disabled={loading} title="Refrescar el listado">
           <RefreshCw size={16} />
         </button>
       </div>

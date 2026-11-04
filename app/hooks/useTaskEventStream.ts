@@ -66,13 +66,20 @@ export function useTaskEventStream({ taskId, onTaskSnapshot }: Options) {
       sourceRef.current = null;
     }
 
-    setState((current) => ({ ...current, status: "connecting" }));
+    // No hace falta un setState("connecting") acá: el estado inicial ya es
+    // "connecting", y cuando se reconecta tras un error lo pone `onerror`
+    // (que corre en un callback, no en el cuerpo del effect). Escribirlo
+    // acá era justo el setState sincrónico que la regla marca.
     const source = new EventSource(`/api/agent/tasks/${taskId}/events`, { withCredentials: true });
     sourceRef.current = source;
 
     source.onopen = () => {
       attemptRef.current = 0;
-      setState((current) => ({ ...current, status: "open" }));
+      // Al abrir una conexión nueva se descarta lo viejo: los eventos que
+      // lleguen después son de esta task. Se hace acá (callback asincrónico)
+      // y no en el cuerpo del effect, que es justamente lo que la regla
+      // `react-hooks/set-state-in-effect` prohíbe.
+      setState({ status: "open", events: [] });
     };
 
     source.onmessage = (message) => {
@@ -125,8 +132,9 @@ export function useTaskEventStream({ taskId, onTaskSnapshot }: Options) {
   }, [connect]);
 
   useEffect(() => {
+    // El reset de `seenRef` es un ref (permitido en el effect). El reset del
+    // estado visible pasa en `onopen` — ver el comentario de arriba.
     seenRef.current = new Set<number>();
-    setState({ status: "connecting", events: [] });
     connect();
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);

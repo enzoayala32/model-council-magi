@@ -39,7 +39,10 @@ jobs:
         # docs/REPORTE-REFACTOR.md, sección 5). Los 5 que agregó la Fase 3
         # son `set-state-in-effect` en hooks nuevos de la PWA, la misma
         # regla que ya acumulaba la app de escritorio.
-        run: npm run lint -- --max-warnings 46
+                # Tope de warnings: hoy hay 37 (el mínimo desde que se habilitó el
+        # lint). La idea es bajarlo a medida que se limpia cada regla (ver
+        # deuda en docs/REPORTE-REFACTOR.md, sección 5).
+        run: npm run lint -- --max-warnings 37
 
       - name: Tests offline
         run: npm test

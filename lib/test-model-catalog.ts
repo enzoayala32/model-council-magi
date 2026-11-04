@@ -13,7 +13,6 @@ import {
   getModelCatalog,
   separateByPricing,
   type CatalogModel,
-  type CatalogDeps,
 } from "./model-catalog";
 
 let passed = 0;
@@ -87,7 +86,6 @@ function fakeFetch(body: unknown, opts: { status?: number; failWith?: string } =
 async function main(): Promise<void> {
   __clearCatalogCacheForTests();
   const clock = { now: () => 1_000_000 };
-  const noEnv: CatalogDeps = { fetchImpl: (async () => jsonResponse({ data: [] })) as unknown as typeof fetch, now: clock.now };
 
   console.log("== normalización de OpenRouter ==\n");
   {
@@ -166,6 +164,7 @@ async function main(): Promise<void> {
 
     const later = await getCatalog("openrouter", { ttlMs: 1, deps: { fetchImpl: impl, now: () => clock.now() + 5000 } });
     check("TTL vencido vuelve a consultar", calls === 2, calls);
+    check("la consulta tras TTL trae datos frescos", later.models.length === 4, later.models.length);
 
     const forced = await getCatalog("openrouter", { force: true, deps: { fetchImpl: impl, now: clock.now } });
     check("force=true ignora el caché", calls === 3, calls);
@@ -239,7 +238,6 @@ async function main(): Promise<void> {
     check("sin key no se manda Authorization", seen2.Authorization === undefined, seen2);
   }
 
-  void noEnv;
   console.log(`\n${passed}/${passed + failed} casos OK`);
   if (failed > 0) process.exit(1);
 }
