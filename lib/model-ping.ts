@@ -110,7 +110,11 @@ function isRetryablePingError(message: string): boolean {
   return /429|rate.?limit|503|timeout|timed out|tardy|overloaded|fetch failed|ECONNRESET/i.test(message);
 }
 
-/** 401/403 = la key no sirve: se marca inválida y se deja de insistir. */
+/**
+ * 401/403 = la key no sirve: se marca inválida y se deja de insistir.
+ * Exportado para poder fijar la clasificación en
+ * `lib/test-nvidia-rotation.ts` sin necesidad de red.
+ */
 export function isAuthPingError(message: string): boolean {
   return /(?:^|[^0-9])(?:401|403)(?:[^0-9]|$)|invalid api key|unauthorized/i.test(message);
 }
