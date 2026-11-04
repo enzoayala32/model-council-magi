@@ -48,9 +48,14 @@ emparejamiento por QR, tokens por dispositivo revocables, permisos por
 niveles, auditoría y aprobación explícita para todo lo que modifique el
 proyecto.
 
-| Fase | Qué es | Estado |
-|---|---|---|
-| 3 | PWA móvil `/m` + acceso por LAN + SSE robusto (ids monotónicos, reanudación, heartbeat, backoff) | **PENDIENTE** |
+| Ítem | Estado |
+|---|---|
+| 3.1 Binding LAN + fail-closed + `print-access-urls` | **HECHO** |
+| 3.2 PWA `/m` instalable (manifest, SW solo-shell, pantallas) | **HECHO** |
+| 3.3 SSE con heartbeat, backoff y reanudación (cliente) | **HECHO** (falta test de corte/reanudación) |
+| 3.4 `docs/API-AGENTE.md` | **HECHO** |
+| Instalar en Android real / entrar desde otra máquina | **NO VERIFICADO** (sin dispositivo) |
+| Nota: no existe "reanudar" en el servidor; reintentar = crear task nueva | **HECHO** |
 | 4 | Emparejamiento por QR, tokens de dispositivo hasheados, scopes (`observe`/`operate`/`approve`), TOTP para step-up, auditoría, pantallas Dispositivos y Actividad, kill switch | **PENDIENTE** |
 | 5 | Acceso remoto documentado (Tailscale recomendado, Cloudflare Tunnel alternativa, port-forward desaconsejado) + `npm run doctor:remote` | **PENDIENTE** |
 | 6 | Notificaciones push (Web Push/VAPID) con preferencias por dispositivo y coalescencia | **PENDIENTE** |
