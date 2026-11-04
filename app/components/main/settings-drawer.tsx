@@ -1,11 +1,12 @@
 "use client";
 import { useState } from "react";
-import { FolderCog, Globe, Image as ImageIcon, Search, Wrench, X } from "lucide-react";
+import { FolderCog, Globe, Image as ImageIcon, Library, Search, Wrench, X } from "lucide-react";
 import type { ConnectorSettings, SettingsTab } from "../../lib/client-types";
 import type { AgentSkill } from "@/lib/skills";
 import { IMAGE_MODELS } from "@/lib/models";
 import { PERSONA_PRESETS } from "@/lib/persona-presets";
 import { importSkillFromText } from "@/lib/skills";
+import { ModelCatalogPane } from "./model-catalog";
 import { newId } from "@/lib/threads";
 
 export function SettingsDrawer({
@@ -124,6 +125,9 @@ export function SettingsDrawer({
         </button>
         <button className={tab === "images" ? "active" : ""} type="button" onClick={() => setTab("images")}>
           <ImageIcon size={13} /> Imágenes
+        </button>
+        <button className={tab === "catalog" ? "active" : ""} type="button" onClick={() => setTab("catalog")}>
+          <Library size={13} /> Catálogo
         </button>
       </div>
 
@@ -371,6 +375,10 @@ export function SettingsDrawer({
           </div>
         </div>
       )}
+
+      {tab === "catalog" ? (
+        <ModelCatalogPane />
+      ) : null}
       </aside>
     </div>
   );

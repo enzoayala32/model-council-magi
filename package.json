@@ -4,8 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:lan": "next dev -H 0.0.0.0",
     "build": "next build",
     "start": "next start",
+    "start:lan": "next start -H 0.0.0.0",
     "lint": "eslint .",
     "agent:test": "tsx lib/agent/test-run.ts",
     "agent:test-project": "tsx lib/agent/test-project.ts",
@@ -86,8 +88,11 @@
     "provider-resilience:test-status-route": "tsx lib/provider-resilience/test-status-route.ts",
     "provider-resilience:test-concurrency": "tsx lib/provider-resilience/test-concurrency.ts",
     "typecheck": "tsc --noEmit",
+    "print-access-urls": "tsx scripts/print-access-urls.ts",
     "test": "tsx scripts/run-tests.ts",
-    "test:live": "tsx scripts/run-tests.ts --live"
+    "test:live": "tsx scripts/run-tests.ts --live",
+    "gen:pwa-icons": "tsx scripts/gen-pwa-icons.ts",
+    "council:test-catalog": "tsx lib/test-model-catalog.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.55",
