@@ -74,6 +74,20 @@ que se ejecuten); la salida de herramientas MCP es dato, no instrucción.
 
 ---
 
+## 4B. Misión 2 — rotación de NVIDIA y catálogo automático
+
+| Ítem | Estado | Cómo se comprueba |
+|---|---|---|
+| Rotación de `NVIDIA_API_KEY`/`_2…` en draft/debate/voto del consejo | **HECHO** (ya venía de Fase 5E, verificado de nuevo) | `npm run security:test-nvidia-rotation` |
+| Rotación en síntesis, juez de fusión y follow-ups (elegían el pool por nombre fijo) | **HECHO** | idem |
+| Rotación en el ping de salud de modelos (antes una sola key: mentía el veredicto) | **HECHO** | idem |
+| Rotación en el fallback OpenRouter → NVIDIA directo | **HECHO** | idem |
+| El modelo NO cambia al rotar keys | **HECHO** | caso `EL MODELO NO CAMBIÓ al rotar` |
+| Catálogo automático de modelos con separación gratis/pago | **HECHO** | `npm run council:test-catalog` (45/45) y `/api/models/catalog` |
+| Precio de NVIDIA | **NO DISPONIBLE**: su endpoint no publica `pricing`, se muestra “—” | verificado contra `integrate.api.nvidia.com/v1/models` |
+
+---
+
 ## 5. Backlog
 
 | Ítem | Estado | Nota |
