@@ -93,7 +93,8 @@
     "test:live": "tsx scripts/run-tests.ts --live",
     "gen:pwa-icons": "tsx scripts/gen-pwa-icons.ts",
     "council:test-catalog": "tsx lib/test-model-catalog.ts",
-    "security:test-nvidia-rotation": "tsx lib/test-nvidia-rotation.ts"
+    "security:test-nvidia-rotation": "tsx lib/test-nvidia-rotation.ts",
+    "security:test-agent-sse": "tsx lib/test-agent-sse.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.55",

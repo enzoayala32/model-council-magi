@@ -7,8 +7,16 @@ const POLL_INTERVAL_MS = 400;
 
 /** Fase 3.3: comentario SSE (~15s) para que ni el proxy del túnel ni el
  *  navegador del teléfono cierren la conexión por inactividad. No lleva
- *  `event:` ni datos: es ignorada por el cliente y no ensucia el log. */
-const HEARTBEAT_MS = 15_000;
+ *  `event:` ni datos: es ignorada por el cliente y no ensucia el log.
+ *
+ *  `MAGI_SSE_HEARTBEAT_MS` lo sobreescribe — existe para que el test de
+ *  corte/reanudación pueda verificar el heartbeat sin esperar 15 segundos
+ *  reales. En producción no se define y quedan los 15s. */
+const HEARTBEAT_MS = (() => {
+  const raw = process.env.MAGI_SSE_HEARTBEAT_MS?.trim();
+  const parsed = raw ? Number(raw) : NaN;
+  return Number.isFinite(parsed) && parsed >= 50 ? parsed : 15_000;
+})();
 
 /** Mientras la task está en uno de estos estados puede seguir llegando
  * eventos nuevos — el stream se mantiene abierto. Cualquier otro estado
