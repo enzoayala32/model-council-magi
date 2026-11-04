@@ -175,3 +175,78 @@ export function classifyProviderError(input: ProviderErrorInput, now: number = D
   // pool, sin failover automático. Decisión abierta, ver informe de cierre.
   return { category: "UNKNOWN", retrySameKey: true, failoverCredential: false, poolAction: "NONE", allowModelFallback: false, retryAfterMs, reason: `unrecognized_status_${status}` };
 }
+
+/* =========================================================
+   Clasificador único de "la key no sirve" (401/403)
+   =========================================================
+   Antes esta decisión estaba duplicada, con dos regex escritas a mano y
+   ligeramente distintas, en `lib/model-ping.ts` y `lib/openrouter.ts`
+   (rama del fallback NVIDIA). Las dos se equivocaban de la misma forma:
+   comparaban el número 401/403 contra el texto sin delimitarlo, así que un
+   "HTTP 4010" se clasificaba como auth. Acá vive UNA sola vez.
+
+   Es puro y no importa nada: mira `status` numérico si el error lo trae
+   (los tres clientes del repo ya lanzan la misma clase con `.status`
+   normalizado) y, si no, cae al texto. Deliberadamente NO importa
+   `OpenRouterError` — duck typing sobre `{ status?: number }`, igual que
+   hace `council-run.ts` con `toProviderErrorInput`. */
+
+export type CredentialOutcome = "cooldown" | "invalid";
+
+/** Estado HTTP si el error lo expone (directo o anidado en `cause`). */
+function readStatusCode(error: unknown): number | null {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current && typeof current === "object"; depth += 1) {
+    const status = (current as { status?: unknown }).status;
+    if (typeof status === "number" && Number.isFinite(status)) return status;
+    const explicit = (current as { statusCode?: unknown }).statusCode;
+    if (typeof explicit === "number" && Number.isFinite(explicit)) return explicit;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return null;
+}
+
+function readMessage(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object" && typeof (error as { message?: unknown }).message === "string") {
+    return String((error as { message?: unknown }).message);
+  }
+  return "";
+}
+
+/** 401/403 como token completo dentro del texto (no `4010`, no `1401`). */
+function mentionsAuthStatus(text: string): boolean {
+  return /(?:^|[^0-9])(?:401|403)(?:[^0-9]|$)/.test(text);
+}
+
+/**
+ * Con qué outcome degradar la credential que produjo este error.
+ *
+ * `invalid` (permanente, no se reintenta) para 401, para 403 de auth y para
+ * 403 que no calza con nada — un 403 desconocido se trata como auth a
+ * propósito: es el caso conservador, coincides con `classify403` de arriba.
+ * `cooldown` (transitorio, se reintenta tras backoff) para todo lo demás:
+ * cuota conocida, 429, 5xx, timeouts, red.
+ */
+export function credentialOutcomeForError(error: unknown): CredentialOutcome {
+  const status = readStatusCode(error);
+  const message = readMessage(error);
+
+  if (status === 401) return "invalid";
+  if (status === 403) {
+    const kind = classify403(message);
+    // 403 de cuota es transitorio (se libera con el tiempo); auth y policy
+    // no tienen por qué liberarse.
+    return kind === "quota" ? "cooldown" : "invalid";
+  }
+
+  if (mentionsAuthStatus(message)) return "invalid";
+  if (includesAny(message, AUTH_HINTS)) return "invalid";
+  return "cooldown";
+}
+
+/** Atajo para los dos sitios que solo necesitan el booleano. */
+export function isAuthFailure(error: unknown): boolean {
+  return credentialOutcomeForError(error) === "invalid";
+}

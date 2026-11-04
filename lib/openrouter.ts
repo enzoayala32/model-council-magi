@@ -1,6 +1,7 @@
 import { openRouterHeaders } from "./http-headers";
 import { createNvidiaChatCompletion, mapToNvidiaModel } from "./nvidia";
 import { getProviderPool } from "./provider-resilience/registry";
+import { credentialOutcomeForError } from "./provider-resilience/classify";
 import {
   OpenRouterError,
   type OpenRouterMessage,
@@ -286,7 +287,7 @@ export async function createChatCompletion({
         console.error(`[openrouter] NVIDIA NIM direct fallback failed for ${nvidiaModelId}:`, message);
         // 401/403 = la key no sirve, no insita. Cualquier otro error (429,
         // 503, timeout) prueba la siguiente.
-        nvidiaPool.release(credentialId, /(?:^|[^0-9])(?:401|403)(?:[^0-9]|$)|invalid api key|unauthorized/i.test(message) ? "invalid" : "cooldown", Date.now(), undefined, healthGeneration);
+        nvidiaPool.release(credentialId, credentialOutcomeForError(nvidiaError), Date.now(), undefined, healthGeneration);
       }
     }
 

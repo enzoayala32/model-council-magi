@@ -1,6 +1,7 @@
 import { openRouterHeaders } from "./http-headers";
 import { getCouncilModel } from "./models";
 import { getProviderPool } from "@/lib/provider-resilience/registry";
+import { isAuthFailure } from "@/lib/provider-resilience/classify";
 import type { ProviderName } from "@/lib/provider-resilience/config";
 
 export type ModelPingResult = {
@@ -110,11 +111,15 @@ function isRetryablePingError(message: string): boolean {
 
 /**
  * 401/403 = la key no sirve: se marca inválida y se deja de insistir.
- * Exportado para poder fijar la clasificación en
- * `lib/test-nvidia-rotation.ts` sin necesidad de red.
+ *
+ * Ya no tiene lógica propia: delega en `isAuthFailure` de
+ * `provider-resilience/classify.ts`, que es el clasificador único (antes
+ * estaban duplicados acá y en `openrouter.ts`, con el bug de que
+ * comparaban 401/403 sin delimitar). Se mantiene el nombre para no tocar
+ * los call sites ni el test que lo fija.
  */
 export function isAuthPingError(message: string): boolean {
-  return /(?:^|[^0-9])(?:401|403)(?:[^0-9]|$)|invalid api key|unauthorized/i.test(message);
+  return isAuthFailure(message);
 }
 
 /** Un solo intento, con el timeout deliberadamente corto del ping. */

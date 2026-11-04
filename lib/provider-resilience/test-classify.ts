@@ -12,7 +12,7 @@
  *
  * Uso: npm run provider-resilience:test-classify
  */
-import { classifyProviderError, type ProviderErrorInput } from "./classify";
+import { classifyProviderError, credentialOutcomeForError, isAuthFailure, type ProviderErrorInput } from "./classify";
 import { computeCooldownMs } from "./cooldown";
 import { CredentialPool, type CredentialEntry } from "./pool";
 
@@ -201,6 +201,31 @@ function main(): void {
     const nextOpCursor = p.beginOperation();
     const nextPick = nextOpCursor.next(0);
     check("la siguiente operación arranca con las 3 igual de disponibles (nada heredado del incidente 503 anterior)", nextPick.status === "AVAILABLE", nextPick);
+  }
+
+  // ---- Clasificador único de 401/403 (`credentialOutcomeForError`) ----
+  console.log("\n== credentialOutcomeForError ==\n");
+  {
+    check("401 estructurado es invalid", credentialOutcomeForError({ status: 401, message: "x" }) === "invalid");
+    check("403 estructurado es invalid (por defecto conservador)", credentialOutcomeForError({ status: 403, message: "x" }) === "invalid");
+    check("403 de cuota conocido es cooldown", credentialOutcomeForError({ status: 403, message: "insufficient_quota" }) === "cooldown");
+    check("429 es cooldown (transitorio)", credentialOutcomeForError({ status: 429, message: "rate limited" }) === "cooldown");
+    check("500 es cooldown", credentialOutcomeForError({ status: 500, message: "boom" }) === "cooldown");
+    check("sin status conocido es cooldown", credentialOutcomeForError(new Error("algo raro")) === "cooldown");
+    check("isAuthFailure acompaña al outcome", isAuthFailure({ status: 401 }) && !isAuthFailure({ status: 429 }));
+
+    // Texto: el bug que tenían las dos regex duplicadas.
+    check("'HTTP 401' en texto es invalid", credentialOutcomeForError(new Error("HTTP 401")) === "invalid");
+    check("'HTTP 403' en texto es invalid", credentialOutcomeForError(new Error("HTTP 403")) === "invalid");
+    check("una frase de auth en texto es invalid", credentialOutcomeForError(new Error("Invalid API key provided")) === "invalid");
+    check("'HTTP 4010' NO es auth (numero delimitado)", credentialOutcomeForError(new Error("HTTP 4010")) === "cooldown");
+    check("'1401' suelto no es auth", credentialOutcomeForError(new Error("codigo 1401")) === "cooldown");
+    check("401 al final del string es auth", credentialOutcomeForError(new Error("failed: 401")) === "invalid");
+    check("401 al inicio del string es auth", credentialOutcomeForError(new Error("401 unauthorized")) === "invalid");
+    check("timeout en texto es cooldown", credentialOutcomeForError(new Error("request timed out")) === "cooldown");
+    check("string pelado 'HTTP 403' es invalid", credentialOutcomeForError("HTTP 403") === "invalid");
+    check("null/undefined no revienta", credentialOutcomeForError(null) === "cooldown" && credentialOutcomeForError(undefined) === "cooldown");
+    check("objeto sin status ni message es cooldown", credentialOutcomeForError({}) === "cooldown");
   }
 
   const passed = results.filter(Boolean).length;
