@@ -16,8 +16,14 @@ import type { TaskStatus } from "@/lib/agent/task-store";
  *
  * REGLA DE LA FASE: las acciones que MODIFICAN el proyecto (aplicar
  * cambios) quedan deshabilitadas hasta la Fase 4. Lo que sí se puede
- * hacer desde el teléfono es lo que no toca el proyecto: cancelar y
- * reanudar. Revisar propuestas es solo lectura.
+ * hacer desde el teléfono es lo que no toca el proyecto: cancelar (y ver
+ * propuestas, que es solo lectura).
+ *
+ * Corrección importante: NO existe "reanudar" en esta app. La tabla de
+ * transiciones de `lib/agent/task-store.ts`no da salida desde los estados
+ * terminales, y `RUNNING → QUEUED` es exclusiva de la reconciliación de
+ * boot (así lo dice su comentario). Reintentar una task fallida = crear
+ * una nueva con el mismo prompt, así que eso es lo que se ofrece.
  */
 
 type Task = {
@@ -41,7 +47,8 @@ type Proposal = {
 };
 
 const CANCELLABLE: TaskStatus[] = ["QUEUED", "RUNNING"];
-const RESUMABLE: TaskStatus[] = ["FAILED", "INTERRUPTED", "CANCELLED"];
+/** Estados desde los que tiene sentido reintentar creando una task nueva. */
+const RETRYABLE: TaskStatus[] = ["FAILED", "INTERRUPTED", "CANCELLED"];
 
 export default function MobileTaskDetail() {
   const params = useParams<{ id: string }>();
@@ -50,7 +57,7 @@ export default function MobileTaskDetail() {
   const [task, setTask] = useState<Task | null>(null);
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [status, setStatus] = useState<TaskStatus | null>(null);
-  const [busy, setBusy] = useState<"" | "cancel" | "resume">("");
+  const [busy, setBusy] = useState<"" | "cancel">("");
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
 
@@ -86,7 +93,7 @@ export default function MobileTaskDetail() {
     },
   });
 
-  async function act(kind: "cancel" | "resume") {
+  async function act(kind: "cancel") {
     setBusy(kind);
     setError("");
     setNote("");
@@ -96,7 +103,7 @@ export default function MobileTaskDetail() {
         const data = (await res.json().catch(() => null)) as { error?: string } | null;
         throw new Error(data?.error ?? "No se pudo completar la acción.");
       }
-      setNote(kind === "cancel" ? "Cancelación pedida." : "Reanudación pedida.");
+      setNote("Cancelación pedida.");
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falló la acción.");
@@ -137,10 +144,15 @@ export default function MobileTaskDetail() {
                 {busy === "cancel" ? "Cancelando…" : "Cancelar"}
               </button>
             ) : null}
-            {task && RESUMABLE.includes(task.status) ? (
-              <button type="button" className="mBtn primary" disabled={busy !== ""} onClick={() => act("resume")}>
-                {busy === "resume" ? "Reanudando…" : "Reanudar"}
-              </button>
+            {task && RETRYABLE.includes(task.status) ? (
+              // No hay "reanudar" en el servidor: se lleva el prompt a la
+              // pantalla de creación, que es el mecanismo real.
+              <Link
+                className="mBtn primary"
+                href={`/m/tasks/new?prompt=${encodeURIComponent(task.prompt)}&modelId=${encodeURIComponent(task.modelId)}&projectId=${encodeURIComponent(task.projectId)}`}
+              >
+                Reintentar
+              </Link>
             ) : null}
           </div>
 

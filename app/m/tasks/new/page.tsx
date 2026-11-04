@@ -1,9 +1,26 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { MobileNav } from "../../../components/mobile/mobile-nav";
+
+/** `useSearchParams` exige un Suspense boundary en una página prerenderizada
+ *  (Next falla el build si no). El formulario vive adentro; acá solo el
+ *  esqueleto de carga. */
+function NewTaskFallback() {
+  return (
+    <div className="mShell">
+      <header className="mHeader">
+        <div>
+          <span className="mBrand">Consenso IA</span>
+          <h1>Nueva tarea</h1>
+        </div>
+      </header>
+      <p className="mEmpty">Cargando…</p>
+    </div>
+  );
+}
 
 /**
  * Fase 3.2 — crear una task desde el teléfono.
@@ -17,13 +34,20 @@ import { MobileNav } from "../../../components/mobile/mobile-nav";
 type MobileProject = { id: string; name: string; path: string };
 type AgentModel = { id: string; label: string; defaultSelected?: boolean };
 
-export default function MobileNewTask() {
+function MobileNewTaskForm() {
   const router = useRouter();
+  // Desde el detalle de una task fallida se llega con el prompt precargado
+  // (no hay "reanudar" en el servidor: reintentar = crear una nueva).
+  const searchParams = useSearchParams();
+  const prefillPrompt = searchParams.get("prompt") ?? "";
+  const prefillModelId = searchParams.get("modelId") ?? "";
+  const prefillProjectId = searchParams.get("projectId") ?? "";
+
   const [projects, setProjects] = useState<MobileProject[]>([]);
   const [models, setModels] = useState<AgentModel[]>([]);
-  const [projectId, setProjectId] = useState("");
-  const [modelId, setModelId] = useState("");
-  const [prompt, setPrompt] = useState("");
+  const [projectId, setProjectId] = useState(prefillProjectId);
+  const [modelId, setModelId] = useState(prefillModelId);
+  const [prompt, setPrompt] = useState(prefillPrompt);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -36,8 +60,10 @@ export default function MobileNewTask() {
         ]);
         setProjects(projectRes.projects ?? []);
         setModels(modelRes.models ?? []);
-        if (projectRes.projects?.length) setProjectId(projectRes.projects[0].id);
-        if (modelRes.models?.length) {
+        // Si viene con valores precargados se respetan; si no, se cae a los
+        // defaults (primer proyecto, modelo marcado como defaultSelected).
+        if (!prefillProjectId && projectRes.projects?.length) setProjectId(projectRes.projects[0].id);
+        if (!prefillModelId && modelRes.models?.length) {
           const preferred = modelRes.models.find((m: AgentModel) => m.defaultSelected) ?? modelRes.models[0];
           setModelId(preferred.id);
         }
@@ -122,5 +148,13 @@ export default function MobileNewTask() {
 
       <MobileNav active="new" />
     </div>
+  );
+}
+
+export default function MobileNewTask() {
+  return (
+    <Suspense fallback={<NewTaskFallback />}>
+      <MobileNewTaskForm />
+    </Suspense>
   );
 }
