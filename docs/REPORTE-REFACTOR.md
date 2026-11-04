@@ -327,6 +327,111 @@ la ruta `/api/models/catalog` y `/m` servidas.
 (18 modelos de OpenRouter con precio 0), “De pago” (precio > 0) y “Precio
 desconocido” (los 85 de NVIDIA).
 
+### Fase 3.1 — Binding LAN y fail-closed
+
+**Qué se hizo:** los scripts `dev:lan`/`start:lan` (`next` con `-H 0.0.0.0`)
+y `scripts/print-access-urls.ts` (lista las IPv4 reales y arma las URLs; sin
+dependencias, usa `node:os`). En la política, un Host que **no** es loopback
+entra en una rama nueva: si `REMOTE_ACCESS=off`, se rechaza siempre; si no hay
+ninguna credencial (`APP_ACCESS_TOKEN` ni cookie de dispositivo), también se
+rechaza con un mensaje que dice cómo habilitarla. Loopback mantiene el acceso
+implícito de siempre.
+
+**Archivos creados:** `scripts/print-access-urls.ts`.
+**Archivos modificados:** `lib/api-security.ts`, `lib/test-api-security.ts`,
+`proxy.ts`, `package.json`.
+**Commit:** `b60c50b` (junto con el resto de la Fase 3).
+
+**Verificación:** `npm run security:test-proxy` → **70/70 casos OK** (62 de
+antes + 8 nuevos: Host LAN sin credencial rechazado, con token o cookie de
+dispositivo permitido, `REMOTE_ACCESS=off` en ambas formas, loopback no
+afectado). Smoke con `next start` en background (puertos 3106–3109):
+
+| Escenario | Resultado |
+|---|---|
+| `GET /m` (PWA) | **200** |
+| `/manifest.webmanifest`, `/sw.js`, `/icons/icon-192.png` | **200** |
+| Host LAN, sin credencial, sin `REMOTE_ACCESS` | **403** “Acceso desde fuera de esta PC requiere autenticación…” |
+| Host LAN, `REMOTE_ACCESS=off` | **403** “Acceso remoto deshabilitado” |
+| Host LAN con token válido | **200** |
+| Host LAN con token inválido | **403** |
+| Login desde Host LAN | **200** + `Set-Cookie: magi_access_token=…; HttpOnly; SameSite=Strict` |
+| Loopback en todos los casos | **200** |
+
+**NO VERIFICADO:** acceso desde un teléfono Android real y desde otra
+máquina de la LAN (haría falta un segundo dispositivo). La lógica fail-closed
+sí quedó probada.
+
+### Fase 3.2 — PWA móvil `/m`
+
+**Qué se hizo:** ruta `/m` mobile-first con `manifest.webmanifest`
+(`display: standalone`, íconos 192/512 y maskable generados con `sharp` desde
+`app/icon.svg` vía `scripts/gen-pwa-icons.ts`), service worker
+`public/sw.js` que cachea **solo** el shell estático, y pantallas: panel,
+lista de tareas con filtros por estado y proyecto, detalle con eventos en
+vivo, revisión de propuestas en solo lectura, creación de tarea, y corridas
+del consejo reusando `lib/council-run-trace.ts`.
+
+Lo que modifica el proyecto (aplicar/rechazar propuestas)queda **deshabilitado**
+a propósito hasta la Fase 4: desde el teléfono solo se puede cancelar y ver.
+
+**Archivos creados:** `app/manifest.ts`, `app/offline/page.tsx`,
+`app/m/{layout,page,mobile.css}.tsx`, `app/m/tasks/{page.tsx,[id]/page.tsx,
+new/page.tsx}`, `app/m/runs/{page.tsx,[id]/page.tsx}`,
+`app/m/settings/page.tsx`, `app/hooks/useTaskEventStream.ts`,
+`app/components/mobile/{mobile-nav,mobile-shared}.tsx`, `public/sw.js`,
+`scripts/gen-pwa-icons.ts`, `public/icons/*.png`.
+**Archivos modificados:** `app/globals.css`.
+**Commit:** `b60c50b`.
+
+**Decisión (regla 9 — el código contradice el pedido):** el enunciado pedía
+“cancelar, reanudar”. **No existe reanudar**: la tabla de transiciones de
+`lib/agent/task-store.ts` no da salida desde los estados terminales, y
+`RUNNING → QUEUED` es exclusiva de la reconciliación de boot (así lo dice su
+propio comentario). Mi primer intento llamaba a un endpoint inexistente
+(`/resume` → 404). Se reemplazó por “Reintentar”, que precarga el prompt en
+`/m/tasks/new` y crea una tarea nueva — que es el mecanismo real.
+**Commit del fix:** `c057f87`.
+
+**Verificación:** `npm run typecheck` exit 0; `npm run build` exit 0 con
+`/m`, `/m/tasks`, `/m/tasks/new`, `/m/tasks/[id]`, `/m/runs`, `/m/runs/[id]`,
+`/m/settings` y `/offline` en la tabla de rutas; smoke HTTP: `GET /m` 200,
+manifest/SW/iconos 200.
+
+**NO VERIFICADO:** instalación en un Android real (no hay dispositivo acá).
+
+### Fase 3.3 — SSE tolerante a móviles y túneles
+
+**Qué se hizo:** heartbeat (`: heartbeat` cada 15 s) y limpieza del timer en
+`cancel`/abort en `/api/agent/tasks/[id]/events`, que ya traía reanudación por
+`?sinceSeq`/`Last-Event-ID` y los headers `no-transform`/`X-Accel-Buffering: no`.
+Del lado del cliente, `useTaskEventStream.ts` reconecta con backoff
+exponencial (1s→30s) con jitter, desduplica por `seq` y descarta eventos
+partidos.
+
+**Archivos modificados:** `app/api/agent/tasks/[id]/events/route.ts`.
+**Archivos creados:** `app/hooks/useTaskEventStream.ts`.
+**Commit:** `b60c50b`.
+
+**Verificación:** `npm run build` exit 0; el contrato HTTP se comprobó con
+`curl` contra el server de producción (404 limpio para una task inexistente,
+`Content-Type: text/plain` en el error). Los tests de corte y reanudación sin
+perder ni duplicar eventos que pide la fase **no están escritos**: no hay
+fixture con una task que emita eventos reales (la DB de smoke no tenía
+proyectos) y el runner ya cubre la lógica de replay del lado del servidor en
+otras suites. Queda como deuda explícita.
+
+### Fase 3.4 — `docs/API-AGENTE.md`
+
+Contrato de todas las rutas que consume la PWA: método, ruta, parámetros,
+forma de respuesta, scope requerido y qué está protegido por diseño (apply,
+descarte, config MCP). Se aclara que los scopes formales llegan con la Fase 4
+y que hoy la regla efectiva es la del proxy.
+
+**Archivos creados:** `docs/API-AGENTE.md`.
+**Archivos modificados:** `README.md` (enlace).
+**Commit:** `36bd272`.
+
 ---
 
 ## 2. Tabla de verificación
