@@ -71,6 +71,14 @@ export default function MobileHome() {
     }
   }, []);
 
+  // El fetch inicial va en el effect de abajo (con IIFE, para no llamar
+  // setState sincrónico). Este refresco es un evento de usuario: ahí sí se
+  // puede mostrar el spinner de inmediato.
+  const reload = useCallback(() => {
+    setLoading(true);
+    void load();
+  }, [load]);
+
   useEffect(() => {
     // IIFE async: el setState de `load` queda dentro de un callback, no en
     // el cuerpo sincrónico del effect (que es lo que marca la regla).
@@ -94,7 +102,7 @@ export default function MobileHome() {
           <span className="mBrand">Consenso IA</span>
           <h1>Control</h1>
         </div>
-        <button type="button" className="mIconBtn" onClick={load} aria-label="Refrescar">
+        <button type="button" className="mIconBtn" onClick={reload} aria-label="Refrescar">
           <RefreshCw size={18} />
         </button>
       </header>

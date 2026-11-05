@@ -61,6 +61,7 @@ const OFFLINE_EXACT = [
   "security:test-token-route",
   "security:test-nvidia-rotation",
   "security:test-agent-sse",
+  "security:test-task-stream-reducer",
 ];
 
 const liveSet = new Set<string>(LIVE_SCRIPTS);

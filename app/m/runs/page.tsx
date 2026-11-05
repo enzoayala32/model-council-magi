@@ -34,6 +34,14 @@ export default function MobileRuns() {
     }
   }, []);
 
+  // El fetch inicial va en el effect de abajo (con IIFE, para no llamar
+  // setState sincrónico). Este refresco es un evento de usuario: ahí sí se
+  // puede mostrar el spinner de inmediato.
+  const reload = useCallback(() => {
+    setLoading(true);
+    void load();
+  }, [load]);
+
   useEffect(() => {
     // IIFE async: el setState de `load` corre dentro de un callback, no en
     // el cuerpo sincrónico del effect — que es exactamente lo que pide
@@ -51,7 +59,7 @@ export default function MobileRuns() {
           <span className="mBrand">Consenso IA</span>
           <h1>Corridas</h1>
         </div>
-        <button type="button" className="mIconBtn" onClick={load} aria-label="Refrescar">
+        <button type="button" className="mIconBtn" onClick={reload} aria-label="Refrescar">
           <RefreshCw size={18} />
         </button>
       </header>
