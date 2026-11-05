@@ -30,6 +30,19 @@ import { POST as createTaskRoute } from "../../app/api/agent/tasks/route";
 import { GET as listModelsRoute } from "../../app/api/agent/models/route";
 import type { AgentLoopResult } from "./loop";
 
+/**
+ * Request como lo arma el server: CON header Host. Sin el, `authorize`
+ * (Fase 4b) no puede saber que es loopback y lo trata como remoto — que es
+ * a proposito, fail-closed. Estos tests llaman los handlers directo, asi que
+ * tienen que simular el header que en producción pone la capa HTTP.
+ */
+function localRequest(url: string, init?: RequestInit): Request {
+  const headers = new Headers(init?.headers);
+  if (!headers.has("host")) headers.set("host", "localhost:3000");
+  return new Request(url, { ...init, headers });
+}
+
+
 const execFileAsync = promisify(execFile);
 
 function sleep(ms: number) {
@@ -180,7 +193,7 @@ async function main() {
     const modelId: string = modelsBody.models[0].id;
 
     const jsonReq = (prompt: string) =>
-      new Request("http://localhost/api/agent/tasks", {
+      localRequest("http://localhost/api/agent/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId: project.id, modelId, prompt }),

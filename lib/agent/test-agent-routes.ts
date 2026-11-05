@@ -34,6 +34,19 @@ import { GET as getEventsRoute } from "../../app/api/agent/tasks/[id]/events/rou
 import { POST as discardRoute } from "../../app/api/agent/tasks/[id]/discard/route";
 import { POST as cancelRoute } from "../../app/api/agent/tasks/[id]/cancel/route";
 
+/**
+ * Request como lo arma el server: CON header Host. Sin el, `authorize`
+ * (Fase 4b) no puede saber que es loopback y lo trata como remoto — que es
+ * a proposito, fail-closed. Estos tests llaman los handlers directo, asi que
+ * tienen que simular el header que en producción pone la capa HTTP.
+ */
+function localRequest(url: string, init?: RequestInit): Request {
+  const headers = new Headers(init?.headers);
+  if (!headers.has("host")) headers.set("host", "localhost:3000");
+  return new Request(url, { ...init, headers });
+}
+
+
 const execFileAsync = promisify(execFile);
 
 async function makeGitProject(name: string): Promise<string> {
@@ -48,7 +61,7 @@ async function makeGitProject(name: string): Promise<string> {
 }
 
 function jsonRequest(url: string, method: string, body?: unknown): Request {
-  return new Request(url, {
+  return localRequest(url, {
     method,
     headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -159,7 +172,7 @@ async function main() {
   appendEvent(task.id, { type: "text", text: "arrancando" });
   appendEvent(task.id, { type: "tool_call", toolName: "read_file", input: { path: "a.ts" } });
 
-  const getTaskBody = await readJson<{ ok: boolean; task: { status: string } }>(await getTaskRoute(new Request("http://localhost"), { params: Promise.resolve({ id: task.id }) }));
+  const getTaskBody = await readJson<{ ok: boolean; task: { status: string } }>(await getTaskRoute(localRequest(`http://localhost/api/agent/tasks/${task.id}`), { params: Promise.resolve({ id: task.id }) }));
   const ok4a = getTaskBody.ok === true && getTaskBody.task.status === "RUNNING";
   console.log(ok4a ? "✅ GET /api/agent/tasks/[id] refleja RUNNING." : `❌ Falló. ${JSON.stringify(getTaskBody)}`);
   results.push(ok4a);
@@ -167,7 +180,7 @@ async function main() {
   // Primera conexión SSE ("abrí la task por primera vez") — debe traer los
   // 3 eventos ya emitidos: el status_change QUEUED→RUNNING (que emite
   // `transitionAndLog` solo, seq 0) + los 2 que agregamos a mano (seq 1 y 2).
-  const sseReq1 = new Request(`http://localhost/api/agent/tasks/${task.id}/events`);
+  const sseReq1 = localRequest(`http://localhost/api/agent/tasks/${task.id}/events`);
   const sseRes1 = await getEventsRoute(sseReq1, { params: Promise.resolve({ id: task.id }) });
   const reader1 = sseRes1.body!.getReader();
   const { chunks: chunks1 } = await readSseUntil(reader1, (chunks) => chunks.some((c) => c.event === "task"));
@@ -184,7 +197,7 @@ async function main() {
   // "Reabrir el navegador" MIENTRAS la task sigue RUNNING: una conexión
   // nueva e independiente, SIN sinceSeq, tiene que traer el historial
   // COMPLETO de nuevo — no perder nada, no depender de la primera conexión.
-  const sseReq2 = new Request(`http://localhost/api/agent/tasks/${task.id}/events`);
+  const sseReq2 = localRequest(`http://localhost/api/agent/tasks/${task.id}/events`);
   const sseRes2 = await getEventsRoute(sseReq2, { params: Promise.resolve({ id: task.id }) });
   const reader2 = sseRes2.body!.getReader();
   const { chunks: chunks2 } = await readSseUntil(reader2, (chunks) => chunks.some((c) => c.event === "task"));
@@ -226,7 +239,7 @@ async function main() {
   results.push(eventuallyDone || streamDone);
 
   // --- Caso 5: GET proposals refleja applied/conflict ---
-  const proposalsBody = await readJson<{ ok: boolean; proposals: Array<{ applied: boolean; conflict: boolean; relPath: string }> }>(await getProposalsRoute(new Request("http://localhost"), { params: Promise.resolve({ id: task.id }) }));
+  const proposalsBody = await readJson<{ ok: boolean; proposals: Array<{ applied: boolean; conflict: boolean; relPath: string }> }>(await getProposalsRoute(localRequest(`http://localhost/api/agent/tasks/${task.id}/proposals`), { params: Promise.resolve({ id: task.id }) }));
   const ok5 = proposalsBody.ok === true && proposalsBody.proposals.length === 1 && proposalsBody.proposals[0].applied === false && proposalsBody.proposals[0].conflict === false && proposalsBody.proposals[0].relPath === "a.ts";
   console.log(ok5 ? "✅ GET proposals devuelve la proposal con applied/conflict en false." : `❌ Falló. ${JSON.stringify(proposalsBody)}`);
   results.push(ok5);
@@ -234,32 +247,32 @@ async function main() {
   // --- Caso 6: discard — rechazo fuera de READY_FOR_REVIEW, éxito en READY_FOR_REVIEW ---
   console.log("\n--- Caso 6: POST discard ---");
   const otherTask = createTask({ projectId, modelId, prompt: "otra tarea, sigue en QUEUED" });
-  const discardQueuedRes = await discardRoute(new Request("http://localhost", { method: "POST" }), { params: Promise.resolve({ id: otherTask.id }) });
+  const discardQueuedRes = await discardRoute(localRequest(`http://localhost/api/agent/tasks/${otherTask.id}/discard`, { method: "POST" }), { params: Promise.resolve({ id: otherTask.id }) });
   const ok6a = discardQueuedRes.status === 409;
   console.log(ok6a ? "✅ Descartar una task en QUEUED (no READY_FOR_REVIEW) → 409." : `❌ Falló. status=${discardQueuedRes.status}`);
   results.push(ok6a);
 
-  const discardReadyRes = await discardRoute(new Request("http://localhost", { method: "POST" }), { params: Promise.resolve({ id: task.id }) });
+  const discardReadyRes = await discardRoute(localRequest(`http://localhost/api/agent/tasks/${task.id}/discard`, { method: "POST" }), { params: Promise.resolve({ id: task.id }) });
   const discardReadyBody = await readJson<{ task: { status: string; discardReason: string } }>(discardReadyRes);
   const ok6b = discardReadyRes.status === 200 && discardReadyBody.task.status === "DISCARDED" && discardReadyBody.task.discardReason === "user";
   console.log(ok6b ? "✅ Descartar una task en READY_FOR_REVIEW → 200, status=DISCARDED." : `❌ Falló. ${JSON.stringify(discardReadyBody)}`);
   results.push(ok6b);
 
-  const discardAgainRes = await discardRoute(new Request("http://localhost", { method: "POST" }), { params: Promise.resolve({ id: task.id }) });
+  const discardAgainRes = await discardRoute(localRequest(`http://localhost/api/agent/tasks/${task.id}/discard`, { method: "POST" }), { params: Promise.resolve({ id: task.id }) });
   const ok6c = discardAgainRes.status === 409;
   console.log(ok6c ? "✅ Descartar de nuevo una task ya DISCARDED → 409 (no se puede dos veces)." : `❌ Falló. status=${discardAgainRes.status}`);
   results.push(ok6c);
 
   // --- Caso 7: cancel best-effort cuando no hay corrida activa en memoria ---
   console.log("\n--- Caso 7: POST cancel sin corrida activa en memoria ---");
-  const cancelRes = await cancelRoute(new Request("http://localhost", { method: "POST" }), { params: Promise.resolve({ id: otherTask.id }) });
+  const cancelRes = await cancelRoute(localRequest(`http://localhost/api/agent/tasks/${otherTask.id}/cancel`, { method: "POST" }), { params: Promise.resolve({ id: otherTask.id }) });
   const cancelBody = await readJson<{ ok: boolean; cancelled: boolean }>(cancelRes);
   const ok7 = cancelRes.status === 200 && cancelBody.ok === true && cancelBody.cancelled === false;
   console.log(ok7 ? "✅ Cancelar una task sin proceso activo en memoria → 200, cancelled=false (no es un error)." : `❌ Falló. ${JSON.stringify(cancelBody)}`);
   results.push(ok7);
 
   // --- Caso 8: GET tasks filtrado por projectId ---
-  const listTasksRes = await listTasksRoute(new Request(`http://localhost/api/agent/tasks?projectId=${projectId}`));
+  const listTasksRes = await listTasksRoute(localRequest(`http://localhost/api/agent/tasks?projectId=${projectId}`));
   const listTasksBody = await readJson<{ ok: boolean; tasks: Array<{ projectId: string }> }>(listTasksRes);
   const ok8 = listTasksBody.ok === true && listTasksBody.tasks.length >= 2 && listTasksBody.tasks.every((t: { projectId: string }) => t.projectId === projectId);
   console.log(ok8 ? `✅ GET tasks?projectId= devuelve ${listTasksBody.tasks.length} tasks, todas del proyecto correcto.` : `❌ Falló. ${JSON.stringify(listTasksBody)}`);
@@ -273,21 +286,21 @@ async function main() {
   const project9Id: string = project9Body.project.id;
   const activeTask9 = createTask({ projectId: project9Id, modelId, prompt: "tarea todavía en curso" });
 
-  const deleteWhileActiveRes = await deleteProjectRoute(new Request("http://localhost", { method: "DELETE" }), { params: Promise.resolve({ id: project9Id }) });
+  const deleteWhileActiveRes = await deleteProjectRoute(localRequest(`http://localhost/api/agent/projects/${project9Id}`, { method: "DELETE" }), { params: Promise.resolve({ id: project9Id }) });
   const ok9a = deleteWhileActiveRes.status === 409;
   console.log(ok9a ? "✅ Con una task QUEUED todavía activa → 409, no se archiva." : `❌ Falló. status=${deleteWhileActiveRes.status}`);
   results.push(ok9a);
 
   transitionAndLog(activeTask9.id, "RUNNING");
   transitionAndLog(activeTask9.id, "FAILED", { error: "cancelada para el test" });
-  const deleteOkRes = await deleteProjectRoute(new Request("http://localhost", { method: "DELETE" }), { params: Promise.resolve({ id: project9Id }) });
+  const deleteOkRes = await deleteProjectRoute(localRequest(`http://localhost/api/agent/projects/${project9Id}`, { method: "DELETE" }), { params: Promise.resolve({ id: project9Id }) });
   const deleteOkBody = await readJson<{ ok: boolean }>(deleteOkRes);
   const listAfterDelete = await readJson<{ projects: Array<{ id: string }> }>(await listProjectsRoute());
   const ok9b = deleteOkRes.status === 200 && deleteOkBody.ok === true && !listAfterDelete.projects.some((p: { id: string }) => p.id === project9Id);
   console.log(ok9b ? "✅ Sin tasks activas → 200, y desaparece del listado (queda archivado, no borrado)." : `❌ Falló. ${JSON.stringify(deleteOkBody)}`);
   results.push(ok9b);
 
-  const deleteMissingRes = await deleteProjectRoute(new Request("http://localhost", { method: "DELETE" }), { params: Promise.resolve({ id: "no-existe" }) });
+  const deleteMissingRes = await deleteProjectRoute(localRequest("http://localhost/api/agent/projects/no-existe", { method: "DELETE" }), { params: Promise.resolve({ id: "no-existe" }) });
   const ok9c = deleteMissingRes.status === 404;
   console.log(ok9c ? "✅ Proyecto inexistente → 404." : `❌ Falló. status=${deleteMissingRes.status}`);
   results.push(ok9c);

@@ -63,6 +63,7 @@ const OFFLINE_EXACT = [
   "security:test-agent-sse",
   "security:test-task-stream-reducer",
   "security:test-devices",
+  "security:test-route-scopes",
 ];
 
 const liveSet = new Set<string>(LIVE_SCRIPTS);

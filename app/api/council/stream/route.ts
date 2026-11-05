@@ -1,4 +1,6 @@
+import { NextResponse } from "next/server";
 import { readJsonBody } from "@/lib/api-json";
+import { requireScope } from "@/lib/auth/authorize";
 import { runCouncilStream } from "@/lib/council-orchestrator";
 import { createCouncilRunRecorder } from "@/lib/council-run-store";
 import { logStep } from "@/lib/council-run";
@@ -20,6 +22,13 @@ export async function POST(request: Request) {
   const parsed = await readJsonBody<StreamRequest>(request);
   if (!parsed.ok) return parsed.response;
   const body = parsed.body;
+
+  // Fase 4b: autorizacion ANTES de abrir el stream. Un 403 despues de
+  // haber empezado a streamear seria un 200 con error adentro.
+  const guard = requireScope({ method: "POST", pathname: new URL(request.url).pathname, request });
+  if (!guard.ok) {
+    return NextResponse.json({ ok: false, error: guard.error, reason: guard.reason }, { status: guard.status });
+  }
 
   const encoder = new TextEncoder();
 

@@ -6,6 +6,7 @@
  *
  * Uso: npm run security:test-devices
  */
+import { mkdtempSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -41,6 +42,16 @@ import {
   recordSuccess,
 } from "./auth/rate-limit";
 import { countAuditLog, listAuditLog, pruneAuditLog, recordAudit } from "./auth/audit";
+
+// Aislamiento tambien FUERA del runner: si nadie fijo MAGI_DATA_DIR, se crea
+// un temporal. `lib/db.ts` resuelve el directorio dentro de `getDb()` (no como
+// constante de modulo), asi que ponerlo acalcanza con ponerlo antes de la
+// primera consulta — incluso aunque los imports estaticos ya hayan cargado el
+// modulo. Sin esto, correr este test a mano escribia en data/council.db real.
+if (!process.env.MAGI_DATA_DIR) {
+  process.env.MAGI_DATA_DIR = mkdtempSync(path.join(os.tmpdir(), "magi-auth-test-"));
+}
+
 
 let passed = 0;
 let failed = 0;
