@@ -56,7 +56,11 @@ proyecto.
 | 3.4 `docs/API-AGENTE.md` | **HECHO** |
 | Instalar en Android real / entrar desde otra máquina | **NO VERIFICADO** (sin dispositivo) |
 | Nota: no existe "reanudar" en el servidor; reintentar = crear task nueva | **HECHO** |
-| 4 | Emparejamiento por QR, tokens de dispositivo hasheados, scopes (`observe`/`operate`/`approve`), TOTP para step-up, auditoría, pantallas Dispositivos y Actividad, kill switch | **PENDIENTE** |
+| 4a Tablas + canje con rate limiting + cookie de dispositivo + auditoría | **HECHO** |
+| 4b Scopes `observe`/`operate`/`approve` + autorización central + test de cobertura de rutas | **HECHO** |
+| 4c Step-up TOTP para aprobar desde remoto | **PENDIENTE** |
+| 4d UI de Dispositivos y Actividad + kill switch `REMOTE_ACCESS=off` | **PENDIENTE** |
+| Nota: hasta 4c, `apply`/`discard` desde remoto quedan bloqueados a propósito | **HECHO** |
 | 5 | Acceso remoto documentado (Tailscale recomendado, Cloudflare Tunnel alternativa, port-forward desaconsejado) + `npm run doctor:remote` | **PENDIENTE** |
 | 6 | Notificaciones push (Web Push/VAPID) con preferencias por dispositivo y coalescencia | **PENDIENTE** |
 
