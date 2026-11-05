@@ -536,9 +536,90 @@ enormes y deduplicación de `opened` repetido.
 **Verificación:** `npm run typecheck` exit 0; `npm run lint` 0 errores /
 37 warnings; `npm test` **75/75 OK**; `npm run build` exit 0.
 
----
+### Fase 4a — Emparejamiento, dispositivos y auditoría
 
-## 2. Tabla de verificación
+**Commit:** `5eb0c34` — `fase 4a: emparejamiento con rate limiting, cookie de
+dispositivo opaca y auditoria`.
+
+**Qué se hizo:**
+
+- **Tablas aditivas** en `lib/db.ts`: `devices`, `pairing_codes`, `audit_log` y
+  `device_totp` (esta última para el step-up de 4c, creada ya para no volver a
+  tocar el schema). Todas con `CREATE TABLE IF NOT EXISTS`, **sin subir
+  `SCHEMA_VERSION`**.
+- **Tokens hasheados, nunca en claro:** `lib/auth/devices.ts` guarda
+  `token_hash` = SHA-256 hex de un token de 256 bits aleatorio. El valor en
+  claro se devuelve **una sola vez** al crear el dispositivo; después no hay
+  nada de dónde recuperarlo. La cookie viaja con el token (es un secreto del
+  cliente), pero lo que se compara en cada request es el hash, y revocar el
+  dispositivo la deja inservible.
+- **Scopes cerrados** (`observe`/`operate`/`approve`) validados contra una
+  lista: un typo no puede crear un nivel inexistente. Un scope corrupto en la
+  DB cae al más restrictivo.
+- **Códigos de emparejamiento** (`lib/auth/pairing.ts`): un solo uso (el
+  `UPDATE` es condicional sobre `used_at IS NULL`, así que dos canjes
+  simultáneos dejan pasar uno), expiran en 5 minutos, y también se guardan
+  hasheados. Mensajes de error genéricos: no filtra si el código existía,
+  expiró o ya se usó.
+- **Rate limiting estricto con bloqueo progresivo** (`lib/auth/rate-limit.ts`):
+  5 intentos por minuto por IP; cada fallo posterior duplica la penalización
+  con tope de 1 hora. Un éxito limpia el medidor.
+- **Cookie de dispositivo** (`lib/auth/cookie.ts`): `HttpOnly`,
+  `SameSite=Strict`, `Path=/`, `Max-Age` 90 días, `Secure` solo si la request
+  vino por HTTPS.
+- **Auditoría** (`lib/auth/audit.ts`): acciones mutantes, aprobaciones,
+  emparejamientos y fallos de autenticación. `recordAudit` **nunca lanza** y
+  recorta el detalle a 200 caracteres. Nunca se guardan tokens, códigos,
+  prompts ni contenido de archivos.
+- **`POST /api/auth/token`** (el flujo de la Fase 1.2) queda **marcado como en
+  retirada**: ahora tiene rate limiting y bloqueo progresivo, y el reporte lo
+  documenta como reemplazado por el emparejamiento. La diferencia de fondo:
+  su cookie comparte el secreto del servidor y no es revocable
+  individualmente, por eso no otorga scope.
+
+**Archivos creados:** `lib/auth/{devices,pairing,rate-limit,cookie,
+cookie-parse,audit}.ts`, `lib/test-auth-devices.ts`,
+`app/api/pairing/route.ts`, `app/api/pairing/redeem/route.ts`.
+**Archivos modificados:** `lib/db.ts`, `app/api/auth/token/route.ts`,
+`package.json`, `scripts/run-tests.ts`.
+
+**Verificación:** `npm run security:test-devices` → **81/81 casos OK**.
+`npm run typecheck` exit 0; `npm run lint` 0 errores / 37 warnings;
+`npm test` **76/76 OK**; `npm run build` exit 0.
+
+Smoke con `next start` en `:3110` (`APP_ACCESS_TOKEN` definido, Host de LAN
+permitido), todo con `curl`:
+
+| Escenario | Resultado |
+|---|---|
+| Generar código sin sesión | **403** (el proxy exige token antes que nada) |
+| Login con token inválido ×6 | **403**, y el 7º **429** (bloqueo progresivo) |
+| Login con token válido | **200** + `Set-Cookie` |
+| Canje desde Host de LAN con credencial | **200** + `Set-Cookie: magi_device_token=…; HttpOnly; SameSite=Strict` |
+| Segundo canje del mismo código | **403** genérico (un solo uso) |
+| Fuerza bruta de códigos (6 fallos) | **429** a partir del 6º |
+
+### Incidente: 45 dispositivos de prueba en la DB del usuario
+
+**Qué pasó:** mientras desarrollaba 4a corrí `npm run
+security:test-devices` **a mano**, sin el runner. En ese momento la variable
+`MAGI_DATA_DIR` no estaba puesta y el test hacía `chdir` a un temporal…
+pero `lib/db.ts` cargaba por los **imports estáticos** de
+`lib/auth/devices.ts` antes del `chdir`, y congelaba `DATA_DIR` en el momento
+de la carga. Resultado: 45 dispositivos y 1 código de emparejamiento de
+prueba en el `data/council.db` real.
+
+**No es un problema de seguridad** (los tokens se descartaron, son
+irrecuperables) pero ensucia la lista. **No los borré**: es la DB del usuario
+y borrar filas es destructivo; cuando la pantalla de Dispositivos de 4d
+exista, se limpian con “Revocar todos” o a mano.
+
+**Fix de raíz:** `lib/db.ts` ahora resuelve el directorio **dentro de
+`getDb()`** y no como constante de módulo. Verificado: el hash de
+`data/council.db` es idéntico antes y después de correr el test a mano. Los
+45 registros siguen ahí, inertes.
+
+
 
 ### Fase 0 — ANTES (línea base)
 
