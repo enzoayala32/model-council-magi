@@ -901,6 +901,76 @@ npm notice run consenso-ia@0.1.0 build
 EXIT=0
 ```
 
+### Fase 4b — Scopes y autorización central
+
+**Commit:** `c31bcc2` — `fase 4b: scopes observe/operate/approve con
+autorizacion central y test de cobertura`.
+
+**Qué se hizo:**
+
+- **Tabla central** `lib/auth/scopes.ts`: una entrada por (ruta, metodo) con
+  scope, nota del porqué, y `stepUp` para las que aplican cambios. Jerarquia
+  `approve > operate > observe`; un scope mayor hereda lo del menor.
+- **Autorización central** `lib/auth/authorize.ts` con este orden:
+  1. ruta sin clasificar -> **DENEGADA** (no existe "ruta nueva sin pensar");
+  2. ruta `public` -> pasa (se autentica sola: login y canje);
+  3. loopback **sin ninguna credencial configurada** -> pasa (uso local de
+     siempre, sin cambios);
+  4. token del operador valido -> pasa con `approve` (es su secreto);
+  5. dispositivo -> pasa solo si su scope alcanza;
+  6. cualquier otra cosa -> DENEGADA.
+- **Precedencia de patrones**: `ruleFor` elige el patrón **mas especifico**
+  (menos parametros), igual que el router de Next. Sin eso,
+  `/api/council/runs/compare` quedaba tapado por `/api/council/runs/:id` —
+  un bug real que encontro el test de cobertura.
+- **Enforcement**: `requireScope` aplicado en las 7 rutas sensibles — crear
+  task, cancelar, aplicar, descartar, `apply-file-change`, `council/stream` y
+  `council/ping`. En `stream` va **antes** de abrir el SSE, para que un 403 no
+  sea un 200 con error adentro.
+- **Loopback con credencial configurada NO es via libre**: si se define
+  `APP_ACCESS_TOKEN`, tambien se pide en localhost. Igual que desde la Fase 1.
+
+**Archivos creados:** `lib/auth/scopes.ts`, `lib/auth/authorize.ts`,
+`lib/test-route-scopes.ts`.
+**Archivos modificados:** `app/api/{agent/tasks,agent/tasks/[id]/apply,
+agent/tasks/[id]/cancel,agent/tasks/[id]/discard,council/stream,council/ping,
+council/apply-file-change}/route.ts`, `package.json`, `scripts/run-tests.ts`.
+
+**El test de cobertura** (`lib/test-route-scopes.ts`, **68/68**) recorre
+`app/api` real, deriva ruta y metodos exportados, y falla si:
+- alguna (ruta, metodo) no tiene regla;
+- alguna regla apunta a una ruta inexistente;
+- hay metodos huerfanos.
+
+Ademas fija la matriz de scopes (observe no puede crear; operate no puede
+aplicar; approve sin step-up no puede aplicar; revocado corta al instante;
+ruta sin clasificar deniega incluso con token de operador) y la precedencia de
+patrones.
+
+**Verificacion:** `npm run security:test-route-scopes` -> **68/68**.
+`typecheck` exit 0; `lint` 0 errores / 37 warnings; `npm test` **77/77**;
+`build` exit 0.
+
+Smoke con `next start` en `:3111` (`APP_ACCESS_TOKEN` definido, LAN permitida):
+
+| Escenario | Resultado |
+|---|---|
+| `POST /tasks/x/apply` con token de operador | pasa el guard (llega al handler) |
+| `POST /tasks/x/cancel` desde LAN **sin** token | **403** |
+| `POST /tasks/x/cancel` desde LAN **con** token | **200** (es el operador) |
+| `GET /api/no/existe` | 404 de Next (no hay handler) |
+
+**Decision (Fase 4b):** las rutas con `stepUp` (`apply`, `discard`,
+`apply-file-change`) hoy **no se pueden satisfacer desde un dispositivo
+remoto**, porque el TOTP todavia no existe (llega en 4c). Es a proposito,
+fail-closed: hasta 4c, un dispositivo `approve` necesita el step-up y sin el
+queda bloqueado. Desde la PC del operador no cambia nada.
+
+**Aislamiento de los tests nuevos:** `lib/test-auth-devices.ts` y
+`lib/test-route-scopes.ts` se auto-aislan (crean su `MAGI_DATA_DIR` temporal si
+nadie lo fijó), asi correrlos a mano ya no escribe en la DB del usuario. El
+hash de `data/council.db` queda identico tras `npm test` completo.
+
 ---
 
 ## 3. Tests nuevos
