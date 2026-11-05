@@ -499,6 +499,43 @@ reintenta); 403 de cuota conocida, 429, 5xx y timeouts → `cooldown`.
 `npm test` 74/74; `typecheck` exit 0; `lint` 0 errores/37 warnings;
 `build` exit 0.
 
+### Corrección 0 — el timeline del SSE se vaciaba al reconectar
+
+**Bug (introducido al arreglar el lint del ajuste A):** `onopen` hacía
+`setState({status:"open", events: []})`, y eso corría en **cada** conexión,
+incluida la reconexión automática tras `onerror`. Como la reconexión no
+llevaba cursor, el servidor reenviaba el historial completo; el dedup por
+`seq` (que seguía teniendo todos los ya vistos) descartaba todo. Resultado:
+**timeline vacío después de cada corte de red**.
+
+**Commit:** `1afc17b` — `fix: no vaciar el timeline del SSE al reconectar
+(reducer puro + sinceSeq)`.
+
+**Cómo se corrigió:**
+1. La lógica de estado se extrajo a un reducer puro,
+   `lib/task-stream-reducer.ts`, con dos reglas explícitas: el reset
+   (eventos + cursor) pasa **solo** cuando cambia `taskId`; `opened` y
+   `dropped` solo cambian el estado de la conexión.
+2. Al reconectar se pide `?sinceSeq=<último seq visto>`, así el servidor
+   reenvía únicamente lo nuevo en lugar de todo el historial.
+3. La reconexión usa un contador de intentos (`attempt`) en vez de que
+   `connect` se reference a sí mismo — que es lo que marcaba la regla de
+   React. El backoff exponencial con jitter se mantiene.
+4. **Pantallas móviles:** al arreglar el lint había quitado el
+   `setLoading(true)` del inicio de `load`, y los botones de refrescar
+   (`/m`, `/m/tasks`, `/m/runs`) nunca volvían a mostrar el spinner. Se
+   agregó un `reload()` en cada una: es un evento de usuario, así que ahí sí
+   se puede llamar setState sincrónico.
+
+**Tests nuevos:** `lib/test-task-stream-reducer.ts` — **46/46 casos OK**.
+Conexión inicial, corte + reconexión sin perder ni duplicar (el caso del
+bug), reenvío del servidor descartado, cambio de `taskId` que sí limpia,
+heartbeat ignorado, evento partido descartado, snapshot, recorte de payloads
+enormes y deduplicación de `opened` repetido.
+
+**Verificación:** `npm run typecheck` exit 0; `npm run lint` 0 errores /
+37 warnings; `npm test` **75/75 OK**; `npm run build` exit 0.
+
 ---
 
 ## 2. Tabla de verificación
