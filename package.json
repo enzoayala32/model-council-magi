@@ -95,7 +95,8 @@
     "council:test-catalog": "tsx lib/test-model-catalog.ts",
     "security:test-nvidia-rotation": "tsx lib/test-nvidia-rotation.ts",
     "security:test-agent-sse": "tsx lib/test-agent-sse.ts",
-    "security:test-task-stream-reducer": "tsx lib/test-task-stream-reducer.ts"
+    "security:test-task-stream-reducer": "tsx lib/test-task-stream-reducer.ts",
+    "security:test-devices": "tsx lib/test-auth-devices.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.55",

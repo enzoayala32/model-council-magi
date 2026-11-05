@@ -1,58 +1,64 @@
 import { NextResponse } from "next/server";
 import { readJsonBody } from "@/lib/api-json";
 import { APP_ACCESS_TOKEN_COOKIE, buildTokenCookie, constantTimeEqual } from "@/lib/api-security";
+import { checkRateLimit, clientIdentifier, recordFailure, recordSuccess } from "@/lib/auth/rate-limit";
+import { recordAudit } from "@/lib/auth/audit";
 
 /**
- * Fase 1.2 — login del token de acceso.
+ * Fase 1.2 - login del token de acceso.
  *
- * Problema que resuelve: si `APP_ACCESS_TOKEN` está definido, toda `/api/*`
- * lo exige y la UI no tenía forma de obtenerlo, así que la app quedaba
- * inutilizada para un humano. Este endpoint canjea el token por una cookie
- * `HttpOnly` para que el navegador lo mande solo.
+ * Fase 4a: sigue existiendo, pero ahora con rate limiting y bloqueo
+ * progresivo, y queda MARCADO como flujo en retirada: el emparejamiento por
+ * dispositivos (POST /api/pairing/redeem) es el reemplazo, y este endpoint
+ * se retira cuando la UI migre. Mientras tanto hay que dejarlo funcional:
+ * si se define APP_ACCESS_TOKEN y no hay forma de canjearlo, la app no
+ * sirve para nadie.
  *
- * Esta ruta está EXCEPTUADA del chequeo de token (si no, no se podría
- * usar nunca), pero sigue sujeta a todo lo demás: Host, Origin en métodos
- * que mutan y Content-Type JSON. El emparejamiento por dispositivos de la
- * Fase 4 reemplaza este flujo; mientras tanto, es lo mínimo y funciona.
- *
- * No hay rate limiting propio acá: el proxy y el resto de la app no
- * agregan estado por IP (no hay store para eso). El token se define en
- * el servidor y el ataque de fuerza bruta sobre un valor elegido por el
- * operador no es el modelo de amenaza de esta app single-user. Se anota
- * como deuda.
+ * Este endpoint NO guarda el token en ningun lado: setea una cookie con el
+ * valor que el usuario pego. La unica diferencia con el emparejamiento es
+ * que la cookie de aca NO es revocable individualmente (comparte el
+ * secreto del server), y por eso es el flujo con menos privilegios: solo
+ * habilita el acceso, no otorga scope.
  */
+const RESOURCE = "auth_token";
 
 export async function POST(request: Request) {
+  const identifier = clientIdentifier(request);
+  const gate = checkRateLimit(identifier, RESOURCE);
+  if (!gate.allowed) {
+    return NextResponse.json(
+      { ok: false, error: "Demasiados intentos. Esperá antes de volver a probar." },
+      { status: 429, headers: { "Retry-After": String(Math.ceil(gate.retryAfterMs / 1000)) } },
+    );
+  }
+
   const parsed = await readJsonBody<{ token?: string }>(request);
   if (!parsed.ok) return parsed.response;
 
   const submitted = parsed.body.token?.trim() ?? "";
   const expected = process.env.APP_ACCESS_TOKEN?.trim() ?? "";
 
-  // Sin token configurado no hay nada que canjear: la app funciona sin
-  // cookie. Se responde OK para no filtrar si la app usa token o no
-  // (un 403 acá delataría la configuración a cualquiera que pregunte).
+  // Sin token configurado no hay nada que canjear. Se responde OK sin
+  // setear cookie para no delatar la configuracion a quien pregunte.
   if (!expected) {
     return NextResponse.json({ ok: true, tokenRequired: false });
   }
 
-  // Comparación en tiempo constante: nunca revelar por timing cuánto del
-  // token coincide.
   if (!constantTimeEqual(submitted, expected)) {
-    return NextResponse.json(
-      { ok: false, error: "Token de acceso inválido." },
-      { status: 403 },
-    );
+    recordFailure(identifier, RESOURCE);
+    recordAudit({ action: "auth_token_failed", result: "denied" });
+    return NextResponse.json({ ok: false, error: "Token de acceso inválido." }, { status: 403 });
   }
 
+  recordSuccess(identifier, RESOURCE);
+  recordAudit({ action: "auth_token_ok", result: "ok" });
   const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
-  const secure = forwardedProto === "https";
   const response = NextResponse.json({ ok: true, tokenRequired: true });
-  response.headers.set("Set-Cookie", buildTokenCookie(expected, { secure }));
+  response.headers.set("Set-Cookie", buildTokenCookie(expected, { secure: forwardedProto === "https" }));
   return response;
 }
 
-/** Borra la cookie (logout local). No requiere token. */
+/** Borra la cookie (logout local). */
 export async function DELETE() {
   const response = NextResponse.json({ ok: true });
   response.headers.set("Set-Cookie", `${APP_ACCESS_TOKEN_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict`);

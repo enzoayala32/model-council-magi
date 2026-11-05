@@ -10,10 +10,24 @@ import path from "node:path";
 // temporal y lo borra al terminar. Fuera de los tests, si no está
 // definida, la ruta no cambia. Se resuelve con path.resolve para que una
 // ruta relativa sea relativa al cwd del proceso, no a algo ambiguo.
-const DATA_DIR = process.env.MAGI_DATA_DIR?.trim()
-  ? path.resolve(process.env.MAGI_DATA_DIR.trim())
-  : path.join(process.cwd(), "data");
-const DB_PATH = path.join(DATA_DIR, "council.db");
+//
+// OJO - se resuelve DENTRO de `getDb()` y no como constante de modulo a
+// propósito. Como constante, quedaba congelada en el momento en que
+// `better-sqlite3` cargaba este archivo, y los tests que hacen `chdir`
+// DESPUÉS de que sus imports estáticos ya lo cargaron terminaban
+// apuntando igual a la DB real: es exactamente como 45 dispositivos de
+// prueba terminaron en el `data/council.db` del usuario. Resolviéndolo
+// tarde, un `chdir` o un `MAGI_DATA_DIR` puesto antes de la primera
+// consulta sí cambian el destino.
+function resolveDataDir(): string {
+  return process.env.MAGI_DATA_DIR?.trim()
+    ? path.resolve(process.env.MAGI_DATA_DIR.trim())
+    : path.join(process.cwd(), "data");
+}
+
+function resolveDbPath(): string {
+  return path.join(resolveDataDir(), "council.db");
+}
 
 /** Fase 3, sección 7 del diseño: versión de schema trackeada vía
  * `PRAGMA user_version` (nativo de SQLite, sin tabla extra). No es un
@@ -65,10 +79,12 @@ function assertNoIncompatibleLegacySchema(db: Database.Database): void {
 }
 
 function createConnection(): Database.Database {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+  // Resolución tardía: ver el comentario de `resolveDataDir`.
+  const dataDir = resolveDataDir();
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
   }
-  const db = new Database(DB_PATH);
+  const db = new Database(resolveDbPath());
   db.pragma("journal_mode = WAL");
 
   assertNoIncompatibleLegacySchema(db);
@@ -367,6 +383,61 @@ function createConnection(): Database.Database {
       at INTEGER NOT NULL,
       payload TEXT NOT NULL,
       PRIMARY KEY (run_id, seq)
+    );
+
+    -- Fase 4a: emparejamiento de dispositivos y auditoria. Tablas NUEVAS y
+    -- aditivas (CREATE TABLE IF NOT EXISTS), por eso SCHEMA_VERSION no se
+    -- sube: no se altera ninguna tabla existente.
+    --
+    -- REGLA DE SEGURIDAD: token_hash guarda un SHA-256 del token, nunca el
+    -- token. Un token es aleatorio de 256 bits (32 bytes en hex), asi que
+    -- SHA-256 sin salt alcanza: no hay dictionario que probar contra 256 bits
+    -- de entropia, y el salt solo complicaria la busqueda por hash, que es
+    -- justo lo que hay que hacer en cada request.
+    CREATE TABLE IF NOT EXISTS devices (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      scope TEXT NOT NULL,
+      user_agent TEXT,
+      created_at INTEGER NOT NULL,
+      last_seen_at INTEGER,
+      revoked_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_devices_token_hash ON devices(token_hash);
+    CREATE INDEX IF NOT EXISTS idx_devices_revoked ON devices(revoked_at);
+
+    -- Codigos de emparejamiento de UN solo uso. Tambien hasheados: un codigo
+    -- que se filtra por un log no deberia servir para nada.
+    CREATE TABLE IF NOT EXISTS pairing_codes (
+      code_hash TEXT PRIMARY KEY,
+      scope TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      used_at INTEGER
+    );
+
+    -- Auditoria: acciones mutantes, aprobaciones, emparejamientos y fallos de
+    -- autenticacion. NUNCA se guardan tokens, codigos, prompts ni contenido
+    -- de archivos (ver lib/auth/audit.ts).
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id TEXT PRIMARY KEY,
+      ts INTEGER NOT NULL,
+      device_id TEXT,
+      action TEXT NOT NULL,
+      target_id TEXT,
+      result TEXT NOT NULL,
+      detail TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts DESC);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_device ON audit_log(device_id, ts DESC);
+
+    -- Paso 4c: secreto TOTP por dispositivo, para el step-up de aprobacion.
+    -- Se guarda cifrado con una clave derivada de APP_ACCESS_TOKEN (o de una
+    -- variable dedicada): la DB нигде deberia exponer el secreto en claro.
+    CREATE TABLE IF NOT EXISTS device_totp (
+      device_id TEXT PRIMARY KEY REFERENCES devices(id),
+      secret_enc TEXT NOT NULL,
+      confirmed_at INTEGER NOT NULL
     );
   `);
 

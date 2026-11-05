@@ -62,6 +62,7 @@ const OFFLINE_EXACT = [
   "security:test-nvidia-rotation",
   "security:test-agent-sse",
   "security:test-task-stream-reducer",
+  "security:test-devices",
 ];
 
 const liveSet = new Set<string>(LIVE_SCRIPTS);
