@@ -1028,6 +1028,100 @@ dispositivo correcto. Un token de otro paso no sirve.
 `npm test` **78/78 OK**; `npm run build` exit 0 con
 `/api/auth/step-up` y `/api/auth/totp/enroll` en la tabla de rutas.
 
+## 1C. Misión 2 — correcciones de seguridad de la revisión
+
+### Punto 1 — El loopback no se decide por el header Host
+
+**Commits:** `d6cf83e` (fix), `84e09c4` (test del ataque).
+
+**El problema, reproducido con el build de producción:** conectándose desde una
+IP real no-loopback con `Host: localhost:<puerto>`, `GET /api/agent/projects`
+devolvía **200**, `POST /api/pairing` generaba un código y
+`POST /api/pairing/redeem` lo canjeaba como dispositivo `approve`. Todo sin
+ninguna credencial.
+
+**La causa:** `Host` es un header que manda el cliente. Toda la cadena de
+decisiones de "es esta PC" (acceso implícito, generación de códigos de
+emparejamiento) miraba ese header.
+
+**El fix, en dos capas:**
+
+1. **Peer real del kernel.** `server.ts` envuelve al server de Next con
+   `node:http`, lee `req.socket.remoteAddress` (lo fija el kernel al aceptar la
+   conexión TCP, no viaja en ningún header), **borra** cualquier `x-magi-peer`
+   que haya mandado el cliente y escribe el valor real. `lib/peer.ts` lo lee, y
+   `lib/auth/authorize.ts` y `app/api/pairing/route.ts` deciden por ese dato.
+   Fallo cerrado: si el header no está, el peer es `unknown`, que **no** es
+   loopback.
+   - `npm run dev` y `npm start` ahora usan ese server (`scripts/dev-server.ts`);
+     antes eran `next dev`/`next start` directos.
+   - `POST /api/pairing` exige credencial de operador **o** peer loopback
+     verificado, nunca solo el Host.
+2. **Defensa en profundidad.** `-H 127.0.0.1` por defecto. `dev:lan`/`start:lan`
+   son opt-in explícito, y en ese modo:
+   - el acceso local implícito queda **deshabilitado** (ni loopback entra sin
+     credencial);
+   - el server **se niega a arrancar** sin `APP_ACCESS_TOKEN`, con un mensaje
+     que explica por qué.
+
+**Tests:** `lib/test-peer-spoof.ts` (**20/20**) levanta el server real en un
+puerto libre y se conecta por una IP LAN real (`os.networkInterfaces()`; si no
+hay ninguna, el test **se salta y lo dice**, no falla):
+
+| Escenario | Resultado |
+|---|---|
+| Peer remoto + `Host: localhost` sin token | **403** (antes 200) |
+| `POST /api/pairing` con Host falsificado | **403**, sin código |
+| Falsificar `x-magi-peer: loopback` desde el cliente | **403** (el server lo pisa) |
+| `POST /api/pairing/redeem` con Host falsificado | **403** |
+| Remoto + token de operador | **200** |
+| Loopback + token de operador | **200** |
+| Modo LAN sin `APP_ACCESS_TOKEN` | el server **sale con error**, no arranca |
+| Server loopback sin credencial (uso local) | **200** en projects/threads/pairing/m — no cambió nada |
+
+**Verificación adicional por HTTP** (smoke con `next start` vía el server propio,
+puertos 3123/3124/3125): los 3 ataques bloqueados con build fresco, y los caminos
+legítimos (LAN+token, loopback+token, pairing con token, login correcto tras
+expirar el bloqueo) en 200.
+
+**Hallazgo durante la verificación que debe quedar registrado:** mi primera
+medición del rate limiting dio un falso negativo porque el server corre con
+`dev: false` y estaba sirviendo un build **viejo**. Los cambios en `proxy.ts` y
+`rate-limit.ts` no estaban compilados. Después de `npm run build`, el
+comportamiento medido fue el correcto. Queda como recordatorio: para medir
+cambios en el proxy o en el rate limiting hay que reconstruir antes.
+
+### Punto 2 — Rate limiting por peer real
+
+**Commit:** `b839454`.
+
+**El problema:** `clientIdentifier()` usaba `X-Forwarded-For`, que manda el
+cliente. Rotándolo se hacían infinitos fallos sin llegar al límite (reproducido:
+14 fallos sin 429). Además los clientes sin ese header compartían el bucket
+`"desconocido"`, así que un atacante podía bloquear el emparejamiento legítimo
+de otro.
+
+**El fix:**
+- La clave es el peer real (`x-magi-peer-addr`, que escribe `server.ts`). No lo
+  puede elegir el cliente.
+- `X-Forwarded-For` solo se usa si `TRUST_PROXY` está definido, y tomando el
+  **último** salto (el que agregó el proxy de confianza), no el primero (que
+  escribe el cliente).
+- El mapa de buckets tiene tope (`MAX_BUCKETS = 5000`) con poda del más viejo.
+- `api/auth/token` tiene además un **límite global** con retardo progresivo,
+  independiente de la IP: si el total de fallos se dispara, se frena a todos.
+
+**Tests:** `lib/test-rate-limit.ts` (**20/20**): rotar XFF ya no evada el límite
+(se frena en el 7º intento igual), `TRUST_PROXY` toma el último salto, un
+atacante no puede hacerse pasar por otro vía el primer salto, el mapa no crece
+sin límite, el freno global corta aunque cambie el peer, y un cliente legítimo
+no queda bloqueado por otro.
+
+Reproducido por HTTP tras el rebuild: 10 intentos rotando XFF → **429 desde el
+7º** (antes 10/10 en 403).
+
+---
+
 ### Fase 4d — Dispositivos, Actividad y kill switch
 
 **Commit:** `52279f4`.
