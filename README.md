@@ -199,6 +199,16 @@ npm run dev
 
 Abrí [http://localhost:3000](http://localhost:3000). Si usás otro puerto, definí `PORT` o `ALLOWED_HOSTS` (ver seguridad).
 
+`npm run dev` pasa por `server.ts` (nuestro server con `node:http`), no por `next dev` directo: es lo que permite saber la dirección real del peer. Si usás `next dev` a mano, el acceso local implícito queda desactivado (fallo cerrado, no abierto).
+
+Para entrar desde el teléfono en la misma red:
+
+```bash
+APP_ACCESS_TOKEN=un-token-largo npm run dev:lan
+```
+
+El server se niega a arrancar en modo LAN sin `APP_ACCESS_TOKEN`.
+
 ### 4. Build de producción
 
 ```bash
@@ -223,6 +233,33 @@ npm run test:live   # suite que sí llama a proveedores (requiere keys)
 ## Seguridad de la API (Fase 1)
 
 La app sigue siendo **single-user y self-hosted**: no hay login ni multiusuario. Lo que se agregó es una puerta de entrada para que una página web ajena abierta en el mismo navegador no pueda hablarle a `localhost` a través de `/api/*`.
+
+### Qué protege cada capa (modelo de amenaza)
+
+Las dos capas defienden de enemigos distintos, y es importante no confundirlas:
+
+| Capa | Contra qué protege | Cómo |
+|---|---|---|
+| `proxy.ts` | **Navegadores**: CSRF, DNS rebinding | Allowlist de `Host`, `Origin` y `Sec-Fetch-Site`, `Content-Type`, token opcional |
+| Peer real del kernel (`server.ts` + `lib/peer.ts`) | **Clientes no-navegador**: curl, scripts, ataques con la IP real | `x-magi-peer` escrito desde `req.socket.remoteAddress`, que el cliente no puede elegir |
+| `lib/auth/*` | **Dispositivos remotos**: robo de cookie, escalado de permisos | Tokens hasheados, scopes `observe`/`operate`/`approve`, step-up TOTP, auditoría |
+
+**Por qué el `Host` no alcanza:** `Host` es un header que manda el cliente.
+Alguien conectado desde una IP remota puede poner `Host: localhost:3000` y el
+server se lo cree. Antes de la corrección eso alcanzaba para tener "acceso
+local implícito" sin ninguna credencial, incluido generar y canjear códigos de
+emparejamiento ([reproducido](./REPORTE-REFACTOR.md)). Ahora la decisión de
+"es esta PC" sale de la dirección del peer, que fija el kernel.
+
+### Modos de arranque
+
+| Comando | Escucha | Acceso sin credencial |
+|---|---|---|
+| `npm run dev` / `npm start` | `127.0.0.1` (loopback) | Sí, desde esta PC |
+| `npm run dev:lan` / `npm run start:lan` | todas las interfaces | **No**: exige `APP_ACCESS_TOKEN`, y sin ella el server no arranca |
+
+El modo LAN es opt-in explícito a propósito: exponer la app en la red no puede
+dejar un agujero "local".
 
 `proxy.ts` (el reemplazo de `middleware.ts` en Next 16) intercepta `/api/:path*` y aplica, en este orden:
 
