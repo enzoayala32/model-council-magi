@@ -242,8 +242,16 @@ async function main(): Promise<void> {
       check("informa el retry", !sixth.allowed && sixth.retryAfterMs > 0);
       check("mientras esta bloqueado sigue bloqueado", !checkRateLimit(id, res).allowed);
       check("otra IP no se ve afectada", checkRateLimit("5.6.7.8", res).allowed);
+      // El detalle del freno global y de la rotacion de XFF está en
+      // lib/test-rate-limit.ts; acá se resetea para no arrastrar el contador
+      // global de este bloque (no se borra con un éxito por IP, a propósito).
+      __resetRateLimitsForTests();
       check("otro recurso no se ve afectado", checkRateLimit(id, "login").allowed);
 
+      // Reset + 5 fallos para volver al umbral: recien ahila el 6to bloquea y
+      // el 7to bloquea el doble.
+      __resetRateLimitsForTests();
+      for (let i = 0; i < 5; i += 1) recordFailure(id, res);
       const before = (recordFailure(id, res) as { allowed: false; retryAfterMs: number }).retryAfterMs;
       const after = (recordFailure(id, res) as { allowed: false; retryAfterMs: number }).retryAfterMs;
       check("el bloqueo crece con mas fallos", after > before, { before, after });
@@ -255,16 +263,24 @@ async function main(): Promise<void> {
       }
       check("el bloqueo tiene tope (1 hora)", tope <= 3600000, tope);
 
+      __resetRateLimitsForTests();
+      recordFailure(id, res);
+      check("antes del exito el cupo bajó", (checkRateLimit(id, res) as { allowed: true; remaining: number }).remaining === 4);
       recordSuccess(id, res);
-      check("un exito limpia el medidor", checkRateLimit(id, res).allowed);
-      check("devuelve el cupo completo", (checkRateLimit(id, res) as { allowed: true; remaining: number }).remaining === 5);
+      check("un exito limpia el medidor", checkRateLimit(id, res).allowed, checkRateLimit(id, res));
+      check("devuelve el cupo completo", (checkRateLimit(id, res) as { allowed: true; remaining: number }).remaining === 5, checkRateLimit(id, res));
     }
 
     console.log("\n== clientIdentifier ==\n");
     {
-      const withForwarded = new Request("http://localhost/api/x", { headers: { "x-forwarded-for": "9.9.9.9, 10.0.0.1" } });
-      check("toma el primer salto", clientIdentifier(withForwarded) === "9.9.9.9", clientIdentifier(withForwarded));
-      check("sin header devuelve desconocido", clientIdentifier(new Request("http://localhost/api/x")) === "desconocido");
+      // La clave es el peer real, no un header que mande el cliente. El detalle
+      // completo (rotacion de XFF, TRUST_PROXY, ultimo salto, freno global)
+      // esta en lib/test-rate-limit.ts.
+      const withPeer = new Request("http://localhost/api/x", { headers: { "x-magi-peer-addr": "203.0.113.9" } });
+      check("la clave es el peer real", clientIdentifier(withPeer) === "203.0.113.9", clientIdentifier(withPeer));
+      const withXffOnly = new Request("http://localhost/api/x", { headers: { "x-forwarded-for": "9.9.9.9" } });
+      check("X-Forwarded-For NO se usa sin TRUST_PROXY", clientIdentifier(withXffOnly) === "desconocido", clientIdentifier(withXffOnly));
+      check("sin peer ni XFF cae en desconocido", clientIdentifier(new Request("http://localhost/api/x")) === "desconocido");
     }
 
     console.log("\n== auditoria ==\n");
