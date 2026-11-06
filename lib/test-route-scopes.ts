@@ -175,23 +175,23 @@ async function main(): Promise<void> {
       delete process.env.APP_ACCESS_TOKEN;
       const localRead = authorize({
         method: "GET", pathname: "/api/agent/tasks",
-        request: { headers: { get: (n: string) => (n === "host" ? "localhost:3000" : null) } },
+        request: { headers: { get: (n: string) => (n === "host" ? "localhost:3000" : n === "x-magi-peer" ? "loopback" : null) } },
       });
       check("loopback sin credencial: lectura permitida (uso local)", localRead.ok, localRead);
       const localWrite = authorize({
         method: "POST", pathname: "/api/agent/tasks",
-        request: { headers: { get: (n: string) => (n === "host" ? "127.0.0.1:3000" : null) } },
+        request: { headers: { get: (n: string) => (n === "host" ? "127.0.0.1:3000" : n === "x-magi-peer" ? "loopback" : null) } },
       });
       check("loopback sin credencial: escritura permitida (uso local)", localWrite.ok, localWrite);
       const localApply = authorize({
         method: "POST", pathname: "/api/agent/tasks/x/apply",
-        request: { headers: { get: (n: string) => (n === "host" ? "localhost:3000" : null) } },
+        request: { headers: { get: (n: string) => (n === "host" ? "localhost:3000" : n === "x-magi-peer" ? "loopback" : null) } },
       });
       check("loopback sin credencial: apply permitido (es la PC)", localApply.ok, localApply);
 
       const remoteRead = authorize({
         method: "GET", pathname: "/api/agent/tasks",
-        request: { headers: { get: (n: string) => (n === "host" ? "192.168.0.50:3000" : null) } },
+        request: { headers: { get: (n: string) => (n === "host" ? "192.168.0.50:3000" : n === "x-magi-peer" ? "remote" : n === "x-magi-peer-addr" ? "192.168.0.50" : null) } },
       });
       check("remoto sin credencial: DENEGADO", !remoteRead.ok, remoteRead);
 
@@ -322,8 +322,8 @@ async function main(): Promise<void> {
     check("una IP de LAN no es loopback", !isLoopbackHost("192.168.0.50:3000"));
     check("un dominio no es loopback", !isLoopbackHost("mi-tunnel.tailnet.ts.net"));
 
-    const ctx = resolveAuthContext({ headers: { get: (n: string) => (n === "host" ? "localhost:3000" : null) } });
-    check("loopback sin credencial: localImplicit", ctx.localImplicit === true, ctx);
+    const ctx = resolveAuthContext({ headers: { get: (n: string) => (n === "host" ? "localhost:3000" : n === "x-magi-peer" ? "loopback" : null) } });
+    check("peer verificado sin credencial: localImplicit", ctx.localImplicit === true, ctx);
     check("y no es dispositivo ni operador", ctx.device === null && ctx.operator === false, ctx);
 
     const ctx2 = resolveAuthContext({ headers: { get: (n: string) => (n === "host" ? "192.168.0.50:3000" : null) } });

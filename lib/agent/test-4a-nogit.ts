@@ -28,6 +28,11 @@ import type { AgentLoopResult } from "./loop";
 function localRequest(url: string, init?: RequestInit): Request {
   const headers = new Headers(init?.headers);
   if (!headers.has("host")) headers.set("host", "localhost:3000");
+  // Correccion de seguridad: el loopback ya NO se decide por Host, sino por el
+  // header que escribe  con la direccion real del peer. Los tests
+  // que llaman los handlers directo tienen que simularlo.
+  if (!headers.has("x-magi-peer")) headers.set("x-magi-peer", "loopback");
+  if (!headers.has("x-magi-peer-addr")) headers.set("x-magi-peer-addr", "127.0.0.1");
   return new Request(url, { ...init, headers });
 }
 
