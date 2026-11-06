@@ -116,3 +116,7 @@ Se actualiza al cerrar cada fase del plan de trabajo. El detalle de qué se
 hizo, con commits y salidas reales de typecheck/lint/test/build, está en
 [`REPORTE-REFACTOR.md`](./REPORTE-REFACTOR.md). Lo que aquí dice HECHO y
 allá no tiene evidencia, es un bug de este documento.
+
+El roadmap integral original (v1.0, 24 de octubre de 2026) quedó archivado
+en [`ROADMAP-INTEGRAL-v1.md`](./ROADMAP-INTEGRAL-v1.md) por su contexto de
+planificación; este documento es el vigente.
