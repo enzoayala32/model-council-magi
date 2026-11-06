@@ -59,8 +59,9 @@ proyecto.
 | 4a Tablas + canje con rate limiting + cookie de dispositivo + auditoría | **HECHO** |
 | 4b Scopes `observe`/`operate`/`approve` + autorización central + test de cobertura de rutas | **HECHO** |
 | 4c Step-up TOTP para aprobar desde remoto | **HECHO** (RFC 6238, sin dependencias) |
-| 4d UI de Dispositivos y Actividad + kill switch `REMOTE_ACCESS=off` | **PENDIENTE** |
-| Nota: hasta 4c, `apply`/`discard` desde remoto quedan bloqueados a propósito | **HECHO** |
+| 4d UI de Dispositivos y Actividad + QR + kill switch `REMOTE_ACCESS=off` | **HECHO** |
+| Fase 4 completa | **HECHO** (4a+4b+4c+4d) |
+| Nota: hasta 4c, `apply`/`discard` desde remoto quedaban bloqueados a propósito | **HECHO** (ya resuelto por el step-up) |
 | 5 | Acceso remoto documentado (Tailscale recomendado, Cloudflare Tunnel alternativa, port-forward desaconsejado) + `npm run doctor:remote` | **PENDIENTE** |
 | 6 | Notificaciones push (Web Push/VAPID) con preferencias por dispositivo y coalescencia | **PENDIENTE** |
 
