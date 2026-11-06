@@ -13,7 +13,10 @@
  * 4. Token de la app valido -> pasa con scope `approve` (es el secreto
  *    del operador: si lo tenes, sos el operador).
  * 5. Cookie de dispositivo -> pasa solo si el scope del dispositivo
- *    alcanza, y si la ruta pide step-up, solo con step-up vigente (4c).
+ *    alcanza, y si la ruta pide step-up, solo con el header
+ *    `x-magi-step-up` apuntando a una sesion vigente (4c). El operador
+ *    (token de la app) y el uso local implicito no necesitan step-up: es la
+ *    PC del operador, no un control remoto.
  * 6. Cualquier otra cosa -> DENEGADA.
  *
  * Loopback CON credencial configurada NO es via libre: si definis
@@ -28,6 +31,7 @@ import { recordAudit } from "./audit";
 import { constantTimeEqual } from "../api-security";
 import { readCookie } from "./cookie-parse";
 import { APP_ACCESS_TOKEN_COOKIE } from "../api-security";
+import { isStepUpValid } from "./step-up";
 
 export type AuthContext = {
   /** Dispositivo emparejado, si la request vino con una cookie valida. */
@@ -132,7 +136,12 @@ export function authorize(options: AuthorizeOptions): AuthDecision {
         reason: "scope_insuficiente",
       };
     }
-    if (rule.stepUp && !options.stepUpValid) {
+    // Step-up (Fase 4c): ademas del scope, exige un segundo factor reciente.
+    // El token viaja en un header, no en la cookie: asi no sobrevive a la
+    // sesion ni queda expuesto a un XSS que lea document.cookie.
+    const stepUpToken = options.request.headers.get("x-magi-step-up");
+    const stepUpValid = options.stepUpValid ?? isStepUpValid(context.device.id, stepUpToken);
+    if (rule.stepUp && !stepUpValid) {
       recordAudit({
         deviceId: context.device.id,
         action: "access_denied",
