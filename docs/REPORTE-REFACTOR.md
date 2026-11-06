@@ -1028,6 +1028,82 @@ dispositivo correcto. Un token de otro paso no sirve.
 `npm test` **78/78 OK**; `npm run build` exit 0 con
 `/api/auth/step-up` y `/api/auth/totp/enroll` en la tabla de rutas.
 
+### Fase 4d — Dispositivos, Actividad y kill switch
+
+**Commit:** `52279f4`.
+
+**Qué se hizo:**
+
+- **Pantalla “Dispositivos”** (pestaña nueva en Ajustes): lista con estado,
+  permiso, último acceso, renombrar, cambiar scope, revocar y **“Revocar
+  todos”** (con exclusión del dispositivo desde el que se opera).
+- **Pantalla “Actividad”**: el `audit_log` con acción, dispositivo, objetivo,
+  resultado y detalle, más el botón de poda con la retención configurada
+  (90 días).
+- **Emparejamiento con QR**: `POST /api/pairing` ahora devuelve además la URL
+  y el QR (PNG data URL). El código viaja en el **fragmento** (`#code=…`),
+  no en la query. Se usa `next/image` con `unoptimized` porque es un data URL.
+- **Rutas nuevas** (todas restringidas a loopback dentro de la ruta, además
+  del scope): `GET /api/devices`, `PATCH`/`DELETE /api/devices/[id]`,
+  `POST /api/devices/revoke-all`, `GET`/`POST /api/audit`.
+- **Cambiar el scope de un dispositivo invalida el step-up en curso**: si le
+  bajás el nivel, una sesión de aprobación vieja no debe seguir sirviendo con
+  el scope anterior.
+- **Kill switch `REMOTE_ACCESS=off`**: ya estaba en el proxy desde la Fase 3;
+  ahora queda verificado por test (corta Hosts no-loopback incluso con
+  credencial, y **no** afecta a loopback) y documentado en `.env.example`.
+
+**Bug de diseño encontrado y corregido:** el proxy exigía `APP_ACCESS_TOKEN`
+incluso cuando la request traía una **cookie de dispositivo válida**, así que
+un teléfono emparejado no podía autenticarse *nunca* desde la LAN: además de
+su cookie, tenía que conocer el token del operador. Se corrigió: la cookie de
+dispositivo es credencial suficiente para pasar el proxy, y la validación real
+(¿existe? ¿está revocado? ¿tiene scope?) la hace `lib/auth/authorize.ts`, que
+es quien puede tocar la DB. La separación queda: proxy = “hay credencial”,
+ruta = “la credencial vale”.
+
+**Dependencia nueva justificada:** `qrcode` (`^1.5.4`). Resuelve el QR del
+emparejamiento, que pide la Fase 4.2. Es JavaScript puro (sin compilación
+nativa), sin dependencias propias, y lleva años mantenida. La alternativa —
+escribir un encoder QR a mano — no la elegí justamente porque no podría
+verificar sin un escáner real que el código se lee, y un QR que no escanea es
+peor que no tenerlo. Los tipos se declararon a mano en `types/qrcode.d.ts`
+(2 funciones) en vez de sumar `@types/qrcode`.
+
+**Archivos creados:** `app/api/devices/{route,[id]/route,revoke-all/route}.ts`,
+`app/api/audit/route.ts`, `app/components/main/{devices,pairing}.tsx`,
+`lib/test-device-routes.ts`, `types/qrcode.d.ts`.
+**Archivos modificados:** `app/api/pairing/route.ts`,
+`app/components/main/settings-drawer.tsx`, `app/lib/client-types.ts`,
+`app/globals.css`, `lib/api-security.ts`, `lib/auth/{scopes,audit}.ts`,
+`lib/test-api-security.ts`, `package.json`, `package-lock.json`,
+`scripts/run-tests.ts`.
+
+**Tests:** `security:test-device-routes` → **43/43** (kill switch, todas las
+rutas rechazando fuera de loopback, renombrar/cambiar scope/revocar,
+invalidación del step-up al cambiar scope, revoke-all con exclusión, poda de
+auditoría). `security:test-proxy` → **74/74** (suma 4 casos nuevos de la
+cookie de dispositivo).
+
+**Verificación:** `typecheck` exit 0; `lint` 0 errores / 37 warnings;
+`npm test` **79/79 OK**; `build` exit 0.
+
+**Smoke end-to-end con `next start` en `:3112`** (Host de LAN permitido,
+`APP_ACCESS_TOKEN` y `MAGI_TOTP_KEY` definidos):
+
+| Escenario | Resultado |
+|---|---|
+| Generar pairing desde loopback | 200 + `code` + `url` con `#code=` + QR PNG (2986 chars) |
+| Generar pairing desde LAN | **403** “solo se generan desde esta PC” |
+| Canje desde LAN con cookie de dispositivo | 200 + cookie `magi_device_token` |
+| `apply` desde LAN **solo** con cookie de dispositivo (sin token de operador) | **403** `step_up_requerido` |
+| Inscribir TOTP desde LAN | **403** “solo desde esta PC” |
+| `apply` desde LAN con TOTP real + header `x-magi-step-up` | pasa el guard (llega al handler) |
+| `apply` con token de step-up inventado | **403** `step_up_requerido` |
+
+Ese smoke es la verificación de la aceptación de 4c/4d junta: un dispositivo
+`approve` no puede aplicar sin step-up, y con un TOTP válido sí.
+
 ---
 
 ## 3. Tests nuevos
