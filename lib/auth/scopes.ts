@@ -128,6 +128,8 @@ export const ROUTE_RULES: readonly RouteRule[] = [
   { pattern: "/api/auth/token", method: "DELETE", scope: "public", note: "Logout local: borra la cookie." },
   { pattern: "/api/pairing", method: "POST", scope: "public", note: "Genera un codigo. Ademas se restringe a loopback dentro de la ruta." },
   { pattern: "/api/pairing/redeem", method: "POST", scope: "public", note: "Canje de codigo. Se autentica con el codigo + rate limiting." },
+  { pattern: "/api/auth/step-up", method: "POST", scope: "public", note: "Canje de TOTP por sesion de step-up. Se autentica con el dispositivo + codigo + rate limiting." },
+  { pattern: "/api/auth/totp/enroll", method: "POST", scope: "approve", stepUp: true, note: "Inscribe el segundo factor de un dispositivo. Ademas se restringe a loopback dentro de la ruta: anotar un secreto TOTP es tarea de la PC." },
 ];
 
 /** Escapa los metacaracteres de regex. Escrito sin una clase de caracteres

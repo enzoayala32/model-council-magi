@@ -97,7 +97,8 @@
     "security:test-agent-sse": "tsx lib/test-agent-sse.ts",
     "security:test-task-stream-reducer": "tsx lib/test-task-stream-reducer.ts",
     "security:test-devices": "tsx lib/test-auth-devices.ts",
-    "security:test-route-scopes": "tsx lib/test-route-scopes.ts"
+    "security:test-route-scopes": "tsx lib/test-route-scopes.ts",
+    "security:test-step-up": "tsx lib/test-auth-step-up.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.55",

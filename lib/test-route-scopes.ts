@@ -17,6 +17,9 @@ import { authorize, resolveAuthContext } from "./auth/authorize";
 import { isLoopbackHost, patternRegex, ROUTE_RULES, ruleFor, scopeSatisfies, type HttpMethod } from "./auth/scopes";
 import { createDevice, findDeviceByToken } from "./auth/devices";
 import { DEVICE_SCOPES } from "./auth/devices";
+import { enrollDeviceTotp, issueStepUp, __resetStepUpForTests } from "./auth/step-up";
+import { counterFor, totpCode } from "./auth/totp";
+
 
 // Aislamiento tambien FUERA del runner: si nadie fijo MAGI_DATA_DIR, se crea
 // un temporal. `lib/db.ts` resuelve el directorio dentro de `getDb()` (no como
@@ -236,6 +239,55 @@ async function main(): Promise<void> {
       check("approve CON step-up: apply permitido", applyWithStepUp.ok, applyWithStepUp);
       check("approve puede descartar con step-up", withDevice(approver, "POST", "/api/agent/tasks/x/discard", true).ok);
       check("approve puede leer sin step-up", withDevice(approver, "GET", "/api/agent/tasks").ok);
+
+      // ---- Aceptacion de la fase 4c: step-up end-to-end ----
+      __resetStepUpForTests();
+      process.env.MAGI_TOTP_KEY = "pepper-de-scopes";
+      const totpDevice = createDevice({ name: "Aprobador con TOTP", scope: "approve" });
+      const enroll = enrollDeviceTotp(totpDevice.device.id, { account: totpDevice.device.name, issuer: "Consenso IA" });
+      if (!("error" in enroll)) {
+        const reqWithStepUp = (token: string) => ({
+          headers: {
+            get: (n: string) =>
+              n === "cookie"
+                ? `magi_device_token=${totpDevice.token}`
+                : n === "host"
+                  ? "192.168.0.50:3000"
+                  : n === "x-magi-step-up"
+                    ? token
+                    : null,
+          },
+        });
+
+        const beforeToken = authorize({
+          method: "POST", pathname: "/api/agent/tasks/x/apply",
+          request: { headers: { get: (n: string) => (n === "cookie" ? `magi_device_token=${totpDevice.token}` : n === "host" ? "192.168.0.50:3000" : null) } },
+        });
+        check("approve sin header de step-up: DENEGADO", !beforeToken.ok, beforeToken);
+        check("el motivo sigue siendo step_up_requerido", !beforeToken.ok && beforeToken.reason === "step_up_requerido");
+
+        const withGarbage = authorize({
+          method: "POST", pathname: "/api/agent/tasks/x/apply",
+          request: reqWithStepUp("token-inventado"),
+        });
+        check("con un step-up inventado: DENEGADO", !withGarbage.ok, withGarbage);
+
+        const realToken = issueStepUp(totpDevice.device.id, totpCode(enroll.secret, counterFor(Date.now())));
+        check("el TOTP real emite sesion", typeof realToken === "string", realToken);
+        if (realToken) {
+          const after = authorize({
+            method: "POST", pathname: "/api/agent/tasks/x/apply",
+            request: reqWithStepUp(realToken),
+          });
+          check("approve CON step-up real: apply PERMITIDO (aceptacion 4c)", after.ok, after);
+          check("y el contexto es el dispositivo", after.ok && after.context.device?.id === totpDevice.device.id, after);
+          check("el token de otro paso NO vale por header", !authorize({
+            method: "POST", pathname: "/api/agent/tasks/x/apply",
+            request: reqWithStepUp(realToken + "x"),
+          }).ok);
+        }
+      }
+      delete process.env.MAGI_TOTP_KEY;
 
       // Revocado: se corta en la siguiente request.
       const doomed = createDevice({ name: "Condenado", scope: "approve" });
