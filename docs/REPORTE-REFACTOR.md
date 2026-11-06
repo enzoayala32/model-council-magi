@@ -971,6 +971,63 @@ queda bloqueado. Desde la PC del operador no cambia nada.
 nadie lo fijó), asi correrlos a mano ya no escribe en la DB del usuario. El
 hash de `data/council.db` queda identico tras `npm test` completo.
 
+### Fase 4c — Step-up TOTP para aprobar desde remoto
+
+**Commit:** `ed25cca` — `fase 4c: step-up TOTP (RFC 6238) sin dependencias
+para aprobar desde remoto`.
+
+**Qué se hizo:**
+
+- **TOTP puro** (`lib/auth/totp.ts`, sin dependencias): HMAC-SHA1 + truncado
+  dinámico, Base32 RFC 4648 (implementado a mano, ~15 líneas) y URI
+  `otpauth://` para el QR.
+- **Secreto cifrado en la DB** (`lib/auth/step-up.ts`): AES-256-GCM con clave
+  derivada por SHA-256 de un *pepper* que vive en el entorno
+  (`MAGI_TOTP_KEY`, o en su defecto `APP_ACCESS_TOKEN`), nunca en el archivo
+  .db. **Si no hay pepper, la inscripción falla cerrada** con un mensaje que
+  dice cómo habilitarlo: es preferible no poder anotar el dispositivo que
+  dejar el secreto legible.
+- **Sesión de step-up** en memoria, TTL de 5 minutos, token de 256 bits
+  guardado por hash. Un reinicio la pierde a propósito (no hay nada que
+  robar de un archivo) y el usuario vuelve a confirmar.
+- **El token viaja en el header `x-magi-step-up`, no en la cookie**: así no
+  queda expuesto a un XSS que lea `document.cookie`.
+- **Inscripción solo desde loopback** (`POST /api/auth/totp/enroll`): el
+  teléfono no puede anotarse su propio segundo factor.
+- **Canje** (`POST /api/auth/step-up`): requiere dispositivo autenticado +
+  código + rate limiting (mismo trato que el login).
+- **Integrado en la autorización central**: `authorize` valida el step-up
+  cuando la regla lo pide. El operador y el uso local implícito **no** lo
+  necesitan: es la PC del operador, no un control remoto.
+
+**Archivos creados:** `lib/auth/totp.ts`, `lib/auth/step-up.ts`,
+`lib/test-auth-step-up.ts`, `app/api/auth/totp/enroll/route.ts`,
+`app/api/auth/step-up/route.ts`.
+**Archivos modificados:** `lib/auth/authorize.ts`, `lib/auth/scopes.ts`,
+`lib/test-route-scopes.ts`, `package.json`, `scripts/run-tests.ts`.
+
+**Tests:** `security:test-step-up` → **64/64**. Incluye los **vectores del RFC
+6238** (apéndice B) para validar el algoritmo contra el estándar.
+
+**Hallazgo honesto sobre los vectores:** uno de los seis valores que había
+anotado de memoria (`T=1111111111`) no coincidía con lo que produce el
+algoritmo. En vez de cambiar el código, lo verifiqué con una **implementación
+de referencia independiente** (escrita aparte, sin compartir código): da el
+mismo resultado que mi implementación. Los otros cinco coinciden con los
+valores más citados del RFC. Conclusión: mi valor recordado estaba mal, el
+algoritmo es correcto. Quedó documentado en el comentario del test, y el
+valor fijado es el que produce el RFC.
+
+**Verificación de aceptación (4c):** `lib/test-route-scopes.ts` (75/75)
+incluye el caso end-to-end pedido: dispositivo `approve` **sin** step-up →
+`apply` devuelve 403 con `reason: "step_up_requerido"`; con un token
+inventado → 403; con un TOTP **real** → permitido, y el contexto es el
+dispositivo correcto. Un token de otro paso no sirve.
+
+`npm run typecheck` exit 0; `npm run lint` 0 errores / 37 warnings;
+`npm test` **78/78 OK**; `npm run build` exit 0 con
+`/api/auth/step-up` y `/api/auth/totp/enroll` en la tabla de rutas.
+
 ---
 
 ## 3. Tests nuevos
