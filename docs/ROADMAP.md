@@ -58,7 +58,7 @@ proyecto.
 | Nota: no existe "reanudar" en el servidor; reintentar = crear task nueva | **HECHO** |
 | 4a Tablas + canje con rate limiting + cookie de dispositivo + auditoría | **HECHO** |
 | 4b Scopes `observe`/`operate`/`approve` + autorización central + test de cobertura de rutas | **HECHO** |
-| 4c Step-up TOTP para aprobar desde remoto | **PENDIENTE** |
+| 4c Step-up TOTP para aprobar desde remoto | **HECHO** (RFC 6238, sin dependencias) |
 | 4d UI de Dispositivos y Actividad + kill switch `REMOTE_ACCESS=off` | **PENDIENTE** |
 | Nota: hasta 4c, `apply`/`discard` desde remoto quedan bloqueados a propósito | **HECHO** |
 | 5 | Acceso remoto documentado (Tailscale recomendado, Cloudflare Tunnel alternativa, port-forward desaconsejado) + `npm run doctor:remote` | **PENDIENTE** |
