@@ -8,8 +8,11 @@
  * Orden de la decision:
  * 1. Ruta sin clasificar -> DENEGADA. No existe "ruta nueva sin pensar".
  * 2. Ruta `public` -> pasa (se autentica sola: login y canje).
- * 3. Loopback SIN ninguna credencial configurada -> pasa. Es el uso local
- *    de siempre, de una sola persona, y no debe cambiar.
+ * 3. Peer **loopback verificado por el kernel** (header `x-magi-peer` que
+ *    escribe `server.ts` leyendo `req.socket.remoteAddress`) SIN ninguna
+ *    credencial configurada -> pasa. Es el uso local de siempre, de una sola
+ *    persona, y no debe cambiar. El header `Host` NO entra en esta decisión:
+ *    lo manda el cliente.
  * 4. Token de la app valido -> pasa con scope `approve` (es el secreto
  *    del operador: si lo tenes, sos el operador).
  * 5. Cookie de dispositivo -> pasa solo si el scope del dispositivo
@@ -26,7 +29,8 @@
 
 import { findDeviceByToken, touchDevice, type Device, type DeviceScope } from "./devices";
 import { readDeviceToken } from "./cookie";
-import { isLoopbackHost, ruleFor, scopeSatisfies, type RouteRule, type RouteScope } from "./scopes";
+import { ruleFor, scopeSatisfies, type RouteRule, type RouteScope } from "./scopes";
+import { allowsLocalImplicit, isVerifiedLoopback } from "../peer";
 import { recordAudit } from "./audit";
 import { constantTimeEqual } from "../api-security";
 import { readCookie } from "./cookie-parse";
@@ -74,7 +78,9 @@ export function resolveAuthContext(request: {
     }
   }
 
-  return { device: null, operator: false, localImplicit: isLoopbackHost(request.headers.get("host")) };
+  // Peer verificado por el kernel, NO el header Host: el Host lo manda el
+  // cliente y cualquiera puede poner `Host: localhost:3000`.
+  return { device: null, operator: false, localImplicit: allowsLocalImplicit(request) };
 }
 
 function readBearer(value: string | null): string | null {
@@ -160,7 +166,7 @@ export function authorize(options: AuthorizeOptions): AuthDecision {
   }
 
   // Sin identidad utilizable.
-  const loopback = isLoopbackHost(options.request.headers.get("host"));
+  const loopback = isVerifiedLoopback(options.request);
   return {
     ok: false,
     status: loopback ? 401 : 403,

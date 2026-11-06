@@ -3,11 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "dev:lan": "next dev -H 0.0.0.0",
+    "dev": "tsx scripts/dev-server.ts --dev",
+    "dev:lan": "tsx scripts/dev-server.ts --dev --lan",
     "build": "next build",
-    "start": "next start",
-    "start:lan": "next start -H 0.0.0.0",
+    "start": "tsx scripts/dev-server.ts",
+    "start:lan": "tsx scripts/dev-server.ts --lan",
     "lint": "eslint .",
     "agent:test": "tsx lib/agent/test-run.ts",
     "agent:test-project": "tsx lib/agent/test-project.ts",
@@ -99,7 +99,9 @@
     "security:test-devices": "tsx lib/test-auth-devices.ts",
     "security:test-route-scopes": "tsx lib/test-route-scopes.ts",
     "security:test-step-up": "tsx lib/test-auth-step-up.ts",
-    "security:test-device-routes": "tsx lib/test-device-routes.ts"
+    "security:test-device-routes": "tsx lib/test-device-routes.ts",
+    "security:test-rate-limit": "tsx lib/test-rate-limit.ts",
+    "security:test-peer-spoof": "tsx lib/test-peer-spoof.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.55",
