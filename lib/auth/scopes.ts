@@ -130,6 +130,17 @@ export const ROUTE_RULES: readonly RouteRule[] = [
   { pattern: "/api/pairing/redeem", method: "POST", scope: "public", note: "Canje de codigo. Se autentica con el codigo + rate limiting." },
   { pattern: "/api/auth/step-up", method: "POST", scope: "public", note: "Canje de TOTP por sesion de step-up. Se autentica con el dispositivo + codigo + rate limiting." },
   { pattern: "/api/auth/totp/enroll", method: "POST", scope: "approve", stepUp: true, note: "Inscribe el segundo factor de un dispositivo. Ademas se restringe a loopback dentro de la ruta: anotar un secreto TOTP es tarea de la PC." },
+
+  // ---------- Gestion de dispositivos y auditoria (Fase 4d) ----------
+  // Todas se restringen ADICIONALMENTE a loopback dentro de la ruta: ver o
+  // cambiar que dispositivos tienen acceso es informacion de la PC. El scope
+  // de la tabla cubre el caso (teorico) de que esa restricion se relaje.
+  { pattern: "/api/devices", method: "GET", scope: "operate", note: "Lista dispositivos emparejados. Solo loopback." },
+  { pattern: "/api/devices/:id", method: "PATCH", scope: "approve", stepUp: true, note: "Renombra o cambia el scope de un dispositivo. Solo loopback." },
+  { pattern: "/api/devices/:id", method: "DELETE", scope: "approve", stepUp: true, note: "Revoca un dispositivo. Solo loopback." },
+  { pattern: "/api/devices/revoke-all", method: "POST", scope: "approve", stepUp: true, note: "Revoca todos los dispositivos (kill switch de credenciales). Solo loopback." },
+  { pattern: "/api/audit", method: "GET", scope: "operate", note: "Registro de actividad. Solo loopback." },
+  { pattern: "/api/audit", method: "POST", scope: "approve", stepUp: true, note: "Poda el registro con la retencion configurada. Solo loopback." },
 ];
 
 /** Escapa los metacaracteres de regex. Escrito sin una clase de caracteres

@@ -16,6 +16,9 @@ import { getDb } from "../db";
 
 const MAX_DETAIL_CHARS = 200;
 
+/** Retencion por default del registro: 90 dias. */
+export const AUDIT_RETENTION_DAYS = 90;
+
 export type AuditAction =
   | "pairing_created"
   | "pairing_redeemed"
@@ -86,8 +89,8 @@ export function listAuditLog(query: AuditQuery = {}): AuditEntry[] {
   return rows.map(rowToEntry);
 }
 
-/** Poda: retencion de 90 dias. Devuelve cuantas filas se fueron. */
-export function pruneAuditLog(retentionDays = 90): number {
+/** Poda: devuelve cuantas filas se fueron. */
+export function pruneAuditLog(retentionDays = AUDIT_RETENTION_DAYS): number {
   const cutoff = Date.now() - retentionDays * 24 * 60 * 60_000;
   const result = getDb().prepare("DELETE FROM audit_log WHERE ts < ?").run(cutoff);
   return result.changes;

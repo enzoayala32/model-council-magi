@@ -10,7 +10,7 @@ export type Phase = "entry" | "thinking" | "results";
 export type ModelRunState = "queued" | "thinking" | "complete";
 export type ResultTab = "answer" | "debate" | "sources" | "steps" | "traces";
 export type RunPhase = "drafting" | "debating" | "synthesizing" | "done";
-export type SettingsTab = "connectors" | "skills" | "research" | "images" | "catalog";
+export type SettingsTab = "connectors" | "skills" | "research" | "images" | "catalog" | "devices" | "activity";
 
 export type ConnectorSettings = {
   github: boolean;

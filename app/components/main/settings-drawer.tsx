@@ -1,12 +1,14 @@
 "use client";
 import { useState } from "react";
-import { FolderCog, Globe, Image as ImageIcon, Library, Search, Wrench, X } from "lucide-react";
+import { FolderCog, Globe, Image as ImageIcon, Library, ScrollText, Search, Smartphone, Wrench, X } from "lucide-react";
 import type { ConnectorSettings, SettingsTab } from "../../lib/client-types";
 import type { AgentSkill } from "@/lib/skills";
 import { IMAGE_MODELS } from "@/lib/models";
 import { PERSONA_PRESETS } from "@/lib/persona-presets";
 import { importSkillFromText } from "@/lib/skills";
 import { ModelCatalogPane } from "./model-catalog";
+import { ActivityPane, DevicesPane } from "./devices";
+import { PairingDialog } from "./pairing";
 import { newId } from "@/lib/threads";
 
 export function SettingsDrawer({
@@ -62,6 +64,8 @@ export function SettingsDrawer({
   const [draftDescription, setDraftDescription] = useState("");
   const [draftBody, setDraftBody] = useState("");
   const [importText, setImportText] = useState("");
+  // Fase 4d: dialogo de emparejamiento por QR.
+  const [pairingOpen, setPairingOpen] = useState(false);
 
   function addSkill() {
     const body = draftBody.trim();
@@ -128,6 +132,12 @@ export function SettingsDrawer({
         </button>
         <button className={tab === "catalog" ? "active" : ""} type="button" onClick={() => setTab("catalog")}>
           <Library size={13} /> Catálogo
+        </button>
+        <button className={tab === "devices" ? "active" : ""} type="button" onClick={() => setTab("devices")}>
+          <Smartphone size={13} /> Dispositivos
+        </button>
+        <button className={tab === "activity" ? "active" : ""} type="button" onClick={() => setTab("activity")}>
+          <ScrollText size={13} /> Actividad
         </button>
       </div>
 
@@ -379,6 +389,21 @@ export function SettingsDrawer({
       {tab === "catalog" ? (
         <ModelCatalogPane />
       ) : null}
+
+      {tab === "devices" ? (
+        <>
+          <DevicesPane />
+          <button type="button" className="mBtn" onClick={() => setPairingOpen(true)}>
+            <Smartphone size={16} /> Emparejar teléfono
+          </button>
+        </>
+      ) : null}
+
+      {tab === "activity" ? (
+        <ActivityPane />
+      ) : null}
+
+      <PairingDialog open={pairingOpen} onClose={() => setPairingOpen(false)} />
       </aside>
     </div>
   );

@@ -341,6 +341,20 @@ async function main(): Promise<void> {
     ),
   );
 
+  // Fase 4d: la cookie de dispositivo es credencial por si sola. Antes esto
+  // exigia APP_ACCESS_TOKEN siempre, asi que un telefono emparejado no podia
+  // autenticarse nunca desde la LAN.
+  check(
+    "cookie de dispositivo: pasa el proxy sin APP_ACCESS_TOKEN",
+    isOk(decide({ cookie: "magi_device_token=abc123" }, { APP_ACCESS_TOKEN: "secreto" })),
+  );
+  check(
+    "cookie de dispositivo basura: pasa el proxy (lo valida la ruta)",
+    isOk(decide({ cookie: "magi_device_token=basura" }, { APP_ACCESS_TOKEN: "secreto" })),
+  );
+  check("con token de la app sigue funcionando igual", isOk(decide({ authorization: "Bearer secreto" }, { APP_ACCESS_TOKEN: "secreto" })));
+  check("sin nada, sigue bloqueado", isFailure(decide({}, { APP_ACCESS_TOKEN: "secreto" }), "token", 403));
+
   console.log(`\n${passed}/${passed + failed} casos OK`);
   if (failed > 0) process.exit(1);
 }

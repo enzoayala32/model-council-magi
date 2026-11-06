@@ -65,6 +65,7 @@ const OFFLINE_EXACT = [
   "security:test-devices",
   "security:test-route-scopes",
   "security:test-step-up",
+  "security:test-device-routes",
 ];
 
 const liveSet = new Set<string>(LIVE_SCRIPTS);

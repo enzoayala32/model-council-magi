@@ -327,7 +327,14 @@ export function evaluateApiRequest(
   }
 
   const token = env.APP_ACCESS_TOKEN?.trim() ?? "";
-  if (token && !request.tokenExempt) {
+  // La cookie de dispositivo es una credencial válida por sí sola: si está
+  // presente, el proxy la deja pasar y la validación real (¿existe el
+  // dispositivo? ¿está revocado? ¿tiene scope?) la hace `lib/auth/authorize.ts`,
+  // que es quien puede tocar la DB. Antes esto exigía APP_ACCESS_TOKEN
+  // siempre, así que un teléfono emparejado no podía autenticarse NUNCA desde
+  // la LAN: tenía que conocer además el token del operador.
+  const deviceCookie = readCookie(request.cookie ?? null, DEVICE_COOKIE);
+  if (token && !request.tokenExempt && !deviceCookie) {
     const bearer = readBearer(request.authorization ?? null);
     const cookie = readCookie(request.cookie ?? null, TOKEN_COOKIE);
     const bearerOk = bearer !== null && constantTimeEqual(bearer, token);

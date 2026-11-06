@@ -98,7 +98,8 @@
     "security:test-task-stream-reducer": "tsx lib/test-task-stream-reducer.ts",
     "security:test-devices": "tsx lib/test-auth-devices.ts",
     "security:test-route-scopes": "tsx lib/test-route-scopes.ts",
-    "security:test-step-up": "tsx lib/test-auth-step-up.ts"
+    "security:test-step-up": "tsx lib/test-auth-step-up.ts",
+    "security:test-device-routes": "tsx lib/test-device-routes.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.55",
@@ -110,6 +111,7 @@
     "next": "^16.2.4",
     "pdf-parse": "^2.4.5",
     "postcss": "^8.5.13",
+    "qrcode": "^1.5.4",
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "react-markdown": "^10.1.0",
