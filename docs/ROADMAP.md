@@ -75,8 +75,8 @@ hasta que el usuario lo pruebe; cada fase trae su checklist manual.
 | Fase | Qué es | Estado |
 |---|---|---|
 | 7 | Cliente MCP de **solo lectura**: config validada fuera del repo, allowlist explícita por herramienta, aislamiento de `process.env` para procesos stdio, salida tratada como contenido no confiable | **HECHA** |
-| 8 | Herramientas MCP de escritura **solo con aprobación humana** (+ UI de servidores, solo editable desde loopback) | **PENDIENTE** |
-| 9 | El consejo y el agente como **servidor MCP** (`/api/mcp`), clientes emparejados como dispositivos, sin herramientas de aprobación expuestas | **PENDIENTE** |
+| 8 | Herramientas MCP de escritura **solo con aprobación humana** (código de un solo uso, hash de argumentos, 5 min de vida; la UI de servidores sigue pendiente) | **HECHA** (salvo UI de administración) |
+| 9 | El consejo y el agente como **servidor MCP** (`/api/mcp`), clientes emparejados como dispositivos, sin herramientas de aprobación expuestas | **HECHA** |
 
 Reglas no negociables: la config de MCP vive fuera del repo y nunca se
 lee del workspace del agente (un repo clonado no puede registrar comandos

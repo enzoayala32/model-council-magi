@@ -145,6 +145,11 @@ export const ROUTE_RULES: readonly RouteRule[] = [
   // Enviar una prueba opera sobre el sistema de notificaciones: no es observe.
   { pattern: "/api/push/test", method: "POST", scope: "operate", note: "Envía una notificación de prueba a las suscripciones propias." },
 
+  // ---------- Servidor MCP (Fase 9) ----------
+  // Un cliente MCP emparejado es un dispositivo más. Todo lo que expone es de
+  // solo lectura; no hay método de aprobación (eso es humano, Fase 8).
+  { pattern: "/api/mcp", method: "POST", scope: "observe", note: "Endpoint JSON-RPC del servidor MCP: initialize, tools/list, tools/call, ping. Todas las herramientas son de solo lectura." },
+
   // ---------- Gestion de dispositivos y auditoria (Fase 4d) ----------
   // Todas se restringen ADICIONALMENTE a loopback dentro de la ruta: ver o
   // cambiar que dispositivos tienen acceso es informacion de la PC. El scope

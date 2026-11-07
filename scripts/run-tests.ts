@@ -81,6 +81,7 @@ const OFFLINE_EXACT = [
   "security:test-request-proto",
   "security:test-web-push",
   "security:test-mcp-client",
+  "security:test-mcp-server",
 ];
 
 const liveSet = new Set<string>(LIVE_SCRIPTS);

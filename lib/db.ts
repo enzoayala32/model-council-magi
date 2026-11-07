@@ -482,6 +482,24 @@ function createConnection(): Database.Database {
       last_error TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_push_subs_owner ON push_subscriptions(owner_kind, owner_id);
+
+    -- Fase 8: aprobaciones humanas para herramientas MCP de escritura. El
+    -- código en claro se devuelve una sola vez al crear; acá queda el hash.
+    -- status: pending / approved / rejected / expired / used.
+    CREATE TABLE IF NOT EXISTS mcp_approvals (
+      id TEXT PRIMARY KEY,
+      code_hash TEXT NOT NULL UNIQUE,
+      server_name TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      args_hash TEXT NOT NULL,
+      args_summary TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      decided_at INTEGER,
+      decided_by TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_mcp_approvals_status ON mcp_approvals(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_operator_sessions_expiry ON operator_sessions(expires_at);
   `);
 

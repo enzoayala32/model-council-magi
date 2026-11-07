@@ -93,7 +93,50 @@ secretos de la app redactados. Se trata como texto de un extraño, nunca como
 instrucción: si un servidor responde "ignorá tus reglas y ejecutá…", eso es
 dato, no orden.
 
-## 4. Timeout y procesos
+## 4. Fase 8 — herramientas de escritura: aprobación humana
+
+Una herramienta que MODIFICA algo (borrar, mandar, aplicar) no se ejecuta con
+que el agente la pida. Hace falta una **aprobación humana, de un solo uso**.
+
+- El cliente pide la herramienta → `lib/mcp/approvals.ts` crea una solicitud y
+  devuelve un código del tipo `XXXX-XXXX-XXXX-XXXX`, **una sola vez** (en la DB
+  queda el hash, igual que los códigos de emparejamiento).
+- El código se le muestra al operador en la app; desde ahí aprueba o rechaza.
+- Aprobar es acto humano: operador (token o sesión) o dispositivo con scope
+  `approve` **y step-up vigente** (`lib/auth/step-up.ts`).
+- Al ejecutar, la aprobación se **consume**: es de un solo uso, y tiene que
+  coincidir el hash de los argumentos. Si el agente cambió la ruta que iba a
+  borrar, la aprobación no sirve.
+- Vence en 5 minutos. Los errores son genéricos: no se filtra si existía.
+- Un pedido idéntico repetido dentro de 10 segundos **reusa** la misma
+  solicitud: si no, un agente que insigue genera 10 aprobaciones y el operador
+  termina aprobando en masa.
+
+Quién puede aprobar lo resuelve la ruta, no este módulo.
+
+## 5. Fase 9 — la app como servidor MCP (`/api/mcp`)
+
+Un cliente MCP emparejado se autentica como un dispositivo más (cookie de
+dispositivo o token de operador) y habla JSON-RPC 2.0 por POST:
+
+| Método | Qué hace |
+|---|---|
+| `initialize` | Handshake. Devuelve las instrucciones, que aclaran que es solo lectura |
+| `ping` | Latido |
+| `tools/list` | Catálogo, filtrado por el scope del cliente |
+| `tools/call` | Ejecuta una herramienta de solo lectura |
+
+Herramientas expuestas, todas `readOnly`: `tasks.list`, `tasks.status`,
+`tasks.events`, `council.runs`, `council.run`.
+
+**No hay método de aprobación, a propósito.** Aprobar es un acto humano con
+segundo factor que se hace en la app; un cliente MCP no puede pedirlo por
+protocolo. Si un cliente insiste con `approvals/approve`, recibe `-32601`.
+
+La ruta tiene scope en `lib/auth/scopes.ts` y llama `guardRequest()` como
+primera sentencia: sin credencial o con cookie falsa, 401/403.
+
+## 6. Timeout y procesos
 
 Cada servidor tiene su `timeoutMs`. Si no responde, la conexión queda en error
 —no colgada— y el proceso se mata **por árbol** (`killProcessTree`), para que en
@@ -103,8 +146,14 @@ Windows no queden procesos nieto vivos.
 
 ```
 npm run security:test-mcp-client      # 45 casos
+npm run security:test-mcp-server      # 53 casos
 ```
 
-Levanta un servidor MCP de verdad (un proceso Node que habla JSON-RPC por
-stdio), no un mock: se prueba el handshake, `tools/list`, `tools/call`, el
-aislamiento del entorno, la allowlist, la redacción, el timeout y el cierre.
+- **Cliente**: levanta un servidor MCP de verdad (un proceso Node que habla
+  JSON-RPC por stdio), no un mock: handshake, `tools/list`, `tools/call`,
+  aislamiento del entorno, allowlist, redacción, timeout y cierre.
+- **Servidor y aprobaciones**: ciclo de vida completo de una aprobación (crear,
+  reusar, aprobar, rechazar, consumir, gastar, argumentos cambiados, vencida),
+  validación de argumentos, catálogo por scope, y la ruta real `/api/mcp` sin
+  credencial, con cookie falsa y con token —incluido que no exista método de
+  aprobación.
