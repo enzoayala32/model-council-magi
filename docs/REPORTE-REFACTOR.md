@@ -1330,6 +1330,7 @@ Ese smoke es la verificación de la aceptación de 4c/4d junta: un dispositivo
 | seg. | `lib/test-remote-doctor.ts` | 65 | `security:test-remote-doctor` |
 | seg. | `lib/test-sse-proxy.ts` | 26 | `security:test-sse-proxy` |
 | seg. | `lib/test-request-proto.ts` | 34 | `security:test-request-proto` |
+| seg. | `lib/test-web-push.ts` | 77 | `security:test-web-push` |
 
 Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar que el tipado no cambió el comportamiento (46 casos entre los cuatro scripts). Fase 4 agrega 245 casos y el total de scripts del runner pasa de 63 a 67. Fase 5 agrega 54 casos con un proveedor falso y el total pasa a 68 scripts. Fase 7 agrega 95 casos (pricing, trazas puras y persistencia en una DB temporal con migración aditiva) y el total pasa a **69 scripts**.
 
@@ -1688,6 +1689,87 @@ opaco (no el token maestro, no el token de dispositivo).
 `tailscale serve` y Cloudflare Tunnel, y cuáles **no** se usan para autorizar:
 `X-Forwarded-For`, `X-Real-IP`, `CF-Connecting-IP`, `X-Forwarded-Host`,
 `CF-Access-JWT`, `Origin` y `Referer`.
+
+## 1G. Misión 2 — Fase 6: notificaciones push
+
+### Arquitectura (todo local, sin dependencias)
+
+| Módulo | Responsabilidad |
+|---|---|
+| `lib/push/vapid.ts` | Par EC P-256 generado localmente, clave privada cifrada en `push_config`, JWT VAPID (ES256) |
+| `lib/push/web-push.ts` | Cifrado del payload (RFC 8291 `aes128gcm`) y envío HTTP; nunca lanza |
+| `lib/push/subscriptions.ts` | CRUD por endpoint (UNIQUE), preferencias de lista CERRADA, marcado de exito/fallo |
+| `lib/push/emit.ts` | Lógica PURA: coalescencia, tope por minuto, saneamiento del payload, despacho con emisor inyectable |
+| `lib/push/notify.ts` | Qué estados del agente notifican; único punto de entrada |
+| `app/api/push/*` | `key` (GET), `subscribe` (POST), `subscriptions` (GET/PATCH), `unsubscribe` (POST), `test` (POST) |
+| `app/components/mobile/push-settings.tsx` | UI en Ajustes → Notificaciones |
+| `public/sw.js` | `push` y `notificationclick` (ya estaban; el tag colapsa en el SO) |
+
+### Decisiones
+
+- **La clave privada se guarda cifrada**, con el mismo pepper que los secretos
+  TOTP (`MAGI_TOTP_KEY` o `APP_ACCESS_TOKEN`). Sin pepper la app responde "no
+  configurado" (503) y no guarda nada en claro.
+- **El cifrado es obligatorio**: los servicios de push rechazan texto plano, y
+  es lo que evita que un proxy intermedio lea la notificación. Implementado a
+  mano (HKDF-SHA256 + AES-128-GCM) para no sumar dependencias.
+- **Coalescencia por (suscripcion, tag)**: una tarea es un tag, así que dos
+  tareas distintas generan dos notificaciones distintas y 40 eventos de la
+  misma tarea generan UNA que dice "(+39 más)".
+- **Tope de 6 notificaciones por suscripción por minuto.**
+- **Saneamiento por allowlist**: el payload solo lleva `title`, `body`, `tag`
+  y `url`. Ni prompts, ni diffs, ni tokens, ni rutas del filesystem.
+- **Se notifica desde `transitionTask`, DESPUÉS de persistir**: un servicio de
+  push caído no puede deshacer una transición ya guardada. Sin suscripciones,
+  `notifyStatusChange` sale sin abrir claves ni tocar la red — los tests no
+  cambian de comportamiento.
+- **Estados que notifican**: `APPLIED`, `NO_CHANGES` (tarea terminada),
+  `FAILED`, `CANCELLED`, `INTERRUPTED` (con error), `READY_FOR_REVIEW`
+  (esperando aprobación). Los demás son ruido.
+- **Suscripción muerta (404/410)**: se desactiva sola para no insistir con algo
+  que nunca va a llegar.
+- **El payload de las rutas nunca devuelve `p256dh` ni `auth`**: alcanzaría con
+  ellos para secuestrar notificaciones.
+
+### Scopes (Fase 6)
+
+| Ruta | Método | Scope | Por qué |
+|---|---|---|---|
+| `/api/push/key` | GET | observe | Clave pública; no es secreta, pero se pide credencial |
+| `/api/push/subscribe` | POST | observe | Cualquiera que ya entró puede pedir notificaciones |
+| `/api/push/subscriptions` | GET | observe | Lista las propias (nunca las ajenas) |
+| `/api/push/subscriptions` | PATCH | observe | Preferencias o pausa de una suscripción PROPIA |
+| `/api/push/unsubscribe` | POST | observe | Baja por endpoint, verificando que sea propia |
+| `/api/push/test` | POST | operate | Enviar push opera sobre el sistema de notificaciones |
+
+El barrido de `security:test-route-enforcement` pasó de 44 a **45 pares
+ruta+método con guardia verificada**, todos denegando con peer remoto y sin
+credencial o con cookie falsa.
+
+### Tests
+
+`lib/test-web-push.ts` (**77/77**, sin red y sin servicios reales):
+
+- **JWT VAPID verificado de verdad**: se firma con la privada y se verifica con
+  la pública reconstruida desde el punto sin comprimir. Una firma modificada no
+  verifica. (Al escribir esto apareció un bloque muerto que lanzaba antes de
+  verificar: el test lo delató.)
+- **Estructura del registro RFC 8291**: salt de 16 bytes, record size 4096,
+  id de la clave efímera de 65 bytes, tag de GCM al final, y el texto plano no
+  aparece en el cuerpo.
+- **Envío con emisor inyectable**: headers `Authorization: vapid t=…, k=…`,
+  `Encryption: salt=…`, `Crypto-Key: dh=…; p256ecdsa=…`, cuerpo binario; 404 →
+  `ok:false` con status; error de red no lanza; endpoint inválido se rechaza.
+- **CRUD**: re-suscribirse actualiza en vez de duplicar; preferencias con lista
+  cerrada; altas/bajas; marcas de éxito y fallo.
+- **Emisión**: coalescencia por tag con contador, tope por minuto, saneamiento
+  (recorta strings y descarta campos desconocidos), despacho con hooks.
+
+### NO VERIFICADO
+
+- **Push real a Android**: sin dispositivo no se pudo comprobar de punta a
+  punta. Pendiente la checklist manual (`docs/ACCESO-REMOTO.md`): activar desde
+  Ajustes, enviar prueba, tocar la notificación, pausar/reanudar.
 
 ## Apéndice — Matriz ruta por scope
 
