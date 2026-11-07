@@ -1327,6 +1327,9 @@ Ese smoke es la verificación de la aceptación de 4c/4d junta: un dispositivo
 | seg. | `lib/test-route-enforcement.ts` | 13 | `security:test-route-enforcement` |
 | seg. | `lib/test-operator-routes.ts` | 40 | `security:test-operator-routes` |
 | seg. | `lib/test-operator-sessions.ts` | 33 | `security:test-operator-sessions` |
+| seg. | `lib/test-remote-doctor.ts` | 65 | `security:test-remote-doctor` |
+| seg. | `lib/test-sse-proxy.ts` | 26 | `security:test-sse-proxy` |
+| seg. | `lib/test-request-proto.ts` | 34 | `security:test-request-proto` |
 
 Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar que el tipado no cambió el comportamiento (46 casos entre los cuatro scripts). Fase 4 agrega 245 casos y el total de scripts del runner pasa de 63 a 67. Fase 5 agrega 54 casos con un proveedor falso y el total pasa a 68 scripts. Fase 7 agrega 95 casos (pricing, trazas puras y persistencia en una DB temporal con migración aditiva) y el total pasa a **69 scripts**.
 
@@ -1594,6 +1597,97 @@ aviso corto en la sección de modos de arranque.
 **Commit:** `b49d41f`.
 
 ---
+
+## 1F. Misión 2 — Fase 5 completa (doctor, SSE tras proxy, cookie Secure)
+
+### 5.3 — `npm run doctor:remote`
+
+`lib/auth/remote-doctor.ts` es la decisión (función pura, sin red ni procesos) y
+`scripts/doctor-remote.ts` solo imprime: lee el entorno, `.env`/`.env.local`
+(solo lectura) y la DB, y arma el snapshot. Se agregó el script
+`doctor:remote`.
+
+Reglas que fija el doctor, y el nivel de cada una:
+
+| Situación | Nivel |
+|---|---|
+| Hosts remotos sin `APP_ACCESS_TOKEN` ni dispositivos activos | **FAIL** |
+| Server en `0.0.0.0` sin ninguna credencial | **FAIL** |
+| Modo LAN sin `APP_ACCESS_TOKEN` | **FAIL** |
+| `tailscale funnel` activo (expone a internet) | **FAIL** |
+| Host público en `ALLOWED_HOSTS` (no tailnet ni IP privada) | WARN |
+| Acceso remoto por HTTP plano | WARN |
+| Acceso local implícito apagado (fail-closed) | WARN |
+| Sin dispositivos, solo token de operador | WARN |
+| Dispositivos con scope `operate` / `approve` | WARN |
+| Sesiones de operador vivas con el server expuesto | WARN |
+| `REMOTE_ACCESS=off` (corta lo remoto) / solo loopback / tailnet con credencial | PASS |
+
+El exit code es 1 si hay algún FAIL, así que sirve para dejarlo en un script de
+arranque. **Nunca imprime el valor de `APP_ACCESS_TOKEN`**: solo si está
+definida.
+
+Tests: `lib/test-remote-doctor.ts` (**65/65**). Dos hallazgos salieron de
+escribirlos: `[::1]` se rompía al partir el host por `:` (quedaba un string
+vacío y no se reconocía como loopback), y `REMOTE_ACCESS=off` debe anular el
+FAIL por falta de credencial, porque el proxy rechaza esos hosts.
+
+### 5.4 — SSE detrás de un proxy HTTP real
+
+`lib/test-sse-proxy.ts` arma la cadena completa con dos servers HTTP reales:
+cliente `fetch` → **proxy de prueba** (latencia de conexión + buffering: no
+reenvía cada chunk al llegar, los acumula) → **server de origen** que envuelve
+el handler de la ruta SSE. Es el escenario que un túnel o un proxy corporativo
+puede romper.
+
+Verificado (**26/26**, tres corridas seguidas sin diferencias):
+
+- los eventos llegan **en orden** y **completos**: cada `data` sigue siendo
+  JSON válido, así que el buffering no troza ni reordena frames;
+- el **heartbeat** pasa el proxy aunque acumule bytes, y el stream sigue vivo
+  después (siguen entrando eventos);
+- al **cortar** la conexión y reconectar con `?sinceSeq=`, la unión de las dos
+  lecturas es una secuencia continua desde 0, sin huecos ni duplicados —
+  incluidos los eventos emitidos **mientras el cliente estaba desconectado**;
+- lo mismo por el header `Last-Event-ID` (lo que reenvía `EventSource` solo);
+- los headers anti-buffering (`no-transform`, `X-Accel-Buffering: no`)
+  sobreviven el proxy;
+- el stream se cierra cuando la task queda en estado terminal.
+
+Dos lecciones al escribirlo: el id de la task es el segmento **anterior** a
+`events` (tomar el último daba 404), y el acumulador de bytes tiene que
+persistir entre lecturas de la **misma** conexión o parece que faltan eventos.
+
+Además, `lib/test-peer-spoof.ts` ahora **precompila** las rutas al levantar el
+server: en modo dev Next compila cada ruta la primera vez que se pide, y con la
+máquina cargada ese retardo producía 404 que el test leía como fallo real
+(falso negativo). Con la máquina cargada el test pasó de 300s y 11 fallos a
+87s y 34/34.
+
+### 5.5 — Cookie `Secure` con HTTPS detrás del túnel
+
+`lib/auth/request-proto.ts` es el único lugar que lee los headers de protocolo:
+`X-Forwarded-Proto` (manda el **primero** de la lista si pasó por varios
+proxies), `Forwarded: proto=https` (RFC 7239) y `X-Forwarded-Ssl: on`. Lo usan
+el login de operador (`POST /api/auth/token`) y el canje de emparejamiento
+(`POST /api/pairing/redeem`), para las dos cookies.
+
+Por qué se puede confiar en esos headers **acá y solo acá**: no autorizan nada,
+deciden un atributo de cookie. Un atacante que falsifique
+`X-Forwarded-Proto: https` sobre HTTP plano logra que el navegador descarte la
+cookie y se rompa su propio login. La autorización sigue saliendo del peer
+verificado del socket y de las credenciales.
+
+Regla verificada: en HTTP plano **nunca** se marca `Secure` (el navegador
+descartaría la cookie y el login fallaría sin explicación) y con HTTPS
+**siempre** se marca. Tests: `lib/test-request-proto.ts` (**34/34**), que
+incluye las dos rutas reales y comprueba que el valor de la cookie sigue siendo
+opaco (no el token maestro, no el token de dispositivo).
+
+`docs/ACCESO-REMOTO.md` documenta la tabla de headers detrás de
+`tailscale serve` y Cloudflare Tunnel, y cuáles **no** se usan para autorizar:
+`X-Forwarded-For`, `X-Real-IP`, `CF-Connecting-IP`, `X-Forwarded-Host`,
+`CF-Access-JWT`, `Origin` y `Referer`.
 
 ## Apéndice — Matriz ruta por scope
 
