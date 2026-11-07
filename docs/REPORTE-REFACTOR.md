@@ -1091,6 +1091,115 @@ medición del rate limiting dio un falso negativo porque el server corre con
 comportamiento medido fue el correcto. Queda como recordatorio: para medir
 cambios en el proxy o en el rate limiting hay que reconstruir antes.
 
+## 1D. Misión 2 — correcciones de seguridad #2
+
+### Punto 1 — Guardia obligatoria en todas las rutas (default-deny)
+
+**El problema, reproducido con el server real:** en modo LAN con `APP_ACCESS_TOKEN`,
+`Cookie: magi_device_token=falsa` (sin token) devolvía **200** en
+`GET /api/agent/projects`, `GET /api/agent/browse?path=/` (lista el disco),
+`GET /api/agent/models`, `GET /api/threads`, `GET /api/council/runs`,
+`GET /api/models/catalog` y `GET /api/provider-resilience/status`, y **201** en
+`POST /api/agent/projects`.
+
+**La causa:** el proxy no puede consultar la DB, así que deja pasar cualquier
+request con una cookie `magi_device_token`. La decisión la tenía que tomar la
+ruta, y solo **7 de 35** rutas lo hacían: 28 no tenían ninguna verificación.
+
+**El fix (default-deny, en un solo lugar):**
+- `lib/auth/guard.ts` con `guardRequest(request)`: lee método y path del propio
+  request, busca el scope en `lib/auth/scopes.ts` (que ya estaba completo y
+  verificado) y autoriza. Si la ruta no está declarada, deniega.
+- La guardia es la **primera sentencia** de cada uno de los 39 handlers
+  (ruta + método) de las 35 rutas. Un script la aplicó a todas; otro verificó el
+  orden (en `council/stream` había quedado después del parseo del body, lo que
+  devolvía 400 en vez de 403).
+- Solo `/api/auth/token` (POST y DELETE), `/api/auth/step-up`, `/api/pairing` y
+  `/api/pairing/redeem` son `public`, porque se autentican solas.
+
+**Tests:** `lib/test-route-enforcement.ts` (**13/13**) recorre las 35 rutas y por
+cada método exportado llama el handler:
+- peer remoto sin credencial -> **401/403 en las 35 rutas**;
+- cookie de dispositivo falsa -> **401/403 en las 35 rutas**;
+- `observe` -> 403 en todo lo que muta; `operate` -> 403 en `apply`; `approve`
+  sin step-up -> 403 en `apply`; operador con token -> pasa; loopback sin
+  credencial -> pasa (uso local de siempre).
+
+`lib/test-peer-spoof.ts` suma **9 casos** con el server real: cookie falsa + Host
+mentido contra 7 GET, un POST y un DELETE.
+
+**Trampa de medición que debe quedar registrada:** el test corría contra un build
+viejo (`dev: false` sirve `.next`). Después de `npm run build` la medición fue la
+correcta. `lib/test-peer-spoof.ts` ahora levanta sus servers con `MAGI_DEV=1`
+justamente para probar el código fuente.
+
+### Punto 2 — isLoopbackHost fuera de la autorización
+
+**Usos antes (7, todos falsificables por `Host`):**
+
+| Archivo | Uso |
+|---|---|
+| `app/api/devices/route.ts` | GET /api/devices |
+| `app/api/devices/[id]/route.ts` | PATCH y DELETE |
+| `app/api/devices/revoke-all/route.ts` | POST |
+| `app/api/audit/route.ts` | GET y POST |
+| `app/api/auth/totp/enroll/route.ts` | POST |
+
+**Después:** **0 usos** en `app/`. Esas 5 rutas usan `requireLocalAccess(request)`
+(creado en `lib/auth/guard.ts`), que exige **credencial de operador o peer
+loopback verificado**, nunca el `Host`. `isLoopbackHost` queda definido en
+`lib/auth/scopes.ts` **solo para los tests** que verifican el helper mismo; el
+proxy usa su propia lógica de `Host` (defensa contra navegadores), que no
+autoriza nada.
+
+**Test:** `security:test-device-routes` (43/43) ahora manda requests desde LAN
+con peer `remote` y sin credencial: las 5 rutas devuelven 403.
+
+### Punto 3 — Acceso local implícito y túneles
+
+**Problema:** un túnel local (`tailscale serve`, Cloudflare) termina en esta
+máquina, así que **todo el tráfico remoto llega como peer loopback**. Sin
+protección, un request desde internet sin credencial se trataba como local.
+
+**Fix:** `server.ts` fuerza `MAGI_DISABLE_LOCAL_IMPLICIT=1` automáticamente
+cuando `ALLOWED_HOSTS` contiene cualquier host no-loopback **o** `MAGI_LAN_MODE`
+está activo. El chequeo de arranque (rechazar sin `APP_ACCESS_TOKEN`) se
+mantiene solo para el modo LAN explícito: un `ALLOWED_HOSTS` remoto desactiva el
+acceso implícito pero no impide arrancar.
+
+**Test con reverse proxy local de prueba** (en `lib/test-peer-spoof.ts`, 3 casos):
+un proxy TCP local reenvía al server real; el server interno tiene
+`ALLOWED_HOSTS` con un host de túnel.
+
+| Escenario | Resultado |
+|---|---|
+| Request vía túnel, sin credencial | **401/403** |
+| `POST /api/pairing` vía túnel, sin credencial | **401/403** |
+| Loopback directo, sin credencial (mismo server) | **401/403** (fail-closed) |
+
+**Estabilidad del test:** los servers se levantan en modo dev y varios comparten
+`.next/dev`, por lo que el primero responde antes de compilar las rutas (404 de
+warmup). Se agregó `fetchWarm` (reintento sobre 404) y un calentamiento previo de
+las rutas usadas. Verificado 3/3 corridas estables vía el runner y en la suite
+completa.
+
+### Punto 4 — Menores
+
+- **`x-magi-peer-addr` también se borra en el handler de upgrade** (HTTP Upgrade),
+  no solo en el handler normal. Antes quedaba el valor del cliente y servía para
+  el rate limiting.
+- **Los hosts loopback se suman a `ALLOWED_HOSTS`** en vez de reemplazarlos.
+  Antes, configurar un host de túnel te dejaba sin poder abrir la app en tu
+  propia PC con `localhost`. No es un agujero: el `Host` ya no autoriza nada; el
+  allowlist es solo la defensa contra navegadores (CSRF, DNS rebinding).
+
+### Punto 5 — Documentación
+
+`README.md` (modelo de amenaza y modos de arranque) y este reporte. La matriz
+completa ruta por scope está en el apéndice de abajo.
+
+---
+
 ### Punto 2 — Rate limiting por peer real
 
 **Commit:** `b839454`.
@@ -1214,6 +1323,8 @@ Ese smoke es la verificación de la aceptación de 4c/4d junta: un dispositivo
 | 4 | `lib/test-attachment-extraction.ts` | 27 | `council:test-attachment-extraction` |
 | 5 | `lib/test-council-orchestrator.ts` | 54 | `council:test-orchestrator` |
 | 7 | `lib/test-council-run-store.ts` | 95 | `council:test-runs` |
+| seg. | `lib/test-peer-spoof.ts` | 34 | `security:test-peer-spoof` |
+| seg. | `lib/test-route-enforcement.ts` | 13 | `security:test-route-enforcement` |
 
 Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar que el tipado no cambió el comportamiento (46 casos entre los cuatro scripts). Fase 4 agrega 245 casos y el total de scripts del runner pasa de 63 a 67. Fase 5 agrega 54 casos con un proveedor falso y el total pasa a 68 scripts. Fase 7 agrega 95 casos (pricing, trazas puras y persistencia en una DB temporal con migración aditiva) y el total pasa a **69 scripts**.
 
@@ -1386,6 +1497,60 @@ Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar q
 1. `npm run council:test-runs` → **95/95**; `npm test` → **69/69**. El test de DB corre en un directorio temporal y no toca `data/council.db`.
 2. `npm run dev` y abrir `http://localhost:3000`. Hacer una pregunta al consejo (requiere keys): al terminar, abrir la pestaña **Trazas**, elegir la corrida y verificar stats, tabla de tokens/costo/latencia/fallbacks/reintentos, timeline y replay. Probar los botones Markdown/JSON y comparar dos corridas. Sin keys, un prompt vacío igual persiste una corrida `error` visible en la pestaña.
 3. Por API: `curl "http://localhost:3000/api/council/runs"`; `curl "http://localhost:3000/api/council/runs/<id>/export?format=markdown"`; `curl "http://localhost:3000/api/council/runs/compare?a=<id>&b=<id>"`; `curl -X DELETE "http://localhost:3000/api/council/runs/<id>"`. Con `APP_ACCESS_TOKEN` definido, agregar `-H "Authorization: Bearer <token>"`.
+
+---
+
+## Apéndice — Matriz ruta por scope
+
+Las 35 rutas (39 handlers). Todas pasan por `guardRequest`; verificado por
+`lib/test-route-enforcement.ts`.
+
+| Ruta | Metodo | Scope | Nota |
+|---|---|---|---|
+| `/api/agent/browse` | GET | observe | Lee el árbol del proyecto |
+| `/api/agent/inspect` | GET | observe | Símbolos/estructura |
+| `/api/agent/models` | GET | observe | Catálogo |
+| `/api/agent/projects` | GET | observe | Lista proyectos |
+| `/api/agent/projects` | POST | operate | Registra proyecto |
+| `/api/agent/projects/:id` | DELETE | operate | Borra proyecto |
+| `/api/agent/tasks` | GET | observe | Lista tasks |
+| `/api/agent/tasks` | POST | operate | Crea task |
+| `/api/agent/tasks/:id` | GET | observe | Detalle |
+| `/api/agent/tasks/:id` | DELETE | operate | Borra registro |
+| `/api/agent/tasks/:id/cancel` | POST | operate | Detiene corrida |
+| `/api/agent/tasks/:id/apply` | POST | approve + step-up | Aplica cambios al repo |
+| `/api/agent/tasks/:id/discard` | POST | approve + step-up | Descarta propuestas |
+| `/api/agent/tasks/:id/events` | GET | observe | SSE |
+| `/api/agent/tasks/:id/proposals` | GET | observe | Ver diffs |
+| `/api/council/runs` | GET | observe | Lista corridas |
+| `/api/council/runs/:id` | GET | observe | Detalle |
+| `/api/council/runs/:id` | DELETE | operate | Borra traza |
+| `/api/council/runs/:id/export` | GET | observe | Export md/json |
+| `/api/council/runs/compare` | GET | observe | Compara corridas |
+| `/api/council/stream` | POST | operate | Corrida completa (cuota) |
+| `/api/council/ping` | POST | operate | Llamadas reales (cuota) |
+| `/api/council/apply-file-change` | POST | approve + step-up | Aplica propuestas |
+| `/api/council/model-health` | GET | observe | Salud de modelos |
+| `/api/models/catalog` | GET | observe | Listado público de modelos |
+| `/api/threads` | GET | observe | Historial |
+| `/api/threads` | POST | operate | Guarda hilo |
+| `/api/threads/:id` | GET | observe | Un hilo |
+| `/api/threads/:id` | DELETE | operate | Borra hilo |
+| `/api/threads/:id/favorite` | PATCH | operate | Marca favorito |
+| `/api/threads/migrate` | POST | operate | Migra localStorage |
+| `/api/provider-resilience/status` | GET | operate | Metadata de credenciales |
+| `/api/devices` | GET | operate | Loopback + operador |
+| `/api/devices/:id` | PATCH | approve + step-up | Renombrar/cambiar scope |
+| `/api/devices/:id` | DELETE | approve + step-up | Revocar |
+| `/api/devices/revoke-all` | POST | approve + step-up | Kill switch |
+| `/api/audit` | GET | operate | Registro de actividad |
+| `/api/audit` | POST | approve + step-up | Poda |
+| `/api/auth/token` | POST | publica | Login del token |
+| `/api/auth/token` | DELETE | publica | Logout local |
+| `/api/auth/totp/enroll` | POST | approve + step-up | Loopback + operador |
+| `/api/auth/step-up` | POST | publica | Canje de TOTP |
+| `/api/pairing` | POST | publica | Genera código (loopback + operador) |
+| `/api/pairing/redeem` | POST | publica | Canje de código |
 
 ---
 

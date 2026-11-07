@@ -251,6 +251,24 @@ local implícito" sin ninguna credencial, incluido generar y canjear códigos de
 emparejamiento ([reproducido](./REPORTE-REFACTOR.md)). Ahora la decisión de
 "es esta PC" sale de la dirección del peer, que fija el kernel.
 
+### Cada ruta declara su scope (default-deny)
+
+`lib/auth/scopes.ts` tiene una entrada por ruta y método, y
+`lib/auth/guard.ts` la aplica como **primera sentencia** de cada handler. Una
+ruta sin declaración se deniega: no existe "endpoint nuevo sin pensar".
+`lib/test-route-enforcement.ts` recorre las 35 rutas y verifica que todas
+denieguan sin credencial y con una cookie de dispositivo falsa.
+
+| Scope | Qué puede hacer |
+|---|---|
+| `observe` | Leer: tareas, proyectos, corridas, hilos, salud de modelos |
+| `operate` | Crear/cancelar trabajo, escribir datos, gastar cuota de proveedor |
+| `approve` | **Aplicar o descartar cambios sobre el proyecto** (con step-up TOTP) |
+| `publica` | Se autentica sola: login del token, canje de código y de TOTP |
+
+Las rutas de administración (dispositivos, auditoría, inscripción de TOTP)
+exigen además **operador o peer loopback verificado**, nunca el header `Host`.
+
 ### Modos de arranque
 
 | Comando | Escucha | Acceso sin credencial |
