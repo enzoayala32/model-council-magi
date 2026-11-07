@@ -173,10 +173,20 @@ function defaultAllowedHosts(): string[] {
   return ["localhost", "127.0.0.1", "[::1]"];
 }
 
+/**
+ * Los hosts permitidos son los configurados MÁS los de loopback.
+ *
+ * Por qué se suman y no se reemplazan: si configurás `ALLOWED_HOSTS` para un
+ * túnel (`mi-pc.tail1234.ts.net`), antes dejabas de poder abrir la app en tu
+ * propia PC con `localhost:3000`, porque el default desaparecía. Sumarlos no
+ * es un agujero: desde la corrección de seguridad, el `Host` ya no autoriza
+ * nada — el loopback se decide por el peer real. Ací el Host solo es la
+ * defensa contra navegadores (CSRF, DNS rebinding), que es su trabajo.
+ */
 function resolveAllowedHosts(env: ApiSecurityEnv): string[] {
   const raw = parseList(env.ALLOWED_HOSTS);
-  if (raw.length === 0) return defaultAllowedHosts();
-  return raw.map(normalizeHostEntry).filter((host): host is string => Boolean(host));
+  const configured = raw.map(normalizeHostEntry).filter((host): host is string => Boolean(host));
+  return [...new Set([...configured, ...defaultAllowedHosts()])];
 }
 
 function normalizeOrigin(value: string): string | null {

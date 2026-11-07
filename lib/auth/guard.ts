@@ -24,7 +24,7 @@
 import { NextResponse } from "next/server";
 import { requireScope } from "./authorize";
 import { ruleFor } from "./scopes";
-import { isVerifiedLoopback } from "../peer";
+import { allowsLocalImplicit } from "../peer";
 import { constantTimeEqual } from "../api-security";
 
 export type GuardDenial = ReturnType<typeof NextResponse.json>;
@@ -69,8 +69,9 @@ export function requireLocalAccess(request: Request): GuardDenial | null {
       if (constantTimeEqual(match[1].trim(), appToken)) return null;
     }
   }
-  // Peer loopback verificado por el kernel.
-  if (isVerifiedLoopback(request)) return null;
+  // Peer loopback verificado por el kernel Y acceso implícito habilitado (en
+  // modo túnel/LAN el server lo fuerza apagado).
+  if (allowsLocalImplicit(request)) return null;
 
   return NextResponse.json(
     {

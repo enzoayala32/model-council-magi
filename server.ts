@@ -49,6 +49,23 @@ async function main(): Promise<void> {
   const hostname = process.env.MAGI_BIND_HOST ?? "127.0.0.1";
   const lanMode = process.env.MAGI_LAN_MODE === "1";
 
+  // Correccion de seguridad #3: si se configuró CUALQUIER host que no sea
+  // loopback (un túnel, un dominio público), el tráfico remoto llega al
+  // server como loopback — el túnel termina en esta máquina. Sin esto, un
+  // request desde internet sin credencial se trataría como "local implícito"
+  // y pasaría. Fail-closed: se apaga el acceso implícito.
+  const configuredHosts = (process.env.ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim()).filter(Boolean);
+  const nonLoopbackHost = configuredHosts.some((host) => {
+    const hostname = host.replace(/^https?:\/\//, "").replace(/^\[/, "").replace(/\].*$/, "").split(":")[0];
+    return !(hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || /^127\./.test(hostname));
+  });
+  if (lanMode || nonLoopbackHost) {
+    process.env.MAGI_DISABLE_LOCAL_IMPLICIT = "1";
+  }
+
+  // Solo el modo LAN (opt-in explícito para escuchar en la red) exige
+  // credencial para arrancar. Un ALLOWED_HOSTS no-loopback *desactiva* el
+  // acceso implícito, pero no impide arrancar.
   if (lanMode && !process.env.APP_ACCESS_TOKEN?.trim()) {
     console.error(
       "\n[server] Modo LAN rechazado: APP_ACCESS_TOKEN no está configurado.\n" +
@@ -86,8 +103,13 @@ async function main(): Promise<void> {
 
   server.on("upgrade", (req, socket, head) => {
     const headers = req.headers;
+    // Mismo tratamiento que en el handler normal: se borra lo del cliente y
+    // se escribe el valor real. Falta el `x-magi-peer-addr`, que es el que
+    // se usa para el rate limiting.
     delete headers["x-magi-peer"];
+    delete headers["x-magi-peer-addr"];
     headers["x-magi-peer"] = isLoopbackAddress(req.socket.remoteAddress) ? "loopback" : "remote";
+    headers["x-magi-peer-addr"] = normalizeAddress(req.socket.remoteAddress) || "desconocido";
     void app.getUpgradeHandler()(req, socket, head).catch(() => socket.destroy());
   });
 

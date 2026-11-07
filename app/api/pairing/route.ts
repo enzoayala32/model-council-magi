@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import QR from "qrcode";
 import { createPairingCode } from "@/lib/auth/pairing";
 import { recordAudit } from "@/lib/auth/audit";
-import { isVerifiedLoopback } from "@/lib/peer";
+import { allowsLocalImplicit } from "@/lib/peer";
 import { constantTimeEqual } from "@/lib/api-security";
 import { guardRequest } from "@/lib/auth/guard";
 
@@ -30,8 +30,10 @@ function authorizePairing(request: Request): { ok: true } | { ok: false; error: 
     if (match && constantTimeEqual(match[1].trim(), appToken)) return { ok: true };
   }
 
-  // Peer loopback verificado por el kernel.
-  if (isVerifiedLoopback(request)) return { ok: true };
+  // Peer loopback verificado por el kernel Y acceso implícito habilitado. Si
+  // el server forzó MAGI_DISABLE_LOCAL_IMPLICIT (túnel o modo LAN), el peer
+  // loopback no alcanza: hace falta el token del operador.
+  if (allowsLocalImplicit(request)) return { ok: true };
 
   return {
     ok: false,

@@ -160,9 +160,23 @@ async function main(): Promise<void> {
     "loopback sin credencial sigue permitido (uso local)",
     isOk(decide(getRequest())),
   );
+  // Correccion de seguridad #4b: los hosts de loopback se SUMAN a los
+  // configurados, no los reemplazan. Antes, configurar ALLOWED_HOSTS para un
+  // túnel te dejaba sin poder abrir la app en tu propia PC. No es un agujero:
+  // el Host ya no autoriza nada (el peer real sí).
   check(
-    "ALLOWED_HOSTS reemplaza los defaults",
-    isFailure(decide(getRequest(), { ALLOWED_HOSTS: "app.local:3000" }), "host", 403),
+    "ALLOWED_HOSTS se suma a los loopback, no los reemplaza",
+    isOk(decide(getRequest(), { ALLOWED_HOSTS: "app.local:3000" })),
+  );
+  // Con una credencial presente, para que el caso mida solo el allowlist de
+  // Host (si no, la regla de "remoto requiere credencial" lo corta antes).
+  check(
+    "el host configurado sigue permitido",
+    isOk(decide(getRequest({ host: "app.local:3000", authorization: "Bearer t" }), { ALLOWED_HOSTS: "app.local:3000", APP_ACCESS_TOKEN: "t" })),
+  );
+  check(
+    "un host no configurado y no loopback sigue rechazado",
+    isFailure(decide(getRequest({ host: "otro.example:3000" }), { ALLOWED_HOSTS: "app.local:3000" }), "host", 403),
   );
   check(
     "ALLOWED_HOSTS sin puerto acepta cualquier puerto",
@@ -172,9 +186,16 @@ async function main(): Promise<void> {
     "ALLOWED_HOSTS acepta listas separadas por coma",
     isOk(decide(getRequest({ host: "127.0.0.1:3000" }), { ALLOWED_HOSTS: "localhost:3000,127.0.0.1:3000" })),
   );
+  // Con loopback siempre permitido, una lista inválida ya no cierra todo:
+  // sigue impediendo el acceso remoto, que es lo que importa. El fail-closed
+  // para remoto se verifica en el test de enforcement.
   check(
-    "ALLOWED_HOSTS inválido falla cerrado",
-    isFailure(decide(getRequest(), { ALLOWED_HOSTS: "bad host" }), "host", 403),
+    "ALLOWED_HOSTS inválido: loopback sigue permitido",
+    isOk(decide(getRequest(), { ALLOWED_HOSTS: "bad host" })),
+  );
+  check(
+    "ALLOWED_HOSTS inválido: un host remoto no pasa",
+    isFailure(decide(getRequest({ host: "remoto.example:3000" }), { ALLOWED_HOSTS: "bad host" }), "host", 403),
   );
   // 1.3: PORT ya NO participa del default de hosts — loopback se acepta en
   // cualquier puerto, así que cambiar PORT no puede romper el acceso.
