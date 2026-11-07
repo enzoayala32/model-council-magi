@@ -26,6 +26,17 @@ import { appendEvent } from "./agent/event-log";
 import { createProject } from "./agent/project-store";
 import { createTask, transitionTask } from "./agent/task-store";
 
+/** Request como lo arma `server.ts`: con el peer verificado. Sin el header,
+ *  la guardia de lib/auth/guard.ts trata el request como remoto y lo rechaza. */
+function localRequest(url: string | URL, init?: RequestInit): Request {
+  const headers = new Headers(init?.headers);
+  if (!headers.has("host")) headers.set("host", "localhost:3000");
+  if (!headers.has("x-magi-peer")) headers.set("x-magi-peer", "loopback");
+  if (!headers.has("x-magi-peer-addr")) headers.set("x-magi-peer-addr", "127.0.0.1");
+  return new Request(url, { ...init, headers });
+}
+
+
 /** Contrato mínimo del handler que se prueba. Se declara a mano en vez de
  *  importar el tipo: el specifier lleva corchetes (`[id]`) y ni TypeScript ni
  *  el resolver estático lo reconocen. */
@@ -154,7 +165,7 @@ async function main(): Promise<void> {
       if (opts.sinceSeq !== undefined) url.searchParams.set("sinceSeq", opts.sinceSeq);
       const headers: Record<string, string> = {};
       if (opts.lastEventId !== undefined) headers["last-event-id"] = opts.lastEventId;
-      return handler(new Request(url, { headers }), { params: Promise.resolve({ id: task.id }) });
+      return handler(localRequest(url, { headers }), { params: Promise.resolve({ id: task.id }) });
     };
 
     console.log("== replay y reanudacion ==\n");
@@ -242,7 +253,7 @@ async function main(): Promise<void> {
     const controller = new AbortController();
     const url = new URL(`http://localhost/api/agent/tasks/${task.id}/events`);
     url.searchParams.set("sinceSeq", "4");
-    const aborting = await handler(new Request(url, { signal: controller.signal }), {
+    const aborting = await handler(localRequest(url, { signal: controller.signal }), {
       params: Promise.resolve({ id: task.id }),
     });
     const abortReader = aborting.body?.getReader();
@@ -267,7 +278,7 @@ async function main(): Promise<void> {
     check("el handler no lanza al abortar", !threw);
 
     // 8) Task inexistente: 404 limpio, no un stream colgado.
-    const missing = await handler(new Request("http://localhost/api/agent/tasks/no-existe/events"), {
+    const missing = await handler(localRequest("http://localhost/api/agent/tasks/no-existe/events"), {
       params: Promise.resolve({ id: "no-existe" }),
     });
     check("task inexistente devuelve 404", missing.status === 404, missing.status);
