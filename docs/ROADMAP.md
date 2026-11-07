@@ -52,7 +52,7 @@ proyecto.
 |---|---|
 | 3.1 Binding LAN + fail-closed + `print-access-urls` | **HECHO** |
 | 3.2 PWA `/m` instalable (manifest, SW solo-shell, pantallas) | **HECHO** |
-| 3.3 SSE con heartbeat, backoff y reanudación (cliente) | **HECHO** (falta test de corte/reanudación) |
+| 3.3 SSE con heartbeat, backoff y reanudación (cliente) + test de corte/reanudación | **HECHO** |
 | 3.4 `docs/API-AGENTE.md` | **HECHO** |
 | Instalar en Android real / entrar desde otra máquina | **NO VERIFICADO** (sin dispositivo) |
 | Nota: no existe "reanudar" en el servidor; reintentar = crear task nueva | **HECHO** |
@@ -62,7 +62,7 @@ proyecto.
 | 4d UI de Dispositivos y Actividad + QR + kill switch `REMOTE_ACCESS=off` | **HECHO** |
 | Fase 4 completa | **HECHO** (4a+4b+4c+4d) |
 | Nota: hasta 4c, `apply`/`discard` desde remoto quedaban bloqueados a propósito | **HECHO** (ya resuelto por el step-up) |
-| 5 | Acceso remoto documentado (Tailscale recomendado, Cloudflare Tunnel alternativa, port-forward desaconsejado) + `npm run doctor:remote` | **PENDIENTE** |
+| 5 | Acceso remoto documentado (Tailscale, Cloudflare, port-forward desaconsejado) + `npm run doctor:remote` (hecho) + cookie `Secure` tras túnel HTTPS + prueba de SSE tras proxy | **EN CURSO** (docs y doctor hechos; falta 5.4 SSE tras proxy y 5.5 cookie `Secure`) |
 | 6 | Notificaciones push (Web Push/VAPID) con preferencias por dispositivo y coalescencia | **PENDIENTE** |
 
 Lo que depende de un teléfono real o de un túnel queda **NO VERIFICADO**

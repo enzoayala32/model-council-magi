@@ -89,6 +89,7 @@
     "provider-resilience:test-concurrency": "tsx lib/provider-resilience/test-concurrency.ts",
     "typecheck": "tsc --noEmit",
     "print-access-urls": "tsx scripts/print-access-urls.ts",
+    "doctor:remote": "tsx scripts/doctor-remote.ts",
     "test": "tsx scripts/run-tests.ts",
     "test:live": "tsx scripts/run-tests.ts --live",
     "gen:pwa-icons": "tsx scripts/gen-pwa-icons.ts",
@@ -104,7 +105,8 @@
     "security:test-peer-spoof": "tsx lib/test-peer-spoof.ts",
     "security:test-route-enforcement": "tsx lib/test-route-enforcement.ts",
     "security:test-operator-routes": "tsx lib/test-operator-routes.ts",
-    "security:test-operator-sessions": "tsx lib/test-operator-sessions.ts"
+    "security:test-operator-sessions": "tsx lib/test-operator-sessions.ts",
+    "security:test-remote-doctor": "tsx lib/test-remote-doctor.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.55",

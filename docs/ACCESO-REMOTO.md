@@ -92,6 +92,44 @@ autenticación propia.
 
 ---
 
+## Antes de exponerte: `npm run doctor:remote`
+
+El doctor lee el entorno y la DB, y te dice si dejaste la puerta abierta. No
+toca la red: no manda ningún request. Salvo `--check-tailscale`, no ejecuta
+procesos externos.
+
+```bash
+npm run doctor:remote
+```
+
+Revisa, y clasifica en **FAIL** (dejás la puerta abierta), **WARN** (riesgo que
+merece aviso) y **PASS** (quedó razonado):
+
+| Qué mira | Nivel si está mal |
+|---|---|
+| `APP_ACCESS_TOKEN` no definido con hosts remotos | FAIL |
+| Server escuchando en `0.0.0.0` sin ninguna credencial | FAIL |
+| Modo LAN sin `APP_ACCESS_TOKEN` | FAIL |
+| `tailscale funnel` activo (expone a internet) | FAIL |
+| Host público en `ALLOWED_HOSTS` (no tailnet ni IP privada) | WARN |
+| Acceso remoto por HTTP plano | WARN |
+| Acceso local implícito apagado (fail-closed) | WARN |
+| Sin dispositivos emparejados, solo token de operador | WARN |
+| Dispositivos con scope `operate` / `approve` | WARN |
+| Sesiones de operador vivas con el server expuesto | WARN |
+
+Con `--check-tailscale` además corre `tailscale funnel status` para detectar un
+funnel activo. Si Tailscale no está instalado, no falla: vuelve al indicador
+por variable de entorno.
+
+El exit code es **1 si hay algún FAIL**, así que serve para dejarlo en un
+script de arranque.
+
+> El doctor muestra si `APP_ACCESS_TOKEN` está definida, nunca su valor. Solo
+> lee `.env`/`.env.local`; no los escribe.
+
+---
+
 ## Desaconsejado: port-forwarding
 
 Abrir un puerto en el router y apuntarlo a la PC expone la app **directamente a

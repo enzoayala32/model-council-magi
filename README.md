@@ -370,7 +370,7 @@ docs/REPORTE-REFACTOR.md          # reporte de este refactor
 docs/ARQUITECTURA-AGENTE.md       # límites ledger.ts / loop.ts + plan de división
 docs/ROADMAP.md                   # estado de cada frente (consejo, agente, remoto, MCP)
 docs/API-AGENTE.md                # contrato de las rutas que consume la PWA /m
-docs/ACCESO-REMOTO.md             # LAN, Tailscale, Cloudflare y advertencias de HTTP
+docs/ACCESO-REMOTO.md             # LAN, Tailscale, Cloudflare, doctor y advertencias de HTTP
 ```
 
 Los archivos `test-*.ts` viven junto al módulo que prueban (`lib/`, `lib/agent/`, `lib/agent/autonomy/`, `lib/agent/context/`, `lib/provider-resilience/`) y se ejecutan con `tsx` vía scripts de `package.json`.
