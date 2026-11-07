@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { readJsonBody } from "@/lib/api-json";
 import { applyProposal, discardProposal, getProposal } from "@/lib/fs-tools";
 import { requireScope } from "@/lib/auth/authorize";
+import { guardRequest } from "@/lib/auth/guard";
 
 /**
  * The only place lib/fs-tools.ts writes to disk. A file agent proposal
@@ -9,12 +10,9 @@ import { requireScope } from "@/lib/auth/authorize";
  * user hits "Apply" in the UI, which POSTs here with the proposal id.
  */
 export async function POST(request: Request) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
   const parsed = await readJsonBody<{ proposalId?: string; action?: "apply" | "reject" }>(request);
-  // Fase 4b: autorizacion central por scope.
-  const guard = requireScope({ method: "POST", pathname: new URL(request.url).pathname, request });
-  if (!guard.ok) {
-    return NextResponse.json({ ok: false, error: guard.error, reason: guard.reason }, { status: guard.status });
-  }
 
   if (!parsed.ok) return parsed.response;
   const body = parsed.body;

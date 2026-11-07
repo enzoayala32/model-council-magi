@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { guardRequest } from "@/lib/auth/guard";
 
 /**
  * Lista subcarpetas de un directorio del filesystem donde corre el server
@@ -21,6 +22,9 @@ import path from "node:path";
  * llega a la raíz de una unidad y no hay ".." al que subir.
  */
 export async function GET(request: Request) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const url = new URL(request.url);
   const requested = url.searchParams.get("path");
   const targetPath = requested && requested.trim() ? requested : os.homedir();

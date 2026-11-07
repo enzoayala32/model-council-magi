@@ -138,7 +138,7 @@ async function main() {
   const dir = await makeGitProject("caso1");
   const createProjectRes = await createProjectRoute(jsonRequest("http://localhost/api/agent/projects", "POST", { name: "Proyecto 2H", localPath: dir }));
   const createProjectBody = await readJson<{ ok: boolean; project: { id: string; localPath: string } }>(createProjectRes);
-  const listProjectsBody = await readJson<{ projects: Array<{ id: string }> }>(await listProjectsRoute());
+  const listProjectsBody = await readJson<{ projects: Array<{ id: string }> }>(await listProjectsRoute(localRequest("http://localhost/api/agent/projects")));
   const ok1 =
     createProjectRes.status === 201 &&
     createProjectBody.ok === true &&
@@ -156,7 +156,7 @@ async function main() {
 
   // --- Caso 2: GET /api/agent/models devuelve solo modelos habilitados ---
   console.log("\n--- Caso 2: GET /api/agent/models ---");
-  const modelsBody = await readJson<{ ok: boolean; models: Array<{ id: string }> }>(await listModelsRoute());
+  const modelsBody = await readJson<{ ok: boolean; models: Array<{ id: string }> }>(await listModelsRoute(localRequest("http://localhost/api/agent/models")));
   const ok2 = modelsBody.ok === true && Array.isArray(modelsBody.models) && modelsBody.models.length > 0 && modelsBody.models.every((m: { id: string }) => typeof m.id === "string");
   console.log(ok2 ? `✅ ${modelsBody.models.length} modelo(s) habilitado(s) para el Coding Agent.` : `❌ Falló. ${JSON.stringify(modelsBody)}`);
   results.push(ok2);
@@ -300,7 +300,7 @@ async function main() {
   transitionAndLog(activeTask9.id, "FAILED", { error: "cancelada para el test" });
   const deleteOkRes = await deleteProjectRoute(localRequest(`http://localhost/api/agent/projects/${project9Id}`, { method: "DELETE" }), { params: Promise.resolve({ id: project9Id }) });
   const deleteOkBody = await readJson<{ ok: boolean }>(deleteOkRes);
-  const listAfterDelete = await readJson<{ projects: Array<{ id: string }> }>(await listProjectsRoute());
+  const listAfterDelete = await readJson<{ projects: Array<{ id: string }> }>(await listProjectsRoute(localRequest("http://localhost/api/agent/projects")));
   const ok9b = deleteOkRes.status === 200 && deleteOkBody.ok === true && !listAfterDelete.projects.some((p: { id: string }) => p.id === project9Id);
   console.log(ok9b ? "✅ Sin tasks activas → 200, y desaparece del listado (queda archivado, no borrado)." : `❌ Falló. ${JSON.stringify(deleteOkBody)}`);
   results.push(ok9b);

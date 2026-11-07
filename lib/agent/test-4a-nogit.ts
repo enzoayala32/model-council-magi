@@ -49,7 +49,7 @@ async function main() {
   console.log("== Fase 4A — prueba de aceptación (proyectos sin git) ==\n");
   const results: boolean[] = [];
 
-  const modelsBody = await (await listModelsRoute()).json();
+  const modelsBody = await (await listModelsRoute(localRequest("http://localhost/api/agent/models"))).json();
   const modelId: string = modelsBody.models[0].id;
 
   // --- Caso 1: capa PRIMARIA — POST /api/agent/tasks rechaza de entrada, la task ni se crea ---

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getProject, archiveProject } from "@/lib/agent/project-store";
 import { listTasks } from "@/lib/agent/task-store";
+import { guardRequest } from "@/lib/auth/guard";
 
 /** Archiva un proyecto (botón "🗑" en el sidebar de `/agent`) — nunca lo
  * borra de verdad: `archiveProject` solo pone `archived=1`, y
@@ -14,7 +15,10 @@ import { listTasks } from "@/lib/agent/task-store";
  * 409 si tiene alguna task QUEUED o RUNNING — igual que el `DELETE` de
  * tasks, nunca se esconde un proyecto que un proceso real puede estar
  * tocando ahora mismo. */
-export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const { id } = await params;
   const project = getProject(id);
   if (!project) return NextResponse.json({ ok: false, error: `No existe el proyecto ${id}.` }, { status: 404 });

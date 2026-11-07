@@ -3,7 +3,7 @@ import { readJsonBody } from "@/lib/api-json";
 import { listDevices, revokeDevice } from "@/lib/auth/devices";
 import { clearStepUp } from "@/lib/auth/step-up";
 import { recordAudit } from "@/lib/auth/audit";
-import { isLoopbackHost } from "@/lib/auth/scopes";
+import { guardRequest, requireLocalAccess } from "@/lib/auth/guard";
 
 /**
  * Fase 4d - kill switch desde la UI: revoca todos los dispositivos.
@@ -14,9 +14,11 @@ import { isLoopbackHost } from "@/lib/auth/scopes";
  * empareje uno nuevo.
  */
 export async function POST(request: Request) {
-  if (!isLoopbackHost(request.headers.get("host"))) {
-    return NextResponse.json({ ok: false, error: "Solo se revoca desde esta PC." }, { status: 403 });
-  }
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
+  const local = requireLocalAccess(request);
+  if (local) return local;
 
   // El cuerpo es opcional: se usa para no revocar el dispositivo desde el que
   // se esta operando (si justo se esta usando la PWA en el telefono).

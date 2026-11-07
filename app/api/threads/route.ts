@@ -2,8 +2,12 @@ import { NextResponse } from "next/server";
 import { readJsonBody } from "@/lib/api-json";
 import { listThreads, upsertThread } from "@/lib/threads-db";
 import type { StoredThread } from "@/lib/threads";
+import { guardRequest } from "@/lib/auth/guard";
 
 export async function GET(request: Request) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const { searchParams } = new URL(request.url);
   const query = searchParams.get("q") ?? undefined;
   const favoriteOnly = searchParams.get("favorite") === "1";
@@ -12,6 +16,9 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const parsed = await readJsonBody<StoredThread>(request);
   if (!parsed.ok) return parsed.response;
   const body = parsed.body;

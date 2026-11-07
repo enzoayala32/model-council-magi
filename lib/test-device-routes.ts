@@ -39,6 +39,8 @@ if (!process.env.MAGI_DATA_DIR) {
 function localRequest(url: string, init?: RequestInit): Request {
   const headers = new Headers(init?.headers);
   if (!headers.has("host")) headers.set("host", "localhost:3000");
+  if (!headers.has("x-magi-peer")) headers.set("x-magi-peer", "loopback");
+  if (!headers.has("x-magi-peer-addr")) headers.set("x-magi-peer-addr", "127.0.0.1");
   return new Request(url, { ...init, headers });
 }
 
@@ -115,14 +117,14 @@ async function main(): Promise<void> {
     const idCtx = { params: Promise.resolve({ id: device.device.id }) };
 
     // Fuera de loopback: todas rechazan.
-    check("GET /api/devices desde LAN: 403", (await call(devicesList, "GET", "http://localhost/api/devices", { method: "GET", headers: { host: LAN_HOST } })).status === 403);
-    check("PATCH /api/devices/:id desde LAN: 403", (await call(deviceById, "PATCH", "http://localhost/api/devices/x", { method: "PATCH", headers: { host: LAN_HOST } }, idCtx)).status === 403);
-    check("DELETE /api/devices/:id desde LAN: 403", (await call(deviceById, "DELETE", "http://localhost/api/devices/x", { method: "DELETE", headers: { host: LAN_HOST } }, idCtx)).status === 403);
-    check("POST /api/devices/revoke-all desde LAN: 403", (await call(revokeAll, "POST", "http://localhost/api/devices/revoke-all", { method: "POST", headers: { host: LAN_HOST } })).status === 403);
-    check("GET /api/audit desde LAN: 403", (await call(audit, "GET", "http://localhost/api/audit", { method: "GET", headers: { host: LAN_HOST } })).status === 403);
+    check("GET /api/devices desde LAN: 403", (await call(devicesList, "GET", "http://localhost/api/devices", { method: "GET", headers: { host: LAN_HOST, "x-magi-peer": "remote", "x-magi-peer-addr": "192.168.0.50" } })).status === 403);
+    check("PATCH /api/devices/:id desde LAN: 403", (await call(deviceById, "PATCH", "http://localhost/api/devices/x", { method: "PATCH", headers: { host: LAN_HOST, "x-magi-peer": "remote", "x-magi-peer-addr": "192.168.0.50" } }, idCtx)).status === 403);
+    check("DELETE /api/devices/:id desde LAN: 403", (await call(deviceById, "DELETE", "http://localhost/api/devices/x", { method: "DELETE", headers: { host: LAN_HOST, "x-magi-peer": "remote", "x-magi-peer-addr": "192.168.0.50" } }, idCtx)).status === 403);
+    check("POST /api/devices/revoke-all desde LAN: 403", (await call(revokeAll, "POST", "http://localhost/api/devices/revoke-all", { method: "POST", headers: { host: LAN_HOST, "x-magi-peer": "remote", "x-magi-peer-addr": "192.168.0.50" } })).status === 403);
+    check("GET /api/audit desde LAN: 403", (await call(audit, "GET", "http://localhost/api/audit", { method: "GET", headers: { host: LAN_HOST, "x-magi-peer": "remote", "x-magi-peer-addr": "192.168.0.50" } })).status === 403);
     check(
       "el rechazo dice que es solo desde esta PC",
-      /desde esta pc/i.test(await (await call(audit, "GET", "http://localhost/api/audit", { method: "GET", headers: { host: LAN_HOST } })).text()),
+      /esta pc|token de acceso/i.test(await (await call(audit, "GET", "http://localhost/api/audit", { method: "GET", headers: { host: LAN_HOST, "x-magi-peer": "remote", "x-magi-peer-addr": "192.168.0.50" } })).text()),
     );
 
     // Desde loopback: funcionan.

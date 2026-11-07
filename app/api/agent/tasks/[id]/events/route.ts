@@ -1,5 +1,6 @@
 import { getTask, type TaskStatus } from "@/lib/agent/task-store";
 import { listEvents } from "@/lib/agent/event-log";
+import { guardRequest } from "@/lib/auth/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -57,6 +58,9 @@ function isStreaming(status: TaskStatus): boolean {
  * todo, no hace falta que el cliente recuerde nada para no perder eventos.
  */
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const { id: taskId } = await params;
 
   const task = getTask(taskId);

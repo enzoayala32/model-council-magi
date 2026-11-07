@@ -194,7 +194,7 @@ async function main() {
     console.log("\n--- Caso 3: dos POST /api/agent/tasks simultáneos (Promise.all) → solo una arranca ---");
     __resetDispatcherForTests();
     const { project } = await makeGitProject("caso3");
-    const modelsBody = await (await listModelsRoute()).json();
+    const modelsBody = await (await listModelsRoute(localRequest("http://localhost/api/agent/models"))).json();
     const modelId: string = modelsBody.models[0].id;
 
     const jsonReq = (prompt: string) =>

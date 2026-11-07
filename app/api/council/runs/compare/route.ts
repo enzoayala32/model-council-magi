@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 import { compareStoredCouncilRuns } from "@/lib/council-run-store";
+import { guardRequest } from "@/lib/auth/guard";
 
 /** Fase 7C: compara dos corridas del mismo prompt. */
 export async function GET(request: Request) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const url = new URL(request.url);
   const a = url.searchParams.get("a")?.trim();
   const b = url.searchParams.get("b")?.trim();

@@ -4,10 +4,14 @@ import { getProject, touchProjectLastUsed } from "@/lib/agent/project-store";
 import { isCodingAgentEnabled } from "@/lib/models";
 import { maybeDispatchNext } from "@/lib/agent/dispatcher";
 import { requireScope } from "@/lib/auth/authorize";
+import { guardRequest } from "@/lib/auth/guard";
 
 /** Fase 2H. `?projectId=` filtra por proyecto (lo que usa la UI para el
  * historial de un `Project`); sin filtro, devuelve todas las tasks. */
 export async function GET(request: Request) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const url = new URL(request.url);
   const projectId = url.searchParams.get("projectId") ?? undefined;
   const status = (url.searchParams.get("status") as TaskStatus | null) ?? undefined;
@@ -27,12 +31,9 @@ export async function GET(request: Request) {
  * request HTTP en particular siga abierta.
  */
 export async function POST(request: Request) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
   let body: unknown;
-  // Fase 4b: autorizacion central por scope.
-  const guard = requireScope({ method: "POST", pathname: new URL(request.url).pathname, request });
-  if (!guard.ok) {
-    return NextResponse.json({ ok: false, error: guard.error, reason: guard.reason }, { status: guard.status });
-  }
 
   try {
     body = await request.json();

@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { deleteCouncilRun, getCouncilRunDetail } from "@/lib/council-run-store";
+import { guardRequest } from "@/lib/auth/guard";
 
-export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const { id } = await params;
   try {
     const detail = getCouncilRunDetail(id);
@@ -15,7 +19,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   }
 }
 
-export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const { id } = await params;
   try {
     const deleted = deleteCouncilRun(id);

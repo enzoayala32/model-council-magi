@@ -4,6 +4,7 @@ import { createPairingCode } from "@/lib/auth/pairing";
 import { recordAudit } from "@/lib/auth/audit";
 import { isVerifiedLoopback } from "@/lib/peer";
 import { constantTimeEqual } from "@/lib/api-security";
+import { guardRequest } from "@/lib/auth/guard";
 
 /**
  * Fase 4a/4d - generar un codigo de emparejamiento y su QR.
@@ -49,6 +50,9 @@ function pairingUrl(request: Request, code: string): string {
 }
 
 export async function POST(request: Request) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const who = authorizePairing(request);
   if (!who.ok) {
     recordAudit({ action: "pairing_created", result: "denied", detail: who.error });

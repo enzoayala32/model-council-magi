@@ -94,6 +94,11 @@ async function startServer(env: Record<string, string>, wantedPort?: number): Pr
       PORT: String(port),
       MAGI_DATA_DIR: dataDir,
       MAGI_DEBUG_HEADERS: "0",
+      // Modo desarrollo a propósito: el test tiene que probar el código
+      // FUENTE, no un build previo. Con `dev: false` servía el `.next` viejo
+      // y un test de seguridad podía pasar sin que el fix estuviera compilado
+      // (trampa en la que caímos con el rate limiting).
+      MAGI_DEV: "1",
       ...env,
     },
     stdio: "ignore",
@@ -193,6 +198,31 @@ async function main(): Promise<void> {
       "ruta inexistente con token: 404 de Next",
       (await fetch(`${viaLan}/api/no/existe`, { headers: { Host: `${lanIp}:${port}`, authorization: "Bearer operador-de-prueba" } })).status === 404,
     );
+  }
+
+  console.log("\n== cookie de dispositivo FALSA + Host mentido ==\n");
+  {
+    // El proxy no puede validar la cookie contra la DB, así que la deja
+    // pasar. La ruta es la que tiene que denegar. Antes 28 de 35 rutas no lo
+    // hacían: con una cookie falsa se creaban proyectos (201).
+    const fake = { Host: `localhost:${port}`, cookie: "magi_device_token=cookie-inventada" };
+    for (const route of ["/api/agent/projects", "/api/agent/browse?path=/", "/api/agent/models", "/api/threads", "/api/council/runs", "/api/models/catalog", "/api/provider-resilience/status"]) {
+      const response = await fetch(`${viaLan}${route}`, { headers: fake });
+      const code = response.status;
+      check("GET " + route + " con cookie falsa: 401/403", code === 401 || code === 403, code);
+    }
+    const post = await fetch(`${viaLan}/api/agent/projects`, {
+      method: "POST",
+      headers: { ...fake, "content-type": "application/json", origin: `http://${lanIp}:${port}` },
+      body: JSON.stringify({ name: "ataque", localPath: "C:/tmp" }),
+    });
+    check("POST /api/agent/projects con cookie falsa: 401/403", post.status === 401 || post.status === 403, post.status);
+
+    const del = await fetch(`${viaLan}/api/council/runs/id-inventado`, { method: "DELETE", headers: fake });
+    check("DELETE /api/council/runs/:id con cookie falsa: 401/403", del.status === 401 || del.status === 403, del.status);
+
+    // Y con el operador real, esas mismas rutas sí pasan.
+    check("GET projects con operador: 200", (await fetch(`${viaLan}/api/agent/projects`, { headers: { Host: `${lanIp}:${port}`, authorization: "Bearer operador-de-prueba" } })).status === 200);
   }
   await lanServer.cleanup();
 

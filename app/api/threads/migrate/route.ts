@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { readJsonBody } from "@/lib/api-json";
 import { countThreads, importThreads } from "@/lib/threads-db";
 import type { StoredThread } from "@/lib/threads";
+import { guardRequest } from "@/lib/auth/guard";
 
 /**
  * Migración de arranque, disparada una sola vez por el cliente cuando
@@ -10,6 +11,9 @@ import type { StoredThread } from "@/lib/threads";
  * pestaña que abras mientras el flag de "ya migré" no llegó a guardarse.
  */
 export async function POST(request: Request) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const existing = countThreads();
   if (existing > 0) {
     return NextResponse.json({ imported: 0, skipped: true, reason: "Server already has threads." });

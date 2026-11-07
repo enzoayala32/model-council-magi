@@ -3,7 +3,7 @@ import { readJsonBody } from "@/lib/api-json";
 import { enrollDeviceTotp, totpEncryptionAvailable } from "@/lib/auth/step-up";
 import { getDevice } from "@/lib/auth/devices";
 import { recordAudit } from "@/lib/auth/audit";
-import { isLoopbackHost } from "@/lib/auth/scopes";
+import { guardRequest, requireLocalAccess } from "@/lib/auth/guard";
 
 /**
  * Fase 4c - inscripcion del segundo factor.
@@ -16,12 +16,13 @@ import { isLoopbackHost } from "@/lib/auth/scopes";
  * se puede volver a ver.
  */
 export async function POST(request: Request) {
-  if (!isLoopbackHost(request.headers.get("host"))) {
-    recordAudit({ action: "device_created", result: "denied", detail: "totp enroll desde host no loopback" });
-    return NextResponse.json(
-      { ok: false, error: "La inscripcion del segundo factor se hace solo desde esta PC." },
-      { status: 403 },
-    );
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
+  const local = requireLocalAccess(request);
+  if (local) {
+    recordAudit({ action: "device_created", result: "denied", detail: "totp enroll sin acceso local" });
+    return local;
   }
 
   if (!totpEncryptionAvailable()) {

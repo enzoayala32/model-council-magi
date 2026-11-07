@@ -5,6 +5,7 @@ import { createDevice, DEVICE_COOKIE } from "@/lib/auth/devices";
 import { recordAudit } from "@/lib/auth/audit";
 import { checkRateLimit, clientIdentifier, recordFailure, recordSuccess } from "@/lib/auth/rate-limit";
 import { buildDeviceCookie } from "@/lib/auth/cookie";
+import { guardRequest } from "@/lib/auth/guard";
 
 /**
  * Fase 4a - canje de un codigo de emparejamiento por un dispositivo.
@@ -17,6 +18,9 @@ import { buildDeviceCookie } from "@/lib/auth/cookie";
 const RESOURCE = "pairing_redeem";
 
 export async function POST(request: Request) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const identifier = clientIdentifier(request);
   const gate = checkRateLimit(identifier, RESOURCE);
   if (!gate.allowed) {

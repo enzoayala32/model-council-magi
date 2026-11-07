@@ -3,6 +3,7 @@ import { readJsonBody } from "@/lib/api-json";
 import { resolveAuthContext } from "@/lib/auth/authorize";
 import { issueStepUp, hasDeviceTotp, STEP_UP_TTL_MS } from "@/lib/auth/step-up";
 import { checkRateLimit, clientIdentifier, recordFailure, recordSuccess } from "@/lib/auth/rate-limit";
+import { guardRequest } from "@/lib/auth/guard";
 
 /**
  * Fase 4c - canje de un codigo TOTP por una sesion de step-up.
@@ -15,6 +16,9 @@ import { checkRateLimit, clientIdentifier, recordFailure, recordSuccess } from "
 const RESOURCE = "step_up";
 
 export async function POST(request: Request) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const identifier = clientIdentifier(request);
   const gate = checkRateLimit(identifier, RESOURCE);
   if (!gate.allowed) {

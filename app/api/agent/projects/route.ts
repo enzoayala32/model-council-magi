@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
 import { createProject, listProjects } from "@/lib/agent/project-store";
+import { guardRequest } from "@/lib/auth/guard";
 
 /** Fase 2H. `GET` lista proyectos activos (no archivados) — la UI todavía
  * no expone "ver archivados", así que no hace falta el query param acá. */
-export async function GET() {
+export async function GET(request: Request) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const projects = listProjects();
   return NextResponse.json({ ok: true, projects });
 }
@@ -15,6 +19,9 @@ export async function GET() {
  * y traduce errores a códigos HTTP razonables.
  */
 export async function POST(request: Request) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   let body: unknown;
   try {
     body = await request.json();

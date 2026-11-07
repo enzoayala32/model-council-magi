@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getModelCatalog, separateByPricing } from "@/lib/model-catalog";
+import { guardRequest } from "@/lib/auth/guard";
 
 /**
  * Catálogo automático de modelos: listado real de OpenRouter y NVIDIA,
@@ -12,6 +13,9 @@ import { getModelCatalog, separateByPricing } from "@/lib/model-catalog";
  * `lib/model-catalog.ts` (media hora por default).
  */
 export async function GET(request: Request) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const url = new URL(request.url);
   const force = url.searchParams.get("refresh") === "1";
 

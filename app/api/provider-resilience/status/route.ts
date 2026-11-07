@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getProviderPool } from "@/lib/provider-resilience/registry";
 import { getProviderSnapshot, type ProviderName } from "@/lib/provider-resilience/config";
 import { getCouncilResilienceLog } from "@/lib/provider-resilience/council-log";
+import { guardRequest } from "@/lib/auth/guard";
 
 /**
  * Fase 5F — snapshot de solo lectura de Provider Resilience: estado actual
@@ -25,7 +26,10 @@ import { getCouncilResilienceLog } from "@/lib/provider-resilience/council-log";
  */
 const PROVIDERS: readonly ProviderName[] = ["openrouter", "nvidia", "google"];
 
-export async function GET() {
+export async function GET(request: Request) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const providers = PROVIDERS.map((provider) => getProviderSnapshot(provider, getProviderPool(provider)));
   const councilEvents = getCouncilResilienceLog();
   return NextResponse.json({ providers, councilEvents });

@@ -12,6 +12,15 @@ import { GET as statusRoute } from "../../app/api/provider-resilience/status/rou
 import { __resetProviderPoolsForTests } from "./registry";
 import { recordCouncilResilienceEvent, __clearCouncilResilienceLogForTests } from "./council-log";
 
+/** Request como lo arma el server: con el peer verificado. Sin el, la guardia
+ *  de lib/auth/guard.ts trata el request como remoto y lo rechaza. */
+function localRequest(url: string): Request {
+  return new Request(url, {
+    headers: { host: "localhost:3000", "x-magi-peer": "loopback", "x-magi-peer-addr": "127.0.0.1" },
+  });
+}
+
+
 const results: boolean[] = [];
 
 function check(label: string, ok: boolean, detail?: unknown): void {
@@ -39,7 +48,7 @@ async function main(): Promise<void> {
   setOpenRouterCredentials("SECRET-QUE-NUNCA-DEBE-APARECER-EN-LA-RESPUESTA");
   recordCouncilResilienceEvent({ id: "ev-1", ts: Date.now(), source: "council", provider: "openrouter", credentialId: "openrouter-1", reason: "429_no_retry_after", poolAction: "COOLDOWN", outcome: "rotated" });
 
-  const response = await statusRoute();
+  const response = await statusRoute(localRequest("http://localhost/api/provider-resilience/status"));
   check("responde 200", response.status === 200, response.status);
 
   const body = (await response.json()) as { providers: unknown[]; councilEvents: unknown[] };

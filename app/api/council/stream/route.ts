@@ -6,6 +6,7 @@ import { createCouncilRunRecorder } from "@/lib/council-run-store";
 import { logStep } from "@/lib/council-run";
 import type { StreamEvent, StreamRequest } from "@/lib/council-types";
 import { redactSecrets } from "@/lib/provider-resilience/redact";
+import { guardRequest } from "@/lib/auth/guard";
 
 /**
  * Plomería HTTP del consejo: parsea el body, abre el SSE y delega el pipeline
@@ -17,18 +18,14 @@ import { redactSecrets } from "@/lib/provider-resilience/redact";
 export const maxDuration = 300;
 
 export async function POST(request: Request) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
   // Fase 1: parsear antes de abrir el SSE. Un body inválido debe ser un
   // 400 JSON normal, no un stream 200 que recién falla adentro.
   const parsed = await readJsonBody<StreamRequest>(request);
   if (!parsed.ok) return parsed.response;
   const body = parsed.body;
 
-  // Fase 4b: autorizacion ANTES de abrir el stream. Un 403 despues de
-  // haber empezado a streamear seria un 200 con error adentro.
-  const guard = requireScope({ method: "POST", pathname: new URL(request.url).pathname, request });
-  if (!guard.ok) {
-    return NextResponse.json({ ok: false, error: guard.error, reason: guard.reason }, { status: guard.status });
-  }
 
   const encoder = new TextEncoder();
 

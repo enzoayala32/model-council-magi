@@ -21,6 +21,17 @@ import { createWorkspaceForTask } from "./workspace-manager";
 import { GET as getTaskRoute, DELETE as deleteTaskRoute } from "../../app/api/agent/tasks/[id]/route";
 import { GET as browseRoute } from "../../app/api/agent/browse/route";
 
+/** Request como lo arma `server.ts`: con el peer verificado. Sin el header,
+ *  la guardia de lib/auth/guard.ts trata el request como remoto y lo rechaza. */
+function localRequest(url: string, init?: RequestInit): Request {
+  const headers = new Headers(init?.headers);
+  if (!headers.has("host")) headers.set("host", "localhost:3000");
+  if (!headers.has("x-magi-peer")) headers.set("x-magi-peer", "loopback");
+  if (!headers.has("x-magi-peer-addr")) headers.set("x-magi-peer-addr", "127.0.0.1");
+  return new Request(url, { ...init, headers });
+}
+
+
 const execFileAsync = promisify(execFile);
 
 async function makeGitProject(name: string) {
@@ -43,13 +54,13 @@ async function main() {
     console.log("--- Caso 1: DELETE sobre una task QUEUED/RUNNING → 409 ---");
     const project = await makeGitProject("caso1");
     const task = createTask({ projectId: project.id, modelId: "test-model", prompt: "activa" });
-    const res = await deleteTaskRoute(new Request("http://localhost", { method: "DELETE" }), { params: Promise.resolve({ id: task.id }) });
+    const res = await deleteTaskRoute(localRequest(`http://localhost/api/agent/tasks/${task.id}`, { method: "DELETE" }), { params: Promise.resolve({ id: task.id }) });
     const ok = res.status === 409 && getTask(task.id) !== null;
     console.log(ok ? "✅ Rechazado (409), la task QUEUED sigue existiendo." : `❌ Falló. status=${res.status}`);
     results.push(ok);
 
     transitionTask(task.id, "RUNNING");
-    const res2 = await deleteTaskRoute(new Request("http://localhost", { method: "DELETE" }), { params: Promise.resolve({ id: task.id }) });
+    const res2 = await deleteTaskRoute(localRequest(`http://localhost/api/agent/tasks/${task.id}`, { method: "DELETE" }), { params: Promise.resolve({ id: task.id }) });
     const ok2 = res2.status === 409 && getTask(task.id) !== null;
     console.log(ok2 ? "✅ Rechazado también en RUNNING (409)." : `❌ Falló. status=${res2.status}`);
     results.push(ok2);
@@ -66,7 +77,7 @@ async function main() {
     persistProposals(task.id, [{ kind: "write", relPath: "a.ts", diff: "+a", nextContent: "a\n", baselineHash: "h", typeCheck: { status: "ok" } }]);
     transitionTask(task.id, "NO_CHANGES");
 
-    const res = await deleteTaskRoute(new Request("http://localhost", { method: "DELETE" }), { params: Promise.resolve({ id: task.id }) });
+    const res = await deleteTaskRoute(localRequest(`http://localhost/api/agent/tasks/${task.id}`, { method: "DELETE" }), { params: Promise.resolve({ id: task.id }) });
     const body = await res.json();
     const gone = getTask(task.id) === null;
     const eventsGone = listEvents(task.id).length === 0;
@@ -80,7 +91,7 @@ async function main() {
     );
     results.push(ok);
 
-    const getAfter = await getTaskRoute(new Request("http://localhost"), { params: Promise.resolve({ id: task.id }) });
+    const getAfter = await getTaskRoute(localRequest(`http://localhost/api/agent/tasks/${task.id}`), { params: Promise.resolve({ id: task.id }) });
     const okGet = getAfter.status === 404;
     console.log(okGet ? "✅ GET tras el borrado devuelve 404." : `❌ Falló. status=${getAfter.status}`);
     results.push(okGet);
@@ -88,7 +99,7 @@ async function main() {
 
   // --- Caso 3: borrar una task inexistente → 404 ---
   {
-    const res = await deleteTaskRoute(new Request("http://localhost", { method: "DELETE" }), { params: Promise.resolve({ id: "no-existe" }) });
+    const res = await deleteTaskRoute(localRequest("http://localhost/api/agent/tasks/no-existe", { method: "DELETE" }), { params: Promise.resolve({ id: "no-existe" }) });
     const ok = res.status === 404;
     console.log(ok ? "\n✅ Caso 3: DELETE de un id inexistente → 404." : `\n❌ Falló Caso 3. status=${res.status}`);
     results.push(ok);
@@ -97,7 +108,7 @@ async function main() {
   // --- Caso 4: navegador de carpetas — arranca en homedir, no se sale de directorios reales ---
   {
     console.log("\n--- Caso 4: GET /api/agent/browse ---");
-    const res = await browseRoute(new Request("http://localhost/api/agent/browse"));
+    const res = await browseRoute(localRequest("http://localhost/api/agent/browse"));
     const body = await res.json();
     const home = os.homedir();
     const ok = res.status === 200 && body.ok === true && path.resolve(body.path) === path.resolve(home) && Array.isArray(body.entries);
@@ -113,7 +124,7 @@ async function main() {
     await fs.writeFile(path.join(dir, ".oculta_no_debe_verse"), "");
     await fs.mkdir(path.join(dir, ".git"));
 
-    const res = await browseRoute(new Request(`http://localhost/api/agent/browse?path=${encodeURIComponent(dir)}`));
+    const res = await browseRoute(localRequest(`http://localhost/api/agent/browse?path=${encodeURIComponent(dir)}`));
     const body = await res.json();
     const listsSub = body.entries.some((e: { name: string }) => e.name === "subcarpeta");
     const hidesGit = !body.entries.some((e: { name: string }) => e.name === ".git");
@@ -126,7 +137,7 @@ async function main() {
     );
     results.push(ok);
 
-    const res2 = await browseRoute(new Request(`http://localhost/api/agent/browse?path=${encodeURIComponent(sub)}`));
+    const res2 = await browseRoute(localRequest(`http://localhost/api/agent/browse?path=${encodeURIComponent(sub)}`));
     const body2 = await res2.json();
     const okNav = path.resolve(body2.parent) === path.resolve(dir);
     console.log(okNav ? "✅ Al entrar a la subcarpeta, 'parent' apunta de vuelta al directorio original." : `❌ Falló. parent=${body2.parent}`);
@@ -135,7 +146,7 @@ async function main() {
 
   // --- Caso 6: ruta inexistente → error controlado, no 500 crudo ---
   {
-    const res = await browseRoute(new Request(`http://localhost/api/agent/browse?path=${encodeURIComponent("/esta/ruta/no/existe/seguro")}`));
+    const res = await browseRoute(localRequest(`http://localhost/api/agent/browse?path=${encodeURIComponent("/esta/ruta/no/existe/seguro")}`));
     const body = await res.json();
     const ok = res.status === 400 && body.ok === false;
     console.log(ok ? "\n✅ Caso 6: ruta inexistente → 400 con mensaje, no una excepción cruda." : `\n❌ Falló Caso 6. status=${res.status}`);

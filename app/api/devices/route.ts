@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { listDevices } from "@/lib/auth/devices";
-import { isLoopbackHost } from "@/lib/auth/scopes";
+import { guardRequest, requireLocalAccess } from "@/lib/auth/guard";
 
 /**
  * Fase 4d - listado de dispositivos emparejados.
@@ -9,8 +9,10 @@ import { isLoopbackHost } from "@/lib/auth/scopes";
  * la PC. Desde un telefono solo se puede ver el propio estado.
  */
 export async function GET(request: Request) {
-  if (!isLoopbackHost(request.headers.get("host"))) {
-    return NextResponse.json({ ok: false, error: "Solo se ve desde esta PC." }, { status: 403 });
-  }
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
+  const local = requireLocalAccess(request);
+  if (local) return local;
   return NextResponse.json({ ok: true, devices: listDevices() });
 }

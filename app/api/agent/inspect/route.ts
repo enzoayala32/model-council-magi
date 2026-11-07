@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { detectIsGitRepo } from "@/lib/agent/project-store";
+import { guardRequest } from "@/lib/auth/guard";
 
 /** Scripts de `package.json` que vale la pena mostrarle al usuario antes de
  * agregar un proyecto — los que el Coding Agent (o el propio usuario)
@@ -58,6 +59,9 @@ async function readPackageJsonInfo(dir: string): Promise<PackageJsonInfo | null>
  * haciendo `createProject` en `project-store.ts` al momento de agregar).
  */
 export async function GET(request: Request) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const url = new URL(request.url);
   const requested = url.searchParams.get("path");
   if (!requested || !requested.trim()) {

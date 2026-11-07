@@ -30,6 +30,17 @@ import type { VerifierExec } from "./verifier";
 import type { AgentFileProposal, AgentLoopResult } from "../loop";
 import { registerSecret } from "../../provider-resilience/redact";
 
+/** Request como lo arma `server.ts`: con el peer verificado. Sin el header,
+ *  la guardia de lib/auth/guard.ts trata el request como remoto y lo rechaza. */
+function localRequest(url: string, init?: RequestInit): Request {
+  const headers = new Headers(init?.headers);
+  if (!headers.has("host")) headers.set("host", "localhost:3000");
+  if (!headers.has("x-magi-peer")) headers.set("x-magi-peer", "loopback");
+  if (!headers.has("x-magi-peer-addr")) headers.set("x-magi-peer-addr", "127.0.0.1");
+    return new Request(url, { ...init, headers });
+}
+
+
 const execFileAsync = promisify(execFile);
 const sha256 = (value: string | Buffer) => crypto.createHash("sha256").update(value).digest("hex");
 
@@ -497,7 +508,7 @@ async function main(): Promise<void> {
       check(transcript.some((line) => line.includes("corrida cancelada")), "el transcript incluye cancelled");
       check(transcript.some((line) => line.includes("informe final")), "el transcript incluye final_report");
 
-      const fullRes = await getEventsRoute(new Request(`http://localhost/api/agent/tasks/${taskId}/events`), {
+      const fullRes = await getEventsRoute(localRequest(`http://localhost/api/agent/tasks/${taskId}/events`), {
         params: Promise.resolve({ id: taskId }),
       });
       const fullReader = fullRes.body!.getReader();
@@ -507,7 +518,7 @@ async function main(): Promise<void> {
       checkEq(fullData.length, 4, "SSE no duplica eventos");
       await fullReader.cancel();
 
-      const replayReq = new Request(`http://localhost/api/agent/tasks/${taskId}/events`, { headers: { "Last-Event-ID": "1" } });
+      const replayReq = localRequest(`http://localhost/api/agent/tasks/${taskId}/events`, { headers: { "Last-Event-ID": "1" } });
       const replayRes = await getEventsRoute(replayReq, { params: Promise.resolve({ id: taskId }) });
       const replayReader = replayRes.body!.getReader();
       const replay = await readSseUntil(replayReader, (chunks) => chunks.some((chunk) => chunk.event === "task"));
@@ -516,7 +527,7 @@ async function main(): Promise<void> {
       check(replay.chunks.some((chunk) => chunk.event === "task"), "el replay incluye el snapshot de la task");
       await replayReader.cancel();
 
-      const lastReq = new Request(`http://localhost/api/agent/tasks/${taskId}/events?sinceSeq=3`);
+      const lastReq = localRequest(`http://localhost/api/agent/tasks/${taskId}/events?sinceSeq=3`);
       const lastRes = await getEventsRoute(lastReq, { params: Promise.resolve({ id: taskId }) });
       const lastReader = lastRes.body!.getReader();
       const last = await readSseUntil(lastReader, (chunks) => chunks.some((chunk) => chunk.event === "task"));

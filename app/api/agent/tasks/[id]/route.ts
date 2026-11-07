@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 import { getTask, TaskNotTerminalError } from "@/lib/agent/task-store";
 import { deleteTask } from "@/lib/agent/runner";
+import { guardRequest } from "@/lib/auth/guard";
 
-export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const { id } = await params;
   const task = getTask(id);
   if (!task) return NextResponse.json({ ok: false, error: `No existe la task ${id}.` }, { status: 404 });
@@ -13,7 +17,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
  * la 3). 409 si todavía está activa — nunca se borra algo que un proceso
  * real puede estar tocando, o que el usuario todavía puede necesitar
  * revisar. */
-export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const { id } = await params;
   const task = getTask(id);
   if (!task) return NextResponse.json({ ok: false, error: `No existe la task ${id}.` }, { status: 404 });

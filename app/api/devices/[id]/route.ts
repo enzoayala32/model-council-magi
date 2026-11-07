@@ -4,7 +4,7 @@ import { getDevice, renameDevice, setDeviceScope, revokeDevice } from "@/lib/aut
 import { isDeviceScope } from "@/lib/auth/devices";
 import { clearStepUp } from "@/lib/auth/step-up";
 import { recordAudit } from "@/lib/auth/audit";
-import { isLoopbackHost } from "@/lib/auth/scopes";
+import { guardRequest, requireLocalAccess } from "@/lib/auth/guard";
 
 /**
  * Fase 4d - renombrar o cambiar el scope de un dispositivo.
@@ -14,9 +14,11 @@ import { isLoopbackHost } from "@/lib/auth/scopes";
  * sirviendo con el scope anterior.
  */
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  if (!isLoopbackHost(request.headers.get("host"))) {
-    return NextResponse.json({ ok: false, error: "Solo se cambia desde esta PC." }, { status: 403 });
-  }
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
+  const local = requireLocalAccess(request);
+  if (local) return local;
   const { id } = await params;
   const device = getDevice(id);
   if (!device) return NextResponse.json({ ok: false, error: "No existe ese dispositivo." }, { status: 404 });
@@ -53,9 +55,11 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
 /** Revocar (borrado logico: el dispositivo queda registrado, inutilizable). */
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  if (!isLoopbackHost(request.headers.get("host"))) {
-    return NextResponse.json({ ok: false, error: "Solo se revoca desde esta PC." }, { status: 403 });
-  }
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
+  const local = requireLocalAccess(request);
+  if (local) return local;
   const { id } = await params;
   const revoked = revokeDevice(id);
   if (!revoked) return NextResponse.json({ ok: false, error: "No existe o ya estaba revocado." }, { status: 404 });

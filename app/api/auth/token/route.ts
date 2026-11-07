@@ -3,6 +3,7 @@ import { readJsonBody } from "@/lib/api-json";
 import { APP_ACCESS_TOKEN_COOKIE, buildTokenCookie, constantTimeEqual } from "@/lib/api-security";
 import { checkRateLimit, clientIdentifier, recordFailure, recordSuccess } from "@/lib/auth/rate-limit";
 import { recordAudit } from "@/lib/auth/audit";
+import { guardRequest } from "@/lib/auth/guard";
 
 /**
  * Fase 1.2 - login del token de acceso.
@@ -23,6 +24,9 @@ import { recordAudit } from "@/lib/auth/audit";
 const RESOURCE = "auth_token";
 
 export async function POST(request: Request) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const identifier = clientIdentifier(request);
   const gate = checkRateLimit(identifier, RESOURCE);
   if (!gate.allowed) {
@@ -59,7 +63,10 @@ export async function POST(request: Request) {
 }
 
 /** Borra la cookie (logout local). */
-export async function DELETE() {
+export async function DELETE(request: Request) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const response = NextResponse.json({ ok: true });
   response.headers.set("Set-Cookie", `${APP_ACCESS_TOKEN_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict`);
   return response;

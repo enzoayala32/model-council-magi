@@ -2,11 +2,15 @@ import { NextResponse } from "next/server";
 import { getTask } from "@/lib/agent/task-store";
 import { getProposalsForTask } from "@/lib/agent/proposal-store";
 import { toFileProposal } from "@/lib/agent/proposal-adapter";
+import { guardRequest } from "@/lib/auth/guard";
 
 /** Fase 2H. Usa el adaptador puro de la Fase 2F (`toFileProposal`) — la UI
  * recibe el mismo shape de `FileProposal` para renderizar diffs, sin que
  * este endpoint tenga que reinventar ningún mapeo de campos. */
-export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const { id: taskId } = await params;
   const task = getTask(taskId);
   if (!task) return NextResponse.json({ ok: false, error: `No existe la task ${taskId}.` }, { status: 404 });

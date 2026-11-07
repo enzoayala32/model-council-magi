@@ -12,6 +12,17 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { GET as inspectRoute } from "../../app/api/agent/inspect/route";
 
+/** Request como lo arma `server.ts`: con el peer verificado. Sin el header,
+ *  la guardia de lib/auth/guard.ts trata el request como remoto y lo rechaza. */
+function localRequest(url: string, init?: RequestInit): Request {
+  const headers = new Headers(init?.headers);
+  if (!headers.has("host")) headers.set("host", "localhost:3000");
+  if (!headers.has("x-magi-peer")) headers.set("x-magi-peer", "loopback");
+  if (!headers.has("x-magi-peer-addr")) headers.set("x-magi-peer-addr", "127.0.0.1");
+    return new Request(url, { ...init, headers });
+}
+
+
 const execFileAsync = promisify(execFile);
 
 async function main() {
@@ -32,7 +43,7 @@ async function main() {
     await execFileAsync("git", ["add", "-A"], { cwd: dir });
     await execFileAsync("git", ["commit", "-m", "inicial"], { cwd: dir });
 
-    const res = await inspectRoute(new Request(`http://localhost/api/agent/inspect?path=${encodeURIComponent(dir)}`));
+    const res = await inspectRoute(localRequest(`http://localhost/api/agent/inspect?path=${encodeURIComponent(dir)}`));
     const body = await res.json();
     const ok =
       res.status === 200 &&
@@ -50,7 +61,7 @@ async function main() {
   // --- Caso 2: carpeta sin git, sin package.json ---
   {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "consenso-ia-test-inspect-vacia-"));
-    const res = await inspectRoute(new Request(`http://localhost/api/agent/inspect?path=${encodeURIComponent(dir)}`));
+    const res = await inspectRoute(localRequest(`http://localhost/api/agent/inspect?path=${encodeURIComponent(dir)}`));
     const body = await res.json();
     const ok = res.status === 200 && body.isGitRepo === false && body.workspaceMode === "copy" && body.hasPackageJson === false && body.hasTypeScript === false && body.scripts.length === 0;
     console.log(ok ? "✅ Carpeta vacía: sin git → modo copy, sin package.json, sin scripts." : `❌ Falló. ${JSON.stringify(body)}`);
@@ -61,7 +72,7 @@ async function main() {
   {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "consenso-ia-test-inspect-js-"));
     await fs.writeFile(path.join(dir, "package.json"), JSON.stringify({ name: "proyecto-js", scripts: { start: "node index.js" } }));
-    const res = await inspectRoute(new Request(`http://localhost/api/agent/inspect?path=${encodeURIComponent(dir)}`));
+    const res = await inspectRoute(localRequest(`http://localhost/api/agent/inspect?path=${encodeURIComponent(dir)}`));
     const body = await res.json();
     const ok = body.hasPackageJson === true && body.hasTypeScript === false && body.scripts.join(",") === "start";
     console.log(ok ? "✅ package.json sin TypeScript detectado como JavaScript." : `❌ Falló. ${JSON.stringify(body)}`);
@@ -70,7 +81,7 @@ async function main() {
 
   // --- Caso 4: ruta inexistente / no es carpeta → error controlado ---
   {
-    const res = await inspectRoute(new Request(`http://localhost/api/agent/inspect?path=${encodeURIComponent("/no/existe/seguro/12345")}`));
+    const res = await inspectRoute(localRequest(`http://localhost/api/agent/inspect?path=${encodeURIComponent("/no/existe/seguro/12345")}`));
     const body = await res.json();
     const ok = res.status === 400 && body.ok === false;
     console.log(ok ? "✅ Ruta inexistente → 400 con mensaje, no una excepción cruda." : `❌ Falló. status=${res.status}`);
@@ -79,7 +90,7 @@ async function main() {
 
   // --- Caso 5: falta el parámetro path → 400 ---
   {
-    const res = await inspectRoute(new Request("http://localhost/api/agent/inspect"));
+    const res = await inspectRoute(localRequest("http://localhost/api/agent/inspect"));
     const ok = res.status === 400;
     console.log(ok ? "✅ Sin ?path= → 400." : `❌ Falló. status=${res.status}`);
     results.push(ok);

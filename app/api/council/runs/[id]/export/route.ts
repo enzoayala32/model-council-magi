@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
 import { getCouncilRunDetail } from "@/lib/council-run-store";
 import { renderRunMarkdown } from "@/lib/council-run-trace";
+import { guardRequest } from "@/lib/auth/guard";
 
 /** Fase 7B: exporta una corrida como Markdown (default) o JSON. */
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const denied = guardRequest(request);
+  if (denied) return denied;
+
   const { id } = await params;
   const format = (new URL(request.url).searchParams.get("format") ?? "markdown").toLowerCase();
   if (format !== "markdown" && format !== "json") {
