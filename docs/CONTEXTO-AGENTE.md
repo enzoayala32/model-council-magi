@@ -5,9 +5,10 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 ## 1. Fase actual y último commit
 
-- **Misión 2**, Fase 6 (push Web Push/VAPID) **HECHA**. Fase 5 también HECHA.
-  Siguen las **Fases 7-9 (MCP)**.
-- Último commit: ver `git log -1` (branch main).
+- **Misión 2**: Fases 5, 6, 7, 8 y 9 **HECHAS**. Queda pendiente solo la UI de
+  administración de servidores MCP (editar el JSON a mano está documentado) y lo
+  NO VERIFICADO de la lista de abajo.
+- Último commit: `70d6586` — `docs: reportar las fases 7, 8 y 9 (MCP)`.
 
 ## 2. Estado de verificación (sobre HEAD)
 
@@ -22,10 +23,10 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 ## 3. Próximos 3 pasos concretos
 
-1. Fases 7-9 (MCP): configuración FUERA del repo, cliente read-only con
-   allowlist, escritura con aprobación y `/api/mcp` como servidor.
-2. Barrido de rutas con cada ruta nueva (default-deny + scopes).
-3. Empujar y mantener este archivo al cierre de cada sub-bloque.
+1. UI de administración de servidores MCP (loopback only): hoy el JSON se edita
+   a mano, fuera del repo.
+2. Verificar en vivo lo NO VERIFICADO de abajo (Android, túnel, push).
+3. Mantener este archivo al cierre de cada sub-bloque.
 
 ## 4. Decisiones vigentes
 
@@ -60,6 +61,10 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
   `notifyStatusChange` sale sin abrir claves ni tocar la red.
 - **Los scripts de `npm` no aceptan `VAR=valor` en Windows** (usa `cmd`): los
   tiempos de test van como default dentro del archivo.
+- **Backticks dentro de un comentario SQL de `lib/db.ts`** cierran el template
+  literal y rompen el archivo (pasó dos veces). Sin backticks en esos comments.
+- **MCP: la config va FUERA del repo**; el proceso hijo nunca hereda el entorno
+  completo (allowlist + lista de nunca reenviar).
 - **`requireScope` sale de `lib/auth/authorize.ts`**, no de `guard.ts` (guard no
   lo re-exporta).
 
