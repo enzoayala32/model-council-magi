@@ -78,6 +78,7 @@ const OFFLINE_EXACT = [
   "security:test-operator-sessions",
   "security:test-remote-doctor",
   "security:test-sse-proxy",
+  "security:test-request-proto",
 ];
 
 const liveSet = new Set<string>(LIVE_SCRIPTS);

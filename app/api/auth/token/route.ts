@@ -3,6 +3,7 @@ import { readJsonBody } from "@/lib/api-json";
 import { APP_ACCESS_TOKEN_COOKIE, constantTimeEqual } from "@/lib/api-security";
 import { buildOperatorSessionCookie, clearOperatorSessionCookie, createOperatorSession, revokeOperatorSession } from "@/lib/auth/operator-session";
 import { readCookie } from "@/lib/auth/cookie-parse";
+import { isHttpsRequest } from "@/lib/auth/request-proto";
 import { checkRateLimit, clientIdentifier, recordFailure, recordSuccess } from "@/lib/auth/rate-limit";
 import { recordAudit } from "@/lib/auth/audit";
 import { guardRequest } from "@/lib/auth/guard";
@@ -63,9 +64,11 @@ export async function POST(request: Request) {
   // valor se guarda hasheado en `operator_sessions`; el token nunca llega al
   // navegador. Bearer sigue disponible para scripts.
   const session = createOperatorSession();
-  const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  // `Secure` solo si la request vino por HTTPS (o lo dijo el túnel). En HTTP
+  // plano marcarla haría que el navegador descarte la cookie y el login
+  // falle sin explicación.
   const response = NextResponse.json({ ok: true, tokenRequired: true });
-  response.headers.set("Set-Cookie", buildOperatorSessionCookie(session, { secure: forwardedProto === "https" }));
+  response.headers.set("Set-Cookie", buildOperatorSessionCookie(session, { secure: isHttpsRequest(request) }));
   return response;
 }
 

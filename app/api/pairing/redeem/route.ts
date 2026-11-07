@@ -5,6 +5,7 @@ import { createDevice, DEVICE_COOKIE } from "@/lib/auth/devices";
 import { recordAudit } from "@/lib/auth/audit";
 import { checkRateLimit, clientIdentifier, recordFailure, recordSuccess } from "@/lib/auth/rate-limit";
 import { buildDeviceCookie } from "@/lib/auth/cookie";
+import { isHttpsRequest } from "@/lib/auth/request-proto";
 import { guardRequest } from "@/lib/auth/guard";
 
 /**
@@ -50,10 +51,8 @@ export async function POST(request: Request) {
   });
   recordAudit({ deviceId: device.id, action: "pairing_redeemed", targetId: device.id, result: "ok" });
 
-  const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
-  const secure = forwardedProto === "https";
   const response = NextResponse.json({ ok: true, scope: device.scope, deviceId: device.id });
-  response.headers.set("Set-Cookie", buildDeviceCookie(token, { secure }));
+  response.headers.set("Set-Cookie", buildDeviceCookie(token, { secure: isHttpsRequest(request) }));
   return response;
 }
 

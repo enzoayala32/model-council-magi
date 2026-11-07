@@ -107,7 +107,8 @@
     "security:test-operator-routes": "tsx lib/test-operator-routes.ts",
     "security:test-operator-sessions": "tsx lib/test-operator-sessions.ts",
     "security:test-remote-doctor": "tsx lib/test-remote-doctor.ts",
-    "security:test-sse-proxy": "tsx lib/test-sse-proxy.ts"
+    "security:test-sse-proxy": "tsx lib/test-sse-proxy.ts",
+    "security:test-request-proto": "tsx lib/test-request-proto.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.55",

@@ -157,9 +157,50 @@ El server corre en tu máquina, no en la nube:
 | proxy (`proxy.ts`) | Navegadores: CSRF, DNS rebinding |
 | Peer real (`server.ts` + `lib/peer.ts`) | Clientes no-navegador que falsifican el header `Host` |
 | `lib/auth/*` | Dispositivos remotos: cookie robada, escalado de permisos |
+| `lib/auth/request-proto.ts` | Marca `Secure` solo con HTTPS real (o declarado por el túnel) |
 
 El header `Host` **no autoriza nada**: lo manda el cliente. La decisión de "es
 esta PC" sale de `req.socket.remoteAddress`, que fija el kernel.
+
+---
+
+## Headers detrás del túnel: qué se usa y qué NO
+
+`tailscale serve` y Cloudflare Tunnel terminan el TLS antes de llegar a la app:
+el server recibe HTTP plano desde `127.0.0.1` y se entera del protocolo original
+por headers. Esto es lo que ve la app, y para qué sirve cada cosa:
+
+| Header | Lo manda | ¿La app lo usa? | Para qué |
+|---|---|---|---|
+| `X-Forwarded-Proto` | Tailscale, Cloudflare, nginx | **Sí** | Solo el atributo `Secure` de las cookies |
+| `Forwarded: proto=https` (RFC 7239) | proxies estándar | **Sí** | ídem |
+| `X-Forwarded-Ssl: on` | balanceadores (ELB, nginx) | **Sí** | ídem |
+| `Host` | cualquiera (lo manda el cliente) | Sí, como allowlist de navegador | defensa contra DNS rebinding; **nunca autoriza** |
+| `X-Forwarded-For`, `X-Real-IP`, `CF-Connecting-IP` | proxies | **No** | se pueden falsificar; la IP real sale del socket |
+| `X-Forwarded-Host` | proxies | **No** | ídem |
+| `CF-Access-JWT`, `Cf-Access-*` | Cloudflare Access | **No** | la autenticación es de la app, no de Cloudflare |
+| `Origin`, `Referer` | navegador | Sí, en el proxy | defensa contra CSRF; no identifica a nadie |
+
+**La decisión de "es esta PC" sale de `req.socket.remoteAddress`**, que escribe
+el kernel y que `server.ts` copia al header interno `x-magi-peer` (borrando
+antes el que mande el cliente). Detrás de `tailscale serve` el peer es loopback
+—por eso el server apaga solo el acceso local implícito cuando configurás un
+host que no es loopback.
+
+### El atributo `Secure` y por qué ahí sí se confía en un header
+
+Con HTTPS detrás del túnel, la cookie de sesión del operador y la cookie de
+dispositivo se marcan `Secure`. Con HTTP plano **no** se marcan: si se marcaran,
+el navegador las descartaría y el login fallaría sin explicación.
+
+Confiar en `X-Forwarded-Proto` acá no es un agujero porque ese header no
+autoriza nada: solo decide un atributo. Si un atacante lo falsifica sobre HTTP
+plano, lo peor que logra es que el navegador descarte la cookie y su propio
+login se rompa. La autorización sigue saliendo del peer verificado y de las
+credenicales (`lib/peer.ts`, `lib/auth/*`).
+
+Verificado por tests (`lib/test-request-proto.ts`): en HTTP no se marca, con
+HTTPS sí, para las dos cookies.
 
 ---
 
