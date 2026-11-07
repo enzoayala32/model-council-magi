@@ -112,6 +112,7 @@
     "security:test-web-push": "tsx lib/test-web-push.ts",
     "security:test-push-endpoint": "tsx lib/test-push-endpoint.ts",
     "security:test-mcp-client": "tsx lib/test-mcp-client.ts",
+    "security:test-mcp-loop": "tsx lib/test-mcp-loop.ts",
     "security:test-mcp-server": "tsx lib/test-mcp-server.ts"
   },
   "dependencies": {

@@ -150,6 +150,15 @@ export const ROUTE_RULES: readonly RouteRule[] = [
   // solo lectura; no hay método de aprobación (eso es humano, Fase 8).
   { pattern: "/api/mcp", method: "POST", scope: "observe", note: "Endpoint JSON-RPC del servidor MCP: initialize, tools/list, tools/call, ping. Todas las herramientas son de solo lectura." },
 
+  // ---------- Aprobaciones MCP (Fase 8) ----------
+  // Las tres exigen `approve`: listar qué está pendiente y decidir son actos de
+  // operador, no de observador. `stepUp: true` porque un dispositivo REMOTO
+  // tiene que reconfirmar con el segundo factor — igual que emparejar o
+  // inscribir TOTP. El operador desde loopback no necesita step-up.
+  { pattern: "/api/mcp/approvals", method: "GET", scope: "approve", note: "Lista las aprobaciones pendientes de herramientas MCP de escritura." },
+  { pattern: "/api/mcp/approvals", method: "POST", scope: "approve", stepUp: true, note: "Rechaza una aprobación. step-up desde dispositivo remoto." },
+  { pattern: "/api/mcp/approvals/approve", method: "POST", scope: "approve", stepUp: true, note: "Aprueba una herramienta MCP de escritura. step-up desde dispositivo remoto." },
+
   // ---------- Gestion de dispositivos y auditoria (Fase 4d) ----------
   // Todas se restringen ADICIONALMENTE a loopback dentro de la ruta: ver o
   // cambiar que dispositivos tienen acceso es informacion de la PC. El scope

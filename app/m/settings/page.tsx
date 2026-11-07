@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { MobileNav } from "../../components/mobile/mobile-nav";
 import { PushSettings } from "../../components/mobile/push-settings";
+import { McpApprovals } from "../../components/mobile/mcp-approvals";
 
 /** Fase 3.2 — ajustes y estado del acceso.
  *
@@ -71,6 +72,8 @@ export default function MobileSettings() {
       </section>
 
       <PushSettings />
+
+      <McpApprovals compact />
 
       <section className="mSection">
         <div className="mSectionHead"><h2>Dispositivos</h2></div>

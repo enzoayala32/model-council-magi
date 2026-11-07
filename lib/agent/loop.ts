@@ -16,6 +16,7 @@ import { computeCooldownMs } from "../provider-resilience/cooldown";
 import { redactSecrets } from "../provider-resilience/redact";
 import { classifyExhaustion, describeExhaustion } from "../provider-resilience/events";
 import { createRepoMapTracker, type RepoMapTracker } from "./repo-map-tracker";
+import { McpToolRegistry } from "./mcp-tools";
 import type { RepoMapServiceWithSnapshot } from "./repo-map-service";
 import { createContextEngine, type ContextEngine } from "./context/engine";
 import { measureContext, type ContextEstimate } from "./context/estimate";
@@ -417,12 +418,16 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
     }
   }
 
+  // Fase 7.4: un registry por corrida. Vive mientras vive la corrida para no
+  // lanzar un proceso stdio por llamada, y se cierra al terminar (abajo).
+  const mcpRegistry = new McpToolRegistry({ approvalsEnabled: true });
   const tools = createAgentTools(
     workspaceRoot,
     onEvent,
     allowedScripts,
     searchProviderForTools,
     repoMapTracker && repoMapService ? { tracker: repoMapTracker, service: repoMapService } : undefined,
+    mcpRegistry,
   );
   const searchEnabled = "web_search" in tools;
   const generateTextImpl = options.generateTextImpl ?? generateText;
@@ -631,7 +636,31 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
                   appendEvent(options.taskId, { type: "tool_result", toolName: part.toolName, ok: false, error: output.error, summary: output.error ?? "sin detalle" });
                 }
               } else if (output && output.ok === true && part.toolName !== "run_typecheck" && part.toolName !== "run_script" && options.taskId) {
-                appendEvent(options.taskId, { type: "tool_result", toolName: part.toolName, ok: true, summary: `${part.toolName} OK` });
+                // Fase 7.4: las tools MCP dejan tamano, hash y un preview corto
+                // en el evento. El contenido completo NUNCA se guarda: viaja
+                // solo como metadato, para que el log no se convierta en un
+                // volcado de lo que dijo un servidor externo.
+                // `output` tipa como la unión de todas las tools; los campos
+                // de MCP se leen de forma defensiva.
+                const mcpOutput = output as Record<string, unknown>;
+                const mcp = part.toolName.startsWith("mcp__")
+                  ? {
+                      chars: typeof mcpOutput.chars === "number" ? mcpOutput.chars : 0,
+                      sha256: typeof mcpOutput.sha256 === "string" ? mcpOutput.sha256 : "",
+                      preview:
+                        typeof mcpOutput.output === "string"
+                          ? redactSecrets(String(mcpOutput.output).slice(0, 160)).replace(/\s+/g, " ")
+                          : "",
+                      untrusted: true as const,
+                    }
+                  : undefined;
+                appendEvent(options.taskId, {
+                  type: "tool_result",
+                  toolName: part.toolName,
+                  ok: true,
+                  summary: mcp ? `${part.toolName} OK (${mcp.chars} chars, MCP no confiable)` : `${part.toolName} OK`,
+                  mcp,
+                });
               }
             }
           }
@@ -754,6 +783,11 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
   }
 
   clearTimeout(timeoutTimer);
+
+  // Fase 7.4: los procesos MCP se lanzaron para esta corrida y se cierran
+  // aca. Sin esto quedarian vivos tras cada task (y en Windows, con sus
+  // procesos nieto).
+  await mcpRegistry.close();
 
   if (stopReason === "completed" && currentStepIndex.current >= maxSteps) stopReason = "max_steps";
   if (stopReason === "completed" && currentStepIndex.current - lastProgressStepRef.current >= NO_PROGRESS_STEP_LIMIT) {

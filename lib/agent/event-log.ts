@@ -26,7 +26,17 @@ export type AgentEventType =
 
 export type AgentEventPayload =
   | { type: "tool_call"; toolName: string; input: unknown }
-  | { type: "tool_result"; toolName: string; ok: boolean; error?: string; summary: string }
+  | {
+      type: "tool_result";
+      toolName: string;
+      ok: boolean;
+      error?: string;
+      summary: string;
+      /** Fase 7.4: herramientas MCP. Tamaño y hash de la salida, más un
+       *  preview corto ya redactado. El contenido completo NO se guarda en
+       *  el evento: viaja en el stream solo como metadato. */
+      mcp?: { chars: number; sha256: string; preview: string; untrusted: true };
+    }
   | { type: "text"; text: string }
   | { type: "typecheck_result"; success: boolean; outputExcerpt?: string }
   | { type: "run_script_result"; name: string; success: boolean; outputExcerpt?: string }

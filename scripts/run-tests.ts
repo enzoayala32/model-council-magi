@@ -81,6 +81,7 @@ const OFFLINE_EXACT = [
   "security:test-request-proto",
   "security:test-push-endpoint",
   "security:test-web-push",
+  "security:test-mcp-loop",
   "security:test-mcp-client",
   "security:test-mcp-server",
 ];

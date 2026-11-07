@@ -32,6 +32,15 @@ import { childEnvFor, isToolAllowed, type McpServerConfig } from "./config";
 /** Marca que se antepone a cualquier texto que venga de un servidor MCP. */
 export const UNTRUSTED_PREAMBLE = "[contenido no confiable de MCP]";
 
+/**
+ * Preambulo por defecto. El registro de tools del agente pasa uno con el
+ * nombre del servidor, para que el modelo sepa de dónde salió el dato; si no,
+ * se usa el genérico.
+ */
+function preambleFor(label?: string): string {
+  return label ? "[contenido no confiable del servidor MCP " + label + "]" : UNTRUSTED_PREAMBLE;
+}
+
 export type McpToolInfo = { name: string; description?: string; writeCapable: boolean };
 
 export type McpToolResult = {
@@ -58,7 +67,9 @@ const WRITE_HINTS = [
   "borr", "elimin", "escrib", "crear", "enviar", "ejecut", "aplic", "modific", "actualiz", "subir",
 ];
 
-function looksWriteCapable(toolName: string, description = ""): boolean {
+/** Exportado: el registro de tools del agente lo usa para decidir, por
+ *  herramienta y no por servidor, si hace falta aprobación humana. */
+export function looksWriteCapable(toolName: string, description = ""): boolean {
   const haystack = (toolName + " " + description).toLowerCase();
   return WRITE_HINTS.some((hint) => haystack.includes(hint));
 }
@@ -77,7 +88,10 @@ export class McpStdioConnection {
   private closed = false;
   private readonly timeoutMs: number;
 
-  constructor(private readonly config: McpServerConfig) {
+  constructor(
+    private readonly config: McpServerConfig,
+    private readonly options: { untrustedLabel?: string } = {},
+  ) {
     this.timeoutMs = config.timeoutMs;
   }
 
@@ -230,7 +244,7 @@ export class McpStdioConnection {
     const isError = (result as { isError?: unknown })?.isError === true;
     // Recorte y redacción: la salida de un servidor MCP puede ser enorme y
     // puede contrir material sensible.
-    const text = redactSecrets(UNTRUSTED_PREAMBLE + " " + pieces.join("\n").slice(0, 100_000));
+    const text = redactSecrets(preambleFor(this.options.untrustedLabel) + " " + pieces.join("\n").slice(0, 100_000));
     return isError
       ? { ok: false, text, error: text.slice(0, 200), untrusted: true }
       : { ok: true, text, untrusted: true };
