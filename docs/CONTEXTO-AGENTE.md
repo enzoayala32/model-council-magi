@@ -5,16 +5,16 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 ## 1. Fase actual y último commit
 
-- **Misión 2**, Fase 5 (acceso remoto) **EN CURSO**. Hecho: `docs/ACCESO-REMOTO.md`
-  y el doctor (5.3). Falta: prueba de SSE tras proxy (5.4) y cookie `Secure`
-  con `X-Forwarded-Proto` (5.5).
-- Último commit: ver `git log -1` (branch main, pusheado).
+- **Misión 2**, Fase 5 (acceso remoto) **HECHA** (5.3 doctor, 5.4 SSE tras proxy,
+  5.5 cookie `Secure`). Sigue la **Fase 6**: push Web Push/VAPID para Android.
+- Último commit: `b9fd7a5` — `fase 5.5: cookie Secure solo con HTTPS real`.
 
 ## 2. Estado de verificación (sobre HEAD)
 
 - `npm run typecheck`: exit 0.
 - `npm run lint -- --max-warnings 37`: exit 0 (37 warnings).
-- `npm test`: **85/85 OK** (incluye `security:test-remote-doctor` 65/65).
+- `npm test`: **87/87 OK** (incluye `security:test-remote-doctor` 65/65,
+  `security:test-sse-proxy` 26/26, `security:test-request-proto` 34/34).
 - `npm run build`: exit 0.
 - `npx tsx scripts/run-tests.ts --verify`: exit 0 (tests + tope de lint).
 - Barrido de rutas: `security:test-route-enforcement` 13/13 y
@@ -22,12 +22,11 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 ## 3. Próximos 3 pasos concretos
 
-1. Test de SSE detrás de un proxy HTTP local con buffering/latencia
-   (orden, heartbeat, reanudación con `?sinceSeq=`) — 5.4.
-2. Cookie `Secure` cuando la request viene por HTTPS (`X-Forwarded-Proto`),
-   con test, y documentar en `ACCESO-REMOTO.md` qué headers ve la app tras
-   `tailscale serve` y Cloudflare Tunnel — 5.5.
-3. Cerrar la Fase 5 y arrancar la Fase 6 (push Web Push/VAPID para Android).
+1. Fase 6: push Web Push/VAPID — suscripción por dispositivo, coalescencia,
+   preferencias y tests con emisor falso.
+2. Fases 7-9 (MCP): config fuera del repo, cliente read-only con allowlist,
+   escritura con aprobación, y `/api/mcp` como servidor.
+3. Empujar y mantener este archivo al cierre de cada sub-bloque.
 
 ## 4. Decisiones vigentes
 
@@ -52,6 +51,11 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
   proceso, y solo ese.
 - **`REMOTE_ACCESS=off` corta todo Host no loopback** (proxy), así que en el
   doctor cuenta como configuración segura aunque haya hosts remotos.
+- **`X-Forwarded-Proto` decide solo el atributo `Secure`**, nunca autorización;
+  por eso se puede confiar en él sin abrir un agujero.
+- **El SSE se prueba con una cadena real de servers** (proxy con buffering →
+  origen); en dev, Next compila cada ruta al pedirla, así que los tests que
+  levantan servers precompilan las rutas antes de medir.
 
 ## 5. Trampas conocidas (ya pagadas)
 

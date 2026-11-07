@@ -62,7 +62,7 @@ proyecto.
 | 4d UI de Dispositivos y Actividad + QR + kill switch `REMOTE_ACCESS=off` | **HECHO** |
 | Fase 4 completa | **HECHO** (4a+4b+4c+4d) |
 | Nota: hasta 4c, `apply`/`discard` desde remoto quedaban bloqueados a propósito | **HECHO** (ya resuelto por el step-up) |
-| 5 | Acceso remoto documentado (Tailscale, Cloudflare, port-forward desaconsejado) + `npm run doctor:remote` (hecho) + cookie `Secure` tras túnel HTTPS + prueba de SSE tras proxy | **EN CURSO** (docs y doctor hechos; falta 5.4 SSE tras proxy y 5.5 cookie `Secure`) |
+| 5 | Acceso remoto documentado (Tailscale, Cloudflare, port-forward desaconsejado) + `npm run doctor:remote` + cookie `Secure` tras túnel HTTPS + SSE probado detrás de proxy | **HECHO** (5.3, 5.4 y 5.5) |
 | 6 | Notificaciones push (Web Push/VAPID) con preferencias por dispositivo y coalescencia | **PENDIENTE** |
 
 Lo que depende de un teléfono real o de un túnel queda **NO VERIFICADO**
