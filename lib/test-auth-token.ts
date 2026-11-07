@@ -137,10 +137,21 @@ function main(): void {
       return evaluateApiRequest({ ...baseRequest, cookie }, { APP_ACCESS_TOKEN: "secreto" }).ok;
     })(),
   );
+  // Corrección de la sesión opaca: la cookie ya NO lleva el token maestro,
+  // sino un id de sesión. El proxy la deja pasar (no puede consultar la DB) y
+  // la ruta es quien valida. Lo que sí se rechaza en el proxy es una cookie
+  // vacía o ausente.
   check(
-    "la cookie con el token equivocado no desbloquea",
+    "cookie de sesión presente pasa el proxy (la ruta la valida)",
     (() => {
-      const cookie = `${APP_ACCESS_TOKEN_COOKIE}=otro`;
+      const cookie = `${APP_ACCESS_TOKEN_COOKIE}=${"a".repeat(64)}`;
+      return evaluateApiRequest({ ...baseRequest, cookie }, { APP_ACCESS_TOKEN: "secreto" }).ok;
+    })(),
+  );
+  check(
+    "cookie vacía se rechaza en el proxy",
+    (() => {
+      const cookie = `${APP_ACCESS_TOKEN_COOKIE}=`;
       const decision = evaluateApiRequest({ ...baseRequest, cookie }, { APP_ACCESS_TOKEN: "secreto" });
       return !decision.ok && decision.reason === "token";
     })(),

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { readJsonBody } from "@/lib/api-json";
 import { listDevices, revokeDevice } from "@/lib/auth/devices";
 import { clearStepUp } from "@/lib/auth/step-up";
+import { revokeAllOperatorSessions } from "@/lib/auth/operator-session";
 import { recordAudit } from "@/lib/auth/audit";
 import { guardRequest, requireLocalAccess } from "@/lib/auth/guard";
 
@@ -35,6 +36,8 @@ export async function POST(request: Request) {
     }
   }
 
-  recordAudit({ action: "device_revoke_all", result: "ok", detail: `${revoked} revocados` });
-  return NextResponse.json({ ok: true, revoked });
+  // Kill switch completo: también las sesiones de operador del navegador.
+  const sessions = revokeAllOperatorSessions();
+  recordAudit({ action: "device_revoke_all", result: "ok", detail: `${revoked} dispositivos, ${sessions} sesiones` });
+  return NextResponse.json({ ok: true, revoked, sessionsRevoked: sessions });
 }

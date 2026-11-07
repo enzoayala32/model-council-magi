@@ -103,7 +103,8 @@
     "security:test-rate-limit": "tsx lib/test-rate-limit.ts",
     "security:test-peer-spoof": "tsx lib/test-peer-spoof.ts",
     "security:test-route-enforcement": "tsx lib/test-route-enforcement.ts",
-    "security:test-operator-routes": "tsx lib/test-operator-routes.ts"
+    "security:test-operator-routes": "tsx lib/test-operator-routes.ts",
+    "security:test-operator-sessions": "tsx lib/test-operator-sessions.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.55",

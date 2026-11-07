@@ -439,6 +439,20 @@ function createConnection(): Database.Database {
       secret_enc TEXT NOT NULL,
       confirmed_at INTEGER NOT NULL
     );
+
+    -- Sesiones de operador: la cookie lleva un id aleatorio, NO el token
+    -- maestro. token_hash es el SHA-256 de ese id; un dump de la DB no
+    -- recupera ninguna sesión válida. Tabla nueva y aditiva.
+    CREATE TABLE IF NOT EXISTS operator_sessions (
+      id TEXT PRIMARY KEY,
+      token_hash TEXT NOT NULL UNIQUE,
+      created_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      revoked_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_operator_sessions_hash ON operator_sessions(token_hash);
+    CREATE INDEX IF NOT EXISTS idx_operator_sessions_expiry ON operator_sessions(expires_at);
   `);
 
   // `restart_retry_count` puede faltar en una DB creada por una versión

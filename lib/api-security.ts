@@ -260,6 +260,8 @@ const LOOPBACK_HOSTNAMES = ["localhost", "127.0.0.1", "[::1]"];
 
 /** Nombre de la cookie de dispositivo emparejado (Fase 4). */
 const DEVICE_COOKIE = "magi_device_token";
+/** Cookie de sesión de operador (id opaco, no el token maestro). */
+const OPERATOR_SESSION_COOKIE = "magi_access_token";
 
 /**
  * ¿Hay algo con lo que autenticar un acceso remoto? Se acepta
@@ -275,6 +277,7 @@ function hasAnyCredential(request: ApiSecurityRequest, env: ApiSecurityEnv): boo
   if (env.APP_ACCESS_TOKEN?.trim()) return true;
   if (readCookie(request.cookie ?? null, TOKEN_COOKIE)) return true;
   if (readCookie(request.cookie ?? null, DEVICE_COOKIE)) return true;
+  if (readCookie(request.cookie ?? null, OPERATOR_SESSION_COOKIE)) return true;
   return false;
 }
 
@@ -343,8 +346,12 @@ export function evaluateApiRequest(
   // que es quien puede tocar la DB. Antes esto exigía APP_ACCESS_TOKEN
   // siempre, así que un teléfono emparejado no podía autenticarse NUNCA desde
   // la LAN: tenía que conocer además el token del operador.
+  // El proxy no puede (ni debe) consultar la DB: si hay una cookie de
+  // dispositivo o de sesión de operador, la deja pasar y la validación real
+  // la hace la ruta (`lib/auth/guard.ts` / `lib/auth/operator.ts`).
   const deviceCookie = readCookie(request.cookie ?? null, DEVICE_COOKIE);
-  if (token && !request.tokenExempt && !deviceCookie) {
+  const sessionCookie = readCookie(request.cookie ?? null, OPERATOR_SESSION_COOKIE);
+  if (token && !request.tokenExempt && !deviceCookie && !sessionCookie) {
     const bearer = readBearer(request.authorization ?? null);
     const cookie = readCookie(request.cookie ?? null, TOKEN_COOKIE);
     const bearerOk = bearer !== null && constantTimeEqual(bearer, token);

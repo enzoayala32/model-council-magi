@@ -332,9 +332,24 @@ async function main(): Promise<void> {
     "APP_ACCESS_TOKEN acepta cookie URL-encoded",
     isOk(decide({ cookie: "magi_access_token=sec%72eto" }, { APP_ACCESS_TOKEN: "secreto" })),
   );
+  // Sesión opaca: el proxy deja pasar CUALQUIER cookie de sesión (no puede
+  // consultar la DB) y la validez la decide la ruta. Es el mismo criterio que
+  // con la cookie de dispositivo.
   check(
-    "APP_ACCESS_TOKEN rechaza cookie incorrecta",
-    isFailure(decide({ cookie: "magi_access_token=otro" }, { APP_ACCESS_TOKEN: "secreto" }), "token", 403),
+    "APP_ACCESS_TOKEN rechaza una cookie sin valor de sesión",
+    isFailure(decide({ cookie: "magi_access_token=" }, { APP_ACCESS_TOKEN: "secreto" }), "token", 403),
+  );
+  check(
+    "cookie de sesión del operador pasa el proxy (la ruta la valida)",
+    isOk(decide({ cookie: "magi_access_token=" + "a".repeat(64) }, { APP_ACCESS_TOKEN: "secreto" })),
+  );
+  check(
+    "Bearer correcto sigue siendo la credencial de scripts",
+    isOk(decide({ authorization: "Bearer secreto" }, { APP_ACCESS_TOKEN: "secreto" })),
+  );
+  check(
+    "Bearer incorrecto se rechaza en el proxy",
+    isFailure(decide({ authorization: "Bearer otro" }, { APP_ACCESS_TOKEN: "secreto" }), "token", 403),
   );
   check(
     "APP_ACCESS_TOKEN acepta esquema bearer en minúsculas",

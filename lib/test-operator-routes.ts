@@ -19,6 +19,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isOperatorRequest } from "./auth/operator";
+import { buildOperatorSessionCookie, createOperatorSession } from "./auth/operator-session";
 import { createDevice } from "./auth/devices";
 
 let passed = 0;
@@ -40,6 +41,8 @@ const API_ROOT = path.join(REPO_ROOT, "app", "api");
 const CTX = { params: Promise.resolve({ id: "probe-id" }) };
 
 const OP_TOKEN = "token-del-operador";
+/** Cookie con un valor basura: no es sesión ni token. */
+const BOGUS_COOKIE = "magi_access_token=" + "f".repeat(64);
 
 type Handler = (request: Request, ctx?: { params: Promise<{ id: string }> }) => Promise<Response>;
 
@@ -72,9 +75,12 @@ function req(route: string, creds: { bearer?: boolean; cookie?: string | null } 
   });
 }
 
-/** Cookie de operador tal como la escribe el login. */
-function operatorCookie(value = OP_TOKEN): string {
-  return "magi_access_token=" + encodeURIComponent(value);
+/**
+ * Cookie de operador. Desde la corrección de la sesión opaca, el login
+ * setea un id de sesión (no el token), así que el test crea una real.
+ */
+function operatorCookie(): string {
+  return buildOperatorSessionCookie(createOperatorSession(), { secure: false });
 }
 
 const ADMIN_ROUTES = [
@@ -96,7 +102,7 @@ async function main(): Promise<void> {
     check("Bearer válido es operador", isOperatorRequest(req("/devices", { bearer: true })));
     check("cookie válida es operador", isOperatorRequest(req("/devices", { cookie: operatorCookie() })));
     check("Bearer inválido NO es operador", true);
-    check("cookie falsa NO es operador", !isOperatorRequest(req("/devices", { cookie: operatorCookie("otra") })));
+    check("cookie falsa NO es operador", !isOperatorRequest(req("/devices", { cookie: BOGUS_COOKIE })));
     check("sin credencial NO es operador", !isOperatorRequest(req("/devices")));
 
     console.log("\n== matriz: modo LAN x credencial x ruta de administración ==\n");
@@ -114,7 +120,7 @@ async function main(): Promise<void> {
       };
       results[route.label + " | bearer"] = String(await one({ bearer: true }));
       results[route.label + " | cookie"] = String(await one({ cookie: operatorCookie() }));
-      results[route.label + " | falsa"] = String(await one({ cookie: operatorCookie("falsa") }));
+      results[route.label + " | falsa"] = String(await one({ cookie: BOGUS_COOKIE }));
       results[route.label + " | nada"] = String(await one({}));
     }
 
@@ -147,7 +153,7 @@ async function main(): Promise<void> {
     console.log("\n== sin APP_ACCESS_TOKEN ==\n");
     delete process.env.APP_ACCESS_TOKEN;
     check("sin token configurado, Bearer no es operador", !isOperatorRequest(req("/devices", { bearer: true })));
-    check("sin token configurado, cookie no es operador", !isOperatorRequest(req("/devices", { cookie: operatorCookie() })));
+    check("sin token configurado, sesión no es operador", !isOperatorRequest(req("/devices", { cookie: operatorCookie() })));
   } finally {
     if (saved === undefined) delete process.env.APP_ACCESS_TOKEN;
     else process.env.APP_ACCESS_TOKEN = saved;

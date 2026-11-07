@@ -70,6 +70,7 @@ const OFFLINE_EXACT = [
   "security:test-peer-spoof",
   "security:test-route-enforcement",
   "security:test-operator-routes",
+  "security:test-operator-sessions",
 ];
 
 const liveSet = new Set<string>(LIVE_SCRIPTS);

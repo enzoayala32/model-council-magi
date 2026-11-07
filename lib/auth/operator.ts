@@ -14,8 +14,8 @@
  * reusan esta misma función. Así no pueden divergir.
  */
 
-import { APP_ACCESS_TOKEN_COOKIE, constantTimeEqual } from "../api-security";
-import { readCookie } from "./cookie-parse";
+import { constantTimeEqual } from "../api-security";
+import { isValidOperatorSession } from "./operator-session";
 
 function readBearer(value: string | null): string | null {
   if (!value) return null;
@@ -26,21 +26,27 @@ function readBearer(value: string | null): string | null {
 type OperatorRequest = { headers: { get(name: string): string | null } };
 
 /**
- * ¿La request viene autenticada como operador, por cualquiera de sus dos
- * vías (Bearer o cookie)?
+ * ¿La request viene autenticada como operador?
  *
- * OJO: valida el **valor** contra `APP_ACCESS_TOKEN`. No alcanza con que la
- * cookie exista: un valor falso debe fallar.
+ * Dos vías, con distinto nivel de exposición a propósito:
+ * - **Bearer** (`Authorization`): el token maestro. Es para scripts, que ya
+ *   lo tienen en su entorno.
+ * - **Cookie**: un id de sesión opaco, validado contra `operator_sessions`.
+ *   El token maestro NUNCA viaja al navegador.
+ *
+ * En ambos casos se valida el valor: no alcanza con que la cookie exista.
  */
 export function isOperatorRequest(request: OperatorRequest): boolean {
   const expected = process.env.APP_ACCESS_TOKEN?.trim();
-  if (!expected) return false;
 
-  const bearer = readBearer(request.headers.get("authorization"));
-  if (bearer !== null && constantTimeEqual(bearer, expected)) return true;
+  // Bearer: token maestro (scripts).
+  if (expected) {
+    const bearer = readBearer(request.headers.get("authorization"));
+    if (bearer !== null && constantTimeEqual(bearer, expected)) return true;
+  }
 
-  const cookie = readCookie(request.headers.get("cookie"), APP_ACCESS_TOKEN_COOKIE);
-  if (cookie !== null && constantTimeEqual(cookie, expected)) return true;
+  // Cookie: sesión opaca guardada en la DB.
+  if (isValidOperatorSession(request)) return true;
 
   return false;
 }

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { readJsonBody } from "@/lib/api-json";
-import { APP_ACCESS_TOKEN_COOKIE, buildTokenCookie, constantTimeEqual } from "@/lib/api-security";
+import { APP_ACCESS_TOKEN_COOKIE, constantTimeEqual } from "@/lib/api-security";
+import { buildOperatorSessionCookie, clearOperatorSessionCookie, createOperatorSession, revokeOperatorSession } from "@/lib/auth/operator-session";
+import { readCookie } from "@/lib/auth/cookie-parse";
 import { checkRateLimit, clientIdentifier, recordFailure, recordSuccess } from "@/lib/auth/rate-limit";
 import { recordAudit } from "@/lib/auth/audit";
 import { guardRequest } from "@/lib/auth/guard";
@@ -56,18 +58,27 @@ export async function POST(request: Request) {
 
   recordSuccess(identifier, RESOURCE);
   recordAudit({ action: "auth_token_ok", result: "ok" });
+
+  // Sesión OPACA: la cookie lleva un id aleatorio, no el token maestro. El
+  // valor se guarda hasheado en `operator_sessions`; el token nunca llega al
+  // navegador. Bearer sigue disponible para scripts.
+  const session = createOperatorSession();
   const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
   const response = NextResponse.json({ ok: true, tokenRequired: true });
-  response.headers.set("Set-Cookie", buildTokenCookie(expected, { secure: forwardedProto === "https" }));
+  response.headers.set("Set-Cookie", buildOperatorSessionCookie(session, { secure: forwardedProto === "https" }));
   return response;
 }
 
-/** Borra la cookie (logout local). */
+/** Logout: revoka la sesión del navegador (no solo borra la cookie local). */
 export async function DELETE(request: Request) {
   const denied = guardRequest(request);
   if (denied) return denied;
 
+  const value = readCookie(request.headers.get("cookie"), APP_ACCESS_TOKEN_COOKIE);
+  if (value) revokeOperatorSession(value);
+  recordAudit({ action: "auth_token_ok", result: "ok", detail: "logout" });
+
   const response = NextResponse.json({ ok: true });
-  response.headers.set("Set-Cookie", `${APP_ACCESS_TOKEN_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict`);
+  response.headers.set("Set-Cookie", clearOperatorSessionCookie());
   return response;
 }
