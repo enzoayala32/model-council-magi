@@ -3,7 +3,7 @@ import QR from "qrcode";
 import { createPairingCode } from "@/lib/auth/pairing";
 import { recordAudit } from "@/lib/auth/audit";
 import { allowsLocalImplicit } from "@/lib/peer";
-import { constantTimeEqual } from "@/lib/api-security";
+import { isOperatorRequest } from "@/lib/auth/operator";
 import { guardRequest } from "@/lib/auth/guard";
 
 /**
@@ -22,13 +22,10 @@ import { guardRequest } from "@/lib/auth/guard";
  * fragments no se mandan al servidor ni quedan en logs de proxies.
  */
 function authorizePairing(request: Request): { ok: true } | { ok: false; error: string } {
-  // Operador activo: vale desde cualquier peer.
-  const appToken = process.env.APP_ACCESS_TOKEN?.trim() ?? "";
-  if (appToken) {
-    const authorization = request.headers.get("authorization") ?? "";
-    const match = /^Bearer\s+(.+)$/i.exec(authorization.trim());
-    if (match && constantTimeEqual(match[1].trim(), appToken)) return { ok: true };
-  }
+  // Operador por Bearer O por cookie: el navegador del operador nunca manda
+  // Bearer, manda la cookie. Un solo helper compartido con `guard.ts`.
+  if (isOperatorRequest(request)) return { ok: true };
+  const appToken = Boolean(process.env.APP_ACCESS_TOKEN?.trim());
 
   // Peer loopback verificado por el kernel Y acceso implícito habilitado. Si
   // el server forzó MAGI_DISABLE_LOCAL_IMPLICIT (túnel o modo LAN), el peer

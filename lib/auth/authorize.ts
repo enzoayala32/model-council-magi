@@ -31,10 +31,8 @@ import { findDeviceByToken, touchDevice, type Device, type DeviceScope } from ".
 import { readDeviceToken } from "./cookie";
 import { ruleFor, scopeSatisfies, type RouteRule, type RouteScope } from "./scopes";
 import { allowsLocalImplicit, isVerifiedLoopback } from "../peer";
+import { isOperatorRequest } from "./operator";
 import { recordAudit } from "./audit";
-import { constantTimeEqual } from "../api-security";
-import { readCookie } from "./cookie-parse";
-import { APP_ACCESS_TOKEN_COOKIE } from "../api-security";
 import { isStepUpValid } from "./step-up";
 
 export type AuthContext = {
@@ -57,17 +55,9 @@ const OPERATOR_SCOPE: DeviceScope = "approve";
 export function resolveAuthContext(request: {
   headers: { get(name: string): string | null };
 }): AuthContext {
-  const appToken = process.env.APP_ACCESS_TOKEN?.trim() ?? "";
-  const bearer = readBearer(request.headers.get("authorization"));
-  const cookieToken = readCookie(request.headers.get("cookie"), APP_ACCESS_TOKEN_COOKIE);
-
-  if (appToken) {
-    const bearerOk = bearer !== null && constantTimeEqual(bearer, appToken);
-    const cookieOk = cookieToken !== null && constantTimeEqual(cookieToken, appToken);
-    if (bearerOk || cookieOk) {
-      return { device: null, operator: true, localImplicit: false };
-    }
-  }
+  // Operador activo (Bearer o cookie): un solo helper, compartido con
+  // `guard.ts` y la ruta de pairing, para que no puedan divergir.
+  if (isOperatorRequest(request)) return { device: null, operator: true, localImplicit: false };
 
   const deviceToken = readDeviceToken(request);
   if (deviceToken) {
@@ -83,11 +73,6 @@ export function resolveAuthContext(request: {
   return { device: null, operator: false, localImplicit: allowsLocalImplicit(request) };
 }
 
-function readBearer(value: string | null): string | null {
-  if (!value) return null;
-  const match = /^Bearer\s+(.+)$/i.exec(value.trim());
-  return match ? match[1].trim() : null;
-}
 
 export type AuthorizeOptions = {
   method: string;

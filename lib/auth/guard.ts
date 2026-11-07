@@ -25,7 +25,7 @@ import { NextResponse } from "next/server";
 import { requireScope } from "./authorize";
 import { ruleFor } from "./scopes";
 import { allowsLocalImplicit } from "../peer";
-import { constantTimeEqual } from "../api-security";
+import { isOperatorRequest, operatorTokenConfigured } from "./operator";
 
 export type GuardDenial = ReturnType<typeof NextResponse.json>;
 
@@ -60,15 +60,10 @@ export function guardRequest(request: Request): GuardDenial | null {
  * Devuelve `null` si puede pasar; si no, el 403 listo para responder.
  */
 export function requireLocalAccess(request: Request): GuardDenial | null {
-  // Operador activo: vale desde cualquier peer (es su secreto).
-  const appToken = process.env.APP_ACCESS_TOKEN?.trim() ?? "";
-  if (appToken) {
-    const match = /^Bearer\s+(.+)$/i.exec((request.headers.get("authorization") ?? "").trim());
-    if (match) {
-      // Comparación en tiempo constante vía el mismo helper del login.
-      if (constantTimeEqual(match[1].trim(), appToken)) return null;
-    }
-  }
+  // Operador activo, por Bearer O por cookie: el navegador manda la cookie.
+  // Un solo helper para que no diverga de `authorize.ts`.
+  if (isOperatorRequest(request)) return null;
+  const appToken = operatorTokenConfigured();
   // Peer loopback verificado por el kernel Y acceso implícito habilitado (en
   // modo túnel/LAN el server lo fuerza apagado).
   if (allowsLocalImplicit(request)) return null;
