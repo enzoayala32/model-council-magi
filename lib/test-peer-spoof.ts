@@ -101,6 +101,17 @@ async function fetchWarm(url: string, init: RequestInit = {}, attempts = 12): Pr
   return last as Response;
 }
 
+/** Rutas que la matriz verifica: se precompilan al levantar el server. */
+const ROUTES_TO_WARM = [
+  "/api/threads",
+  "/api/agent/projects",
+  "/api/agent/browse?path=/",
+  "/api/agent/models",
+  "/api/council/runs",
+  "/api/models/catalog",
+  "/api/provider-resilience/status",
+];
+
 /** Levanta el server propio con las variables dadas. */
 async function startServer(env: Record<string, string>, wantedPort?: number): Promise<ServerHandle> {
   const port = wantedPort ?? (await freePort());
@@ -127,6 +138,24 @@ async function startServer(env: Record<string, string>, wantedPort?: number): Pr
   const base = `http://127.0.0.1:${port}`;
   const ready = await waitForHttp(`${base}/offline`);
   if (!ready) throw new Error("el server no arranco a tiempo");
+
+  // Precompilacion: en modo dev, Next compila cada ruta la primera vez que
+  // se pide. Con la maquina cargada esa compilacion tarda mas que el reintento
+  // de `fetchWarm` y el test ve 404 donde en realidad sigue compilando, con
+  // falsos negativos. Se piden una vez aca (el status no importa) para que
+  // las estimaciones de la matriz ya no paguen ese costo.
+  for (const route of ROUTES_TO_WARM) {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      try {
+        const response = await fetch(base + route);
+        await response.arrayBuffer();
+        if (response.status !== 404) break;
+      } catch {
+        // el server sigue levantando: se reintenta
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
   return {
     child,
     base,
