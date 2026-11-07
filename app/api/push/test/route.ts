@@ -79,7 +79,10 @@ export async function POST(request: Request) {
   });
 
   if (outcome.sent === 0) {
-    const firstError = subscriptions.find((subscription) => subscription.lastError)?.lastError;
+    // Se re-lee de la DB: `recordFailure` ya anotó la CATEGORÍA del fallo, y el
+    // array en memoria es de antes del envío (todavía sin error).
+    const afterSend = listSubscriptions(owner).filter((subscription) => subscription.enabled || subscription.lastError);
+    const firstError = afterSend.find((subscription) => subscription.lastError)?.lastError;
     return NextResponse.json(
       { ok: false, error: "El servicio de push rechazó el envío.", detail: firstError ?? "sin detalle" },
       { status: 502 },

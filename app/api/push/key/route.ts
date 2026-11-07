@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { guardRequest } from "@/lib/auth/guard";
 import { requireScope } from "@/lib/auth/authorize";
-import { readVapidPublicKey } from "@/lib/push/vapid";
+import { loadOrCreateVapidKeys } from "@/lib/push/vapid";
 
 /**
  * Fase 6 — clave pública VAPID.
@@ -21,8 +21,11 @@ export async function GET(request: Request) {
   const denied = guardRequest(request);
   if (denied) return denied;
 
-  const publicKey = readVapidPublicKey();
-  if (!publicKey) {
+  // Genera el par si todavía no existe. Antes esta ruta solo LEÍA, así que si
+  // nadie había enviado un push, el navegador recibía "no configurado" incluso
+  // con MAGI_TOTP_KEY puesta: la clave se creaba recién en el primer envío.
+  const keys = loadOrCreateVapidKeys();
+  if (!keys) {
     return NextResponse.json(
       {
         ok: false,
@@ -33,7 +36,7 @@ export async function GET(request: Request) {
       { status: 503 },
     );
   }
-  return NextResponse.json({ ok: true, publicKey });
+  return NextResponse.json({ ok: true, publicKey: keys.publicKey });
 }
 
 export { requireScope };

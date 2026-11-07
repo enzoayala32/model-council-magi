@@ -240,6 +240,54 @@ TOTP. Sin `MAGI_TOTP_KEY` (o `APP_ACCESS_TOKEN`) en `.env`, la app responde
 MAGI_TOTP_KEY=algo-largo-y-aleatorio
 ```
 
+**Cuál es el requisito exacto:** la variable tiene que estar **definida y no
+vacía** en el entorno del proceso que corre el server. Se acepta
+`MAGI_TOTP_KEY` o, en su defecto, `APP_ACCESS_TOKEN`. Dos detalles que hacen
+que parezca que "está puesta" pero no funcione:
+
+1. El archivo `.env` lo carga **Next al arrancar el server**, no un script
+   externo. Si editaste `.env` con el server corriendo, hay que reiniciarlo.
+2. `GET /api/push/key` ahora **genera** el par la primera vez (antes solo leía,
+   así que si nadie había enviado un push la clave no existía y respondía 503
+   incluso con la variable bien puesta).
+
+Para comprobarlo desde la PC, con el server corriendo:
+
+```
+npm run doctor:remote
+```
+
+no informa del push; la prueba directa es pedir la clave:
+
+```bash
+curl -s -H "Authorization: Bearer $APP_ACCESS_TOKEN" http://localhost:3000/api/push/key
+# -> {"ok":true,"publicKey":"BE..."}   (si dice "no configuradas", falta el pepper)
+```
+
+### Qué servicios de push se aceptan
+
+La suscripción se valida contra una allowlist, porque si no cualquiera con una
+credencial podía hacer que el server mandara un POST (con el JWT VAPID) a
+`https://127.0.0.1:...`, a la LAN o a la propia app: un SSRF. Se aceptan:
+
+| Host | Servicio |
+|---|---|
+| `fcm.googleapis.com` | FCM (Android) |
+| `*.push.services.mozilla.com` | Mozilla |
+| `*.notify.windows.com` | Windows/Edge |
+| `web.push.apple.com` | Safari 16+/iOS |
+
+Y se rechazan: IPs literales, hosts que resuelvan a loopback/privadas/
+link-local, puertos distintos de 443, credenciales en la URL y cualquier host
+que no esté en la lista. Para agregar uno propio, **solo el operador**, con
+`PUSH_ALLOWED_HOSTS=mi-servicio.ejemplo.com` (lista separada por comas): el
+cliente nunca puede ampliarla.
+
+Al enviar se **revalida** el endpoint guardado (por si el registro es anterior
+a la allowlist), no se siguen redirects, y el error que queda anotado es una
+categoría (`rechazado`, `expirado`, `red`, `tiempo`), nunca el cuerpo de la
+respuesta del servicio.
+
 ### Push a través del túnel
 
 El push **no pasa por tu server**: el navegador habla directamente con el

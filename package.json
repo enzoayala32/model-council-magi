@@ -110,6 +110,7 @@
     "security:test-sse-proxy": "tsx lib/test-sse-proxy.ts",
     "security:test-request-proto": "tsx lib/test-request-proto.ts",
     "security:test-web-push": "tsx lib/test-web-push.ts",
+    "security:test-push-endpoint": "tsx lib/test-push-endpoint.ts",
     "security:test-mcp-client": "tsx lib/test-mcp-client.ts",
     "security:test-mcp-server": "tsx lib/test-mcp-server.ts"
   },

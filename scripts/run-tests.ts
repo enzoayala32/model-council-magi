@@ -79,6 +79,7 @@ const OFFLINE_EXACT = [
   "security:test-remote-doctor",
   "security:test-sse-proxy",
   "security:test-request-proto",
+  "security:test-push-endpoint",
   "security:test-web-push",
   "security:test-mcp-client",
   "security:test-mcp-server",

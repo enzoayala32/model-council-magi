@@ -23,6 +23,7 @@
 
 import crypto from "node:crypto";
 import { base64Url, fromBase64Url, createVapidJwt, type VapidKeys } from "./vapid";
+import { validatePushEndpoint, type PushEndpointOptions } from "./endpoint";
 
 export type PushSubscription = {
   /** URL del servicio de push de este navegador. */
@@ -117,35 +118,63 @@ function publicKeyDerFromRaw(raw: Buffer): Buffer {
 export type SendResult = {
   ok: boolean;
   status: number;
-  /** Mensaje del servicio cuando falla (para la DB), ya recortado. */
-  error?: string;
+  /**
+   * CATEGORÍA del fallo, no el mensaje crudo. `last_error` en la DB guarda
+   * esto: un cuerpo de respuesta de un servicio de push puede traer el
+   * endpoint, tokens o detalles de red que no tiene por qué quedar
+   * persistidos ni mostrarse en la UI.
+   */
+  error?: PushErrorCategory;
 };
+
+export type PushErrorCategory = "rechazado" | "expirado" | "red" | "tiempo" | "no-configurado";
 
 /**
  * Envía una notificación. Devuelve el resultado; NUNCA lanza — un servicio de
  * push caído no puede tumbar el request que originó la notificación.
  *
- * El payload viaja cifrado; el cuerpo del request no lleva nada en claro.
+ * Corrección de la revisión (SSRF): ANTES de enviar se REVALIDA el endpoint
+ * guardado, porque el registro puede ser anterior a la allowlist. Si no pasa,
+ * no se manda nada. Los redirects son error (`redirect: "error"`): un 302 a
+ * una IP interna sería el mismo SSRF por otro camino.
  */
 export async function sendWebPush(
   subscription: PushSubscription,
   payload: unknown,
   keys: VapidKeys,
   fetchImpl: typeof fetch = fetch,
+  endpointOptions: PushEndpointOptions = {},
 ): Promise<SendResult> {
   let audience: string;
   try {
     audience = new URL(subscription.endpoint).origin;
   } catch {
-    return { ok: false, status: 0, error: "endpoint inválido" };
+    return { ok: false, status: 0, error: "rechazado" };
   }
 
-  const encrypted = encryptAes128gcm(subscription, Buffer.from(JSON.stringify(payload), "utf8"));
+  // Revalidación al enviar (la suscripción puede ser de antes de la allowlist).
+  const endpointCheck = await validatePushEndpoint(subscription.endpoint, endpointOptions);
+  if (!endpointCheck.ok) {
+    return { ok: false, status: 0, error: "rechazado" };
+  }
+
+  let encrypted: { body: Buffer; salt: Buffer; ephemeralPublicKey: Buffer };
+  try {
+    encrypted = encryptAes128gcm(subscription, Buffer.from(JSON.stringify(payload), "utf8"));
+  } catch {
+    // Una clave `p256dh` corrupta en la DB haría que OpenSSL lanzara acá. Ese
+    // error crudo (con stack de OpenSSL) no puede salir ni persistirse: se
+    // categoriza y se corta el envío.
+    return { ok: false, status: 0, error: "rechazado" };
+  }
   const jwt = createVapidJwt(keys, audience);
 
   try {
-    const response = await fetchImpl(subscription.endpoint, {
+    const response = await fetchImpl(endpointCheck.url.toString(), {
       method: "POST",
+      // Sin seguir redirects: un 302 a una IP privada sería el SSRF que se
+      // está cerrando, por otra puerta.
+      redirect: "error",
       headers: {
         "Content-Type": "application/octet-stream",
         "Content-Encoding": "aes128gcm",
@@ -157,9 +186,23 @@ export async function sendWebPush(
       body: new Uint8Array(encrypted.body),
     });
     if (response.ok) return { ok: true, status: response.status };
-    const text = (await response.text().catch(() => "")).slice(0, 200);
-    return { ok: false, status: response.status, error: text || "el servicio rechazó el envío" };
+    // El cuerpo NO se guarda ni se devuelve: solo la categoría.
+    await response.arrayBuffer().catch(() => undefined);
+    return { ok: false, status: response.status, error: categorizeHttpStatus(response.status) };
   } catch (error: unknown) {
-    return { ok: false, status: 0, error: error instanceof Error ? error.message.slice(0, 200) : "error de red" };
+    const message = error instanceof Error ? error.message : String(error);
+    const timedOut = /timeout|abort/i.test(message);
+    return { ok: false, status: 0, error: timedOut ? "tiempo" : "red" };
   }
+}
+
+/**
+ * 404/410 = el servicio ya no conoce esta suscripción (el navegador la dio de
+ * baja, o caducó). El resto de rechazos: credencial, payload, rate limit.
+ */
+export function categorizeHttpStatus(status: number): PushErrorCategory {
+  if (status === 404 || status === 410 || status === 413) return "expirado";
+  if (status === 401 || status === 403 || status === 429) return "rechazado";
+  if (status >= 500) return "red";
+  return "rechazado";
 }

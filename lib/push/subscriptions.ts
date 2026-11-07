@@ -143,11 +143,20 @@ export function upsertSubscription(input: SubscriptionInput): Subscription {
 }
 
 export function listSubscriptions(owner?: PushOwner): Subscription[] {
-  const rows = owner
-    ? (getDb()
-        .prepare("SELECT * FROM push_subscriptions WHERE owner_kind = ? AND owner_id = ? ORDER BY created_at DESC")
-        .all(owner.kind, owner.id) as Row[])
-    : (getDb().prepare("SELECT * FROM push_subscriptions ORDER BY created_at DESC").all() as Row[]);
+  if (!owner) {
+    const rows = getDb().prepare("SELECT * FROM push_subscriptions ORDER BY created_at DESC").all() as Row[];
+    return rows.map(rowToSubscription);
+  }
+  // El operador tiene `owner_id` NULL, y en SQL `col = NULL` NUNCA matchea.
+  // Por eso el operador veía su propia lista vacía: la consulta con `= ?`
+  // enlazando null no devolvía nada. Acá se pregunta por IS NULL.
+  const query =
+    owner.id === null
+      ? "SELECT * FROM push_subscriptions WHERE owner_kind = ? AND owner_id IS NULL ORDER BY created_at DESC"
+      : "SELECT * FROM push_subscriptions WHERE owner_kind = ? AND owner_id = ? ORDER BY created_at DESC";
+  const rows = (owner.id === null
+    ? getDb().prepare(query).all(owner.kind)
+    : getDb().prepare(query).all(owner.kind, owner.id)) as Row[];
   return rows.map(rowToSubscription);
 }
 
@@ -189,10 +198,16 @@ export function recordSuccess(id: string): void {
  * navegador ya no acepta notificaciones: se anota y se desactiva para no
  * insistir con algo que nunca va a llegar.
  */
+/**
+ * Anota un fallo. `error` es una CATEGORÍA (`rechazado`, `expirado`, `red`,
+ * `tiempo`, `no-configurado`), nunca un mensaje crudo del servicio: esos pueden
+ * traer endpoints, tokens o detalles de red que no deben quedar persistidos ni
+ * mostrarse en la UI.
+ */
 export function recordFailure(id: string, error: string, disable: boolean): void {
   getDb()
     .prepare("UPDATE push_subscriptions SET last_error_at = ?, last_error = ?, enabled = ? WHERE id = ?")
-    .run(Date.now(), error.slice(0, 300), disable ? 0 : 1, id);
+    .run(Date.now(), error.slice(0, 40), disable ? 0 : 1, id);
 }
 
 /** Suscripciones que el navegador dio de baja: el servicio responde 404/410. */

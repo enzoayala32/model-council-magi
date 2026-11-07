@@ -21,6 +21,7 @@ import os from "node:os";
 import path from "node:path";
 import { base64Url, createVapidJwt, fromBase64Url, loadOrCreateVapidKeys, readVapidPublicKey, verifyVapidJwt } from "./push/vapid";
 import { encryptAes128gcm, sendWebPush, type PushSubscription } from "./push/web-push";
+import { validateSubscriptionKeys } from "./push/endpoint";
 import {
   findByEndpoint,
   listSubscriptions,
@@ -186,19 +187,82 @@ async function main(): Promise<void> {
   check("manda Crypto-Key dh + p256ecdsa", /dh=[A-Za-z0-9_-]+/.test(lastRequestBox.value?.headers["Crypto-Key"] ?? "") && /p256ecdsa=[A-Za-z0-9_-]+/.test(lastRequestBox.value?.headers["Crypto-Key"] ?? ""));
   check("el cuerpo no es texto plano", (lastRequestBox.value?.bodyLength ?? 0) > 21 + 65 + 16, lastRequestBox.value?.bodyLength);
 
+  // El endpoint de este test no es un servicio de push conocido, así que para
+  // probar el envío en sí hay que saltear la validación de host.
+  const sendOptions = { allowlist: [new URL(subscription.endpoint).hostname], skipDns: true };
+
   const failFetch = (async () => new Response("suscripcion inexistente", { status: 404 })) as unknown as typeof fetch;
-  const failedSend = await sendWebPush(subscription, { title: "x" }, keys, failFetch);
+  const failedSend = await sendWebPush(subscription, { title: "x" }, keys, failFetch, sendOptions);
   check("un 404 da ok=false con el status", !failedSend.ok && failedSend.status === 404, failedSend);
-  check("el error del servicio se recorta a 200 caracteres", (failedSend.error ?? "").length <= 200);
+  check("un 404 se categoriza como expirado", failedSend.error === "expirado", failedSend);
+  check("el cuerpo de la respuesta NO se guarda", (failedSend.error ?? "").length <= 40, failedSend);
 
   const throwFetch = (async () => {
-    throw new Error("sin red");
+    throw new Error("ECONNREFUSED 10.0.0.5:443");
   }) as unknown as typeof fetch;
-  const threw = await sendWebPush(subscription, { title: "x" }, keys, throwFetch);
-  check("un error de red no lanza, devuelve el motivo", !threw.ok && (threw.error ?? "").includes("sin red"));
+  const threw = await sendWebPush(subscription, { title: "x" }, keys, throwFetch, sendOptions);
+  check("un error de red no lanza y se categoriza", !threw.ok && threw.error === "red", threw);
 
-  const badEndpoint = await sendWebPush({ ...subscription, endpoint: "no-es-url" }, { title: "x" }, keys, fakeFetch);
-  check("un endpoint invalido se rechaza sin lanzar", !badEndpoint.ok && badEndpoint.error === "endpoint inválido");
+  const timeoutFetch = (async () => {
+    throw new Error("The operation was aborted due to timeout");
+  }) as unknown as typeof fetch;
+  const timedOut = await sendWebPush(subscription, { title: "x" }, keys, timeoutFetch, sendOptions);
+  check("un timeout se categoriza como tiempo", timedOut.error === "tiempo", timedOut);
+
+  const unauthorized = await sendWebPush(
+    subscription,
+    { title: "x" },
+    keys,
+    (async () => new Response("", { status: 403 })) as unknown as typeof fetch,
+    sendOptions,
+  );
+  check("un 403 se categoriza como rechazado", unauthorized.error === "rechazado", unauthorized);
+
+  const serverError = await sendWebPush(
+    subscription,
+    { title: "x" },
+    keys,
+    (async () => new Response("", { status: 503 })) as unknown as typeof fetch,
+    sendOptions,
+  );
+  check("un 5xx se categoriza como red", serverError.error === "red", serverError);
+
+  // SSRF: un endpoint guardado antes de la allowlist no se manda.
+  const ssrfEndpoint = { ...subscription, endpoint: "https://127.0.0.1:9/x" };
+  const blocked = await sendWebPush(ssrfEndpoint, { title: "x" }, keys, fakeFetch);
+  check("un endpoint de loopback guardado no se manda", !blocked.ok && blocked.error === "rechazado", blocked);
+
+  // Redirect: no se sigue. fetch lanzaría por `redirect: "error"`; acá se
+  // verifica que la petición se hizo con esa opción.
+  let sawRedirectOption = false;
+  const spyFetch = (async (_url: string, init: RequestInit) => {
+    sawRedirectOption = (init as RequestInit & { redirect?: string }).redirect === "error";
+    return new Response(null, { status: 201 });
+  }) as unknown as typeof fetch;
+  await sendWebPush(subscription, { title: "x" }, keys, spyFetch, sendOptions);
+  check("no se siguen redirects al enviar", sawRedirectOption);
+
+  console.log("\n== claves de suscripcion: forma de navegador ==\n");
+  const goodKeys = (() => {
+    const pair = crypto.generateKeyPairSync("ec", {
+      namedCurve: "prime256v1",
+      publicKeyEncoding: { type: "spki", format: "der" },
+      privateKeyEncoding: { type: "pkcs8", format: "der" },
+    });
+    const rawPoint = pair.publicKey.subarray(pair.publicKey.length - 65);
+    return { p256dh: base64Url(rawPoint), auth: base64Url(crypto.randomBytes(16)) };
+  })();
+  check("un par de claves real de navegador valida", validateSubscriptionKeys(goodKeys.p256dh, goodKeys.auth).ok === true);
+  check("65 bytes y primer byte 0x04 es lo que se exige", fromBase64Url(goodKeys.p256dh).length === 65 && fromBase64Url(goodKeys.p256dh)[0] === 0x04);
+  check("una clave que no arranca en 0x04 se rechaza", validateSubscriptionKeys("A".repeat(87), goodKeys.auth).ok === false);
+  check("un auth corto se rechaza", validateSubscriptionKeys(goodKeys.p256dh, "corta").ok === false);
+  check("un auth largo se rechaza", validateSubscriptionKeys(goodKeys.p256dh, base64Url(crypto.randomBytes(32))).ok === false);
+  check("p256dh con caracteres no-base64url se rechaza", validateSubscriptionKeys("no-es-base64url!", goodKeys.auth).ok === false);
+  check("claves vacias se rechazan", validateSubscriptionKeys("", "").ok === false);
+  check(
+    "un punto comprimido (33 bytes) se rechaza",
+    validateSubscriptionKeys(base64Url(fromBase64Url(goodKeys.p256dh).subarray(0, 33)), goodKeys.auth).ok === false,
+  );
 
   console.log("\n== suscripciones: CRUD y preferencias ==\n");
   const browser2 = browserKeys();
