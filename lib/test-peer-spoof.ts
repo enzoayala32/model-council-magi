@@ -77,7 +77,7 @@ async function waitForHttp(url: string, attempts = 150): Promise<boolean> {
       await response.arrayBuffer();
       return true;
     } catch {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 1500));
     }
   }
   return false;
@@ -119,12 +119,18 @@ async function startServer(env: Record<string, string>, wantedPort?: number): Pr
   // `process.execPath` + `--import tsx`: se evita spawnear `npx`, que en
   // Windows es `npx.cmd` y necesita `shell: true`. Con el binario de node
   // directo es igual en los dos sistemas.
+  // Directorio de build propio: si los servers de prueba compartieran `.next`
+  // entre sí (o con un `npm run build` previo), se pisan los manifests y el
+  // modo dev devuelve 404 por rutas que existen. El fallo aparecía solo
+  // dentro del runner, nunca al correr el test solo.
+  const devDistDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "magi-nextdev-"));
   const child = spawn(process.execPath, ["--import", "tsx", "scripts/dev-server.ts"], {
     cwd: path.resolve(import.meta.dirname, ".."),
     env: {
       ...process.env,
       PORT: String(port),
       MAGI_DATA_DIR: dataDir,
+      MAGI_DEV_DIST_DIR: devDistDir,
       MAGI_DEBUG_HEADERS: "0",
       // Modo desarrollo a propósito: el test tiene que probar el código
       // FUENTE, no un build previo. Con `dev: false` servía el `.next` viejo
@@ -145,7 +151,9 @@ async function startServer(env: Record<string, string>, wantedPort?: number): Pr
   // falsos negativos. Se piden una vez aca (el status no importa) para que
   // las estimaciones de la matriz ya no paguen ese costo.
   for (const route of ROUTES_TO_WARM) {
-    for (let attempt = 0; attempt < 6; attempt += 1) {
+    // 20 intentos: con un distDir nuevo la PRIMERA compilacion de la app en
+    // modo dev tarda mucho mas que los reintentos cortos.
+    for (let attempt = 0; attempt < 20; attempt += 1) {
       try {
         const response = await fetch(base + route);
         await response.arrayBuffer();
@@ -163,6 +171,7 @@ async function startServer(env: Record<string, string>, wantedPort?: number): Pr
       child.kill("SIGKILL");
       await new Promise((resolve) => setTimeout(resolve, 400));
       await fs.promises.rm(dataDir, { recursive: true, force: true }).catch(() => undefined);
+      await fs.promises.rm(devDistDir, { recursive: true, force: true }).catch(() => undefined);
     },
   };
 }

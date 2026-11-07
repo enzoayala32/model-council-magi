@@ -80,7 +80,20 @@ async function main(): Promise<void> {
   // `MAGI_DEV=1` levanta el mismo server en modo desarrollo (con HMR), para
   // que `npm run dev` también tenga el peer verificado. Sin esto, el modo dev
   // quedaría con el agujero que estamos cerrando.
-  const app = next({ dev: process.env.MAGI_DEV === "1", hostname, port });
+  // `MAGI_DEV_DIST_DIR` (solo lo usan los tests) mueve el directorio de
+  // build del modo dev a uno propio. Sin esto, dos servers de prueba —o un
+  // server de prueba y un `npm run build`— comparten `.next` y se pisan los
+  // manifests: el dev server empieza a devolver 404 por rutas que existen.
+  // Es exactamente el fallo intermitente que tenía `security:test-peer-spoof`
+  // cuando corría dentro del runner después de un build. En producción la
+  // variable no está puesta y no cambia nada.
+  const devDistDir = process.env.MAGI_DEV_DIST_DIR?.trim();
+  const app = next({
+    dev: process.env.MAGI_DEV === "1",
+    hostname,
+    port,
+    ...(devDistDir ? { conf: { distDir: devDistDir } } : {}),
+  });
   const handler = app.getRequestHandler();
   await app.prepare();
 

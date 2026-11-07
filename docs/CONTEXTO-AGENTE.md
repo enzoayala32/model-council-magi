@@ -13,7 +13,7 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 - `npm run typecheck`: exit 0.
 - `npm run lint -- --max-warnings 37`: exit 0 (37 warnings).
-- `npm test`: **87/87 OK** (incluye `security:test-remote-doctor` 65/65,
+- `npm test`: **87/87 OK** (suite completa ~9 min) (incluye `security:test-remote-doctor` 65/65,
   `security:test-sse-proxy` 26/26, `security:test-request-proto` 34/34).
 - `npm run build`: exit 0.
 - `npx tsx scripts/run-tests.ts --verify`: exit 0 (tests + tope de lint).
@@ -59,9 +59,12 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 ## 5. Trampas conocidas (ya pagadas)
 
-- Los dev servers comparten `.next/dev`: un server viejo puede servir código
-  viejo. Reiniciar limpio antes de medir; `dev:false` sirve el build de
-  `.next`.
+- Los dev servers comparten `.next`: un server viejo puede servir código viejo,
+  y un `npm run build` previo deja manifiesta de producción que hace que el modo
+  dev devuelva **404 por rutas que existen** (así fallaba
+  `security:test-peer-spoof` dentro del runner, nunca solo). `server.ts` acepta
+  `MAGI_DEV_DIST_DIR` y los tests le dan un directorio temporal propio.
+  Reiniciar limpio antes de medir; `dev:false` sirve el build de `.next`.
 - En Windows los servers de prueba se lanzan con
   `cmd //c "start /b RUTA.cmd > log 2>&1"` y hay que matarlos al terminar.
 - `appendEvent` asigna `seq` desde **0**.
