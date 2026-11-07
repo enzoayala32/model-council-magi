@@ -108,8 +108,8 @@ async function main(): Promise<void> {
     console.log("\n== matriz: modo LAN x credencial x ruta de administración ==\n");
     const results: Record<string, string> = {};
     for (const route of ADMIN_ROUTES) {
-      const module = await loadRoute(route.rel);
-      const handler = module[route.method] as Handler | undefined;
+      const routeModule = await loadRoute(route.rel);
+      const handler = routeModule[route.method] as Handler | undefined;
       if (typeof handler !== "function") {
         check(route.label + " exporta " + route.method, false);
         continue;

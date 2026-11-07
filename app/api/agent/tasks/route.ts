@@ -3,7 +3,6 @@ import { createTask, listTasks, type TaskStatus } from "@/lib/agent/task-store";
 import { getProject, touchProjectLastUsed } from "@/lib/agent/project-store";
 import { isCodingAgentEnabled } from "@/lib/models";
 import { maybeDispatchNext } from "@/lib/agent/dispatcher";
-import { requireScope } from "@/lib/auth/authorize";
 import { guardRequest } from "@/lib/auth/guard";
 
 /** Fase 2H. `?projectId=` filtra por proyecto (lo que usa la UI para el

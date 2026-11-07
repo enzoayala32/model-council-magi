@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { requireScope } from "@/lib/auth/authorize";
 import { cancelTask } from "@/lib/agent/runner";
 import { guardRequest } from "@/lib/auth/guard";
 

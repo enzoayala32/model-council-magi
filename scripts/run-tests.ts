@@ -5,6 +5,7 @@
  *   npm test                 # suite offline (sin proveedores reales)
  *   npm run test:live        # harness que necesitan LLM/red/API keys
  *   npx tsx scripts/run-tests.ts --filter=council
+ *   npx tsx scripts/run-tests.ts --verify   # tests + tope de warnings de lint
  *
  * Descubre los scripts de `package.json` por prefijo, corre uno por vez
  * (varias suites escriben en SQLite y no deben pisarse) y devuelve
@@ -34,6 +35,10 @@ const scripts = pkg.scripts ?? {};
 const cli = process.argv.slice(2);
 const live = cli.includes("--live");
 const isolate = !cli.includes("--no-isolate");
+/** Con --verify se corre además el tope de warnings de ESLint: así el
+ *  reporte puede pegar la salida COMPLETA de la verificación de una fase
+ *  (tests + lint con tope) en un solo comando. */
+const verify = cli.includes("--verify");
 const filterArg = cli.find((arg) => arg.startsWith("--filter="));
 const filter = filterArg ? filterArg.slice("--filter=".length) : null;
 const timeoutArg = cli.find((arg) => arg.startsWith("--timeout="));
@@ -201,4 +206,30 @@ function runOne(
     console.error(`Fallaron: ${failed.map((result) => `${result.name}${result.timedOut ? " (timeout)" : ""}`).join(", ")}`);
     process.exit(1);
   }
+
+  if (!verify) return;
+
+  // Tope de warnings: si la deuda de lint crece, esto falla. El número sale
+  // del tope real de hoy; se baja a medida que se limpia cada regla.
+  const maxWarnings = process.env.MAX_WARNINGS ?? "37";
+  console.log(`
+=== Lint (--max-warnings=${maxWarnings}) ===`);
+  const lint = await new Promise<{ code: number | null }>((resolve) => {
+    const child = spawn("npm", ["run", "lint", "--", "--max-warnings", maxWarnings], {
+      cwd: root,
+      env: { ...process.env },
+      stdio: "inherit",
+      shell: process.platform === "win32",
+      windowsHide: true,
+    });
+    child.on("exit", (code) => resolve({ code }));
+    child.on("error", () => resolve({ code: null }));
+  });
+  if (lint.code !== 0) {
+    console.error(`
+❌ El lint superó los ${maxWarnings} warnings permitidos.`);
+    process.exit(1);
+  }
+  console.log(`
+✅ Lint dentro del tope (${maxWarnings} warnings).`);
 })();

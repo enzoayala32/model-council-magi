@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { requireScope } from "@/lib/auth/authorize";
 import { discardTask } from "@/lib/agent/runner";
 import { InvalidTaskTransitionError } from "@/lib/agent/task-store";
 import { guardRequest } from "@/lib/auth/guard";

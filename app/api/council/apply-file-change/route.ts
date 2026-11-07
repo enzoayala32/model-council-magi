@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { readJsonBody } from "@/lib/api-json";
 import { applyProposal, discardProposal, getProposal } from "@/lib/fs-tools";
-import { requireScope } from "@/lib/auth/authorize";
 import { guardRequest } from "@/lib/auth/guard";
 
 /**

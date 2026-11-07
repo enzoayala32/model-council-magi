@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { readJsonBody } from "@/lib/api-json";
 import { pingModels } from "@/lib/model-ping";
-import { requireScope } from "@/lib/auth/authorize";
 import { guardRequest } from "@/lib/auth/guard";
 
 /** Dry run liviano: confirma que cada modelo seleccionado responde antes de

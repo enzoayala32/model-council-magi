@@ -1,6 +1,4 @@
-import { NextResponse } from "next/server";
 import { readJsonBody } from "@/lib/api-json";
-import { requireScope } from "@/lib/auth/authorize";
 import { runCouncilStream } from "@/lib/council-orchestrator";
 import { createCouncilRunRecorder } from "@/lib/council-run-store";
 import { logStep } from "@/lib/council-run";
