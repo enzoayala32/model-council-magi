@@ -1325,6 +1325,8 @@ Ese smoke es la verificación de la aceptación de 4c/4d junta: un dispositivo
 | 7 | `lib/test-council-run-store.ts` | 95 | `council:test-runs` |
 | seg. | `lib/test-peer-spoof.ts` | 34 | `security:test-peer-spoof` |
 | seg. | `lib/test-route-enforcement.ts` | 13 | `security:test-route-enforcement` |
+| seg. | `lib/test-operator-routes.ts` | 40 | `security:test-operator-routes` |
+| seg. | `lib/test-operator-sessions.ts` | 33 | `security:test-operator-sessions` |
 
 Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar que el tipado no cambió el comportamiento (46 casos entre los cuatro scripts). Fase 4 agrega 245 casos y el total de scripts del runner pasa de 63 a 67. Fase 5 agrega 54 casos con un proveedor falso y el total pasa a 68 scripts. Fase 7 agrega 95 casos (pricing, trazas puras y persistencia en una DB temporal con migración aditiva) y el total pasa a **69 scripts**.
 
@@ -1497,6 +1499,99 @@ Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar q
 1. `npm run council:test-runs` → **95/95**; `npm test` → **69/69**. El test de DB corre en un directorio temporal y no toca `data/council.db`.
 2. `npm run dev` y abrir `http://localhost:3000`. Hacer una pregunta al consejo (requiere keys): al terminar, abrir la pestaña **Trazas**, elegir la corrida y verificar stats, tabla de tokens/costo/latencia/fallbacks/reintentos, timeline y replay. Probar los botones Markdown/JSON y comparar dos corridas. Sin keys, un prompt vacío igual persiste una corrida `error` visible en la pestaña.
 3. Por API: `curl "http://localhost:3000/api/council/runs"`; `curl "http://localhost:3000/api/council/runs/<id>/export?format=markdown"`; `curl "http://localhost:3000/api/council/runs/compare?a=<id>&b=<id>"`; `curl -X DELETE "http://localhost:3000/api/council/runs/<id>"`. Con `APP_ACCESS_TOKEN` definido, agregar `-H "Authorization: Bearer <token>"`.
+
+---
+
+## 1E. Misión 2 — correcciones de la revisión (segunda ronda)
+
+### Punto 1 — La UI de administración andaba rota en modo LAN
+
+**El bug, reproducido con el server real:** en modo LAN con `APP_ACCESS_TOKEN`,
+la cookie del operador daba 200 en `GET /api/agent/projects` pero **403** en
+`GET /api/devices`, `GET /api/audit` y `POST /api/pairing`; con `Bearer` daban
+200. La causa: `requireLocalAccess()` (lib/auth/guard.ts) y la ruta de pairing
+aceptaban **solo** `Authorization: Bearer`, y el navegador nunca manda Bearer:
+manda la cookie.
+
+**Fix:** `lib/auth/operator.ts` — un solo helper, `isOperatorRequest()`, que
+acepta las dos vías (Bearer o cookie) con comparación en tiempo constante. Lo
+reusan `authorize.ts` (Fase 4b), `guard.ts` y la ruta de pairing, así no pueden
+divergir.
+
+**Commit:** `0fac5cb`.
+
+**Tests:** `lib/test-operator-routes.ts` (**40/40**): matriz modo LAN ×
+(Bearer / cookie de operador / cookie falsa / nada) × 8 rutas de administración.
+Con Bearer o cookie → autorizado; con cookie falsa o sin credencial → 403. También
+verifica que un dispositivo emparejado `observe` no es operador (sigue las reglas
+de scope) y que sin `APP_ACCESS_TOKEN` nadie lo es.
+
+### Punto 2 — La cookie del operador guardaba el token en crudo
+
+**El problema:** la cookie `magi_access_token` contenía `APP_ACCESS_TOKEN` tal
+cual. Cualquiera con acceso a esa cookie tenía el token maestro para siempre.
+
+**Fix:** sesión opaca. Al hacer login, el server genera un id aleatorio de 256
+bits, guarda su SHA-256 en la tabla aditiva `operator_sessions` (con expiración e
+idle timeout de 2 horas) y la cookie lleva solo ese id. Logout y "Revocar todos"
+invalidan la sesión. La cookie sigue siendo `HttpOnly`, `SameSite=Strict` y
+`Secure` cuando la request viene por HTTPS. `Bearer` se mantiene para scripts (el
+operador ya tiene el token en su entorno).
+
+**Hallazgo durante el fix:** si el operador deja de definir `APP_ACCESS_TOKEN`,
+las sesiones existentes quedaban válidas: cualquiera con la cookie seguía teniendo
+acceso sin nada que lo justificara. Se agregó la guarda: sin token configurado,
+toda sesión caduca.
+
+**Commit:** `30bc510`.
+
+**Tests:** `lib/test-operator-sessions.ts` (**33/33**): el id tiene 64 hex, no
+contiene el token maestro, la cookie no lo expone, `HttpOnly`/`SameSite`/`Secure
+solo en HTTPS, valores inválidos, revocación (una y todas), cookie robada tras
+logout queda inútil, Bearer sigue funcionando, poda.
+
+Verificación end-to-end contra el server real en `:3151`:
+
+| Escenario | Resultado |
+|---|---|
+| Cookie recibida tras login | 64 hex, **0 ocurrencias** del token maestro |
+| Admin (devices/audit/projects/pairing) con la cookie | **200** |
+| Cookie con valor basura | **403** |
+| Tras logout, la misma cookie | **403** |
+
+Además el proxy (que no puede consultar la DB) deja pasar cualquier cookie de
+sesión y deja la validación a la ruta, igual que con la cookie de dispositivo.
+
+### Punto 3 — CI: tope de warnings
+
+**Problema:** el workflow exigía `--max-warnings 37` y había 45. Ocho venían de
+imports que quedaron sin uso al reemplazar la guardia inline por `guardRequest`
+(`requireScope`, `NextResponse` en `council/stream`).
+
+**Fix:** se eliminaron los 8 imports muertos → **37 warnings**. Se agregó
+`--verify` a `scripts/run-tests.ts`, que tras correr los tests ejecuta
+`npm run lint -- --max-warnings=37` y reporta el exit code real, para que esto no
+vuelva a pasar desapercibido.
+
+**Commit:** `09f472d`.
+
+**Verificación:**
+```
+npx tsx scripts/run-tests.ts --filter=security:test-token-route --verify
+→ ✅ Lint dentro del tope (37 warnings).          exit 0
+MAX_WARNINGS=10 npx tsx scripts/run-tests.ts --verify
+→ ❌ El lint superó los 10 warnings permitidos.   exit 1
+```
+
+### Punto 4 — Documentación
+
+`docs/ACCESO-REMOTO.md` con la advertencia de HTTP en LAN (expone cookies y
+tokens a cualquiera en la red), Tailscale recomendado, Cloudflare Tunnel +
+Access como alternativa, port-forwarding desaconsejado, notas de "PC encendida"
+y checklist manual de 5 pasos para Android. Enlazado desde el README, con un
+aviso corto en la sección de modos de arranque.
+
+**Commit:** `b49d41f`.
 
 ---
 
