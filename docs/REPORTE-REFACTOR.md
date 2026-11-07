@@ -1331,6 +1331,8 @@ Ese smoke es la verificación de la aceptación de 4c/4d junta: un dispositivo
 | seg. | `lib/test-sse-proxy.ts` | 26 | `security:test-sse-proxy` |
 | seg. | `lib/test-request-proto.ts` | 34 | `security:test-request-proto` |
 | seg. | `lib/test-web-push.ts` | 77 | `security:test-web-push` |
+| seg. | `lib/test-mcp-client.ts` | 45 | `security:test-mcp-client` |
+| seg. | `lib/test-mcp-server.ts` | 53 | `security:test-mcp-server` |
 
 Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar que el tipado no cambió el comportamiento (46 casos entre los cuatro scripts). Fase 4 agrega 245 casos y el total de scripts del runner pasa de 63 a 67. Fase 5 agrega 54 casos con un proveedor falso y el total pasa a 68 scripts. Fase 7 agrega 95 casos (pricing, trazas puras y persistencia en una DB temporal con migración aditiva) y el total pasa a **69 scripts**.
 
@@ -1770,6 +1772,65 @@ credencial o con cookie falsa.
 - **Push real a Android**: sin dispositivo no se pudo comprobar de punta a
   punta. Pendiente la checklist manual (`docs/ACCESO-REMOTO.md`): activar desde
   Ajustes, enviar prueba, tocar la notificación, pausar/reanudar.
+
+## 1H. Misión 2 — Fases 7, 8 y 9 (MCP)
+
+### Fase 7 — cliente MCP de solo lectura
+
+`lib/mcp/config.ts` + `lib/mcp/client.ts`. Sin dependencias: JSON-RPC 2.0 por
+stdio, una petición por línea.
+
+| Regla | Dónde | Verificación |
+|---|---|---|
+| La config vive FUERA del repo (`%APPDATA%\consenso-ia\mcp.json`, o `MAGI_MCP_CONFIG`) | `defaultConfigPath()` | test: la ruta no contiene la raíz del repo |
+| Validación todo-o-nada (versión, nombre único, comando/url, http remoto solo HTTPS, timeout acotado) | `validateConfig()` | test: 9 casos de rechazo |
+| **El hijo no hereda `process.env`**: allowlist + lista de NUNCA reenviar (`APP_ACCESS_TOKEN`, `MAGI_TOTP_KEY`, `NVIDIA_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `GITHUB_TOKEN`, `TAVILY_API_KEY`) | `childEnvFor()` | test: el servidor falso responde con su propio entorno y las claves NO están |
+| Allowlist de herramientas enforced en el CLIENTE, antes de hablar con el servidor | `callTool()` | test: `borrar_todo` fuera de la allowlist se rechaza |
+| Salida = contenido no confiable, recortada y redactada | `parseResult()` | test: preámbulo + redacción |
+| Timeout y muerte por árbol de procesos | `request()` + `killProcessTree` | test: un servidor que no contesta da timeout en ~700ms |
+
+Dos decisiones que salieron de escribirlo: `killProcessTree` no estaba exportado
+(hubo que exportarlo para poder matar procesos nieto en Windows), y la
+detección de "herramienta de escritura" tiene que incluir español — un servidor
+puede llamar a su herramienta `borrar_todo`, y es tan de escritura como
+`delete_all`.
+
+### Fase 8 — aprobación humana
+
+`lib/mcp/approvals.ts`. Mismo patrón que el emparejamiento, a propósito:
+
+- código de 128 bits en 4 grupos (`XXXX-XXXX-XXXX-XXXX`), devuelto **una sola
+  vez**; en la DB queda el hash;
+- **un solo uso**: al ejecutar se consume;
+- **atado a los argumentos**: se compara el hash. Si el agente cambió la ruta
+  que iba a borrar, la aprobación no sirve;
+- vence en 5 minutos; errores genéricos (no filtra si existía);
+- **reuso**: el mismo pedido dentro de 10 segundos reusa la misma solicitud, para
+  que un agente que insigue no genere 10 aprobaciones;
+- el hash de argumentos ordena las claves: `{a, b}` y `{b, a}` son el mismo
+  pedido.
+
+Aprobar es acto humano con segundo factor (operador, o dispositivo `approve` +
+step-up); la ruta es la que lo decide, no este módulo.
+
+### Fase 9 — la app como servidor MCP
+
+`app/api/mcp/route.ts` + `lib/mcp/server-tools.ts`. JSON-RPC 2.0 por POST con
+`guardRequest()` como primera sentencia y scope en la tabla: un cliente
+emparejado es un dispositivo más.
+
+- Métodos: `initialize`, `ping`, `tools/list`, `tools/call`.
+- Herramientas, **todas de solo lectura**: `tasks.list`, `tasks.status`,
+  `tasks.events`, `council.runs`, `council.run`.
+- **No hay método de aprobación**: si un cliente pide `approvals/approve`,
+  recibe `-32601`. Aprobar es humano, con segundo factor, desde la app.
+- El catálogo se filtra por el scope del cliente.
+- Los argumentos se validan contra un conjunto cerrado (límites acotados, id
+  obligatorio) antes de tocar ningún store.
+
+Tests: `lib/test-mcp-server.ts` (**53/53**).
+
+El barrido de rutas quedó en **46 pares ruta+método con guardia verificada**.
 
 ## Apéndice — Matriz ruta por scope
 
