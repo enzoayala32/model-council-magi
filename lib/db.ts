@@ -452,6 +452,36 @@ function createConnection(): Database.Database {
       revoked_at INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_operator_sessions_hash ON operator_sessions(token_hash);
+
+    -- Fase 6: credenciales VAPID. El par se genera localmente (no hace falta
+    -- ningun servicio) y la clave privada se guarda cifrada con el mismo
+    -- mecanismo que los secretos TOTP (lib/auth/step-up.ts). Una sola fila.
+    CREATE TABLE IF NOT EXISTS push_config (
+      id TEXT PRIMARY KEY,
+      public_key TEXT NOT NULL,
+      private_key_enc TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+
+    -- Fase 6: suscripciones Web Push, una por navegador/dispositivo. El
+    -- endpoint es UNICO: si el navegador se vuelve a suscribir con las mismas
+    -- claves, se actualiza la fila en vez de duplicarla.
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id TEXT PRIMARY KEY,
+      endpoint TEXT NOT NULL UNIQUE,
+      p256dh TEXT NOT NULL,
+      auth_secret TEXT NOT NULL,
+      owner_kind TEXT NOT NULL,
+      owner_id TEXT,
+      user_agent TEXT,
+      events TEXT NOT NULL DEFAULT '[]',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      last_success_at INTEGER,
+      last_error_at INTEGER,
+      last_error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_push_subs_owner ON push_subscriptions(owner_kind, owner_id);
     CREATE INDEX IF NOT EXISTS idx_operator_sessions_expiry ON operator_sessions(expires_at);
   `);
 

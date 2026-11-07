@@ -204,6 +204,55 @@ HTTPS sí, para las dos cookies.
 
 ---
 
+## Notificaciones push (Fase 6)
+
+La app puede avisar al teléfono cuando una tarea termina, falla o espera tu
+aprobación. Todo se configura desde **Ajustes → Notificaciones** en `/m`.
+
+### Cómo funciona
+
+| Pieza | Dónde está |
+|---|---|
+| Claves VAPID (par EC P-256 generado localmente) | `lib/push/vapid.ts`, guardadas cifradas en `push_config` |
+| Suscripción y preferencias | `lib/push/subscriptions.ts`, tabla `push_subscriptions` |
+| Cifrado del payload (RFC 8291) | `lib/push/web-push.ts` |
+| Coalescencia, tope y saneamiento | `lib/push/emit.ts` |
+| Cuándo se notifica | `lib/push/notify.ts`, llamado desde `transitionTask` |
+
+- **Coalescencia**: se agrupa por tarea (`tag`). Cuarenta eventos de la misma
+  tarea generan una notificación que dice "(+39 más)", no cuarenta zumbidos.
+- **Tope**: como máximo 6 notificaciones por suscripción por minuto.
+- **Saneamiento**: el payload viaja cifrado y solo lleva título, cuerpo, tag y
+  URL. Nunca prompts, diffs, tokens ni rutas del filesystem.
+- **Preferencias**: por suscripción, de una lista CERRADA de eventos
+  (`task.finished`, `task.failed`, `approval.required`, `council.finished`).
+- **Suscripción muerta**: si el servicio responde 404/410, se desactiva sola
+  para no insistir con algo que nunca va a llegar.
+
+### Requisito de configuración
+
+Las claves VAPID se guardan **cifradas**, con el mismo pepper que los secretos
+TOTP. Sin `MAGI_TOTP_KEY` (o `APP_ACCESS_TOKEN`) en `.env`, la app responde
+"notificaciones no configuradas" y no guarda nada en claro.
+
+```
+# .env de la PC
+MAGI_TOTP_KEY=algo-largo-y-aleatorio
+```
+
+### Push a través del túnel
+
+El push **no pasa por tu server**: el navegador habla directamente con el
+servicio de push del sistema (FCM en Android), y el servicio es el que te
+entrega la notificación. Por eso:
+
+- funciona con el túnel HTTPS o en la LAN, sin abrir puertos adicionales;
+- **no** funciona sin conexión a internet del lado del teléfono;
+- si el token de servicio de push caduca (raro), hay que volver a activar desde
+  Ajustes.
+
+---
+
 ## Checklist manual (5 pasos)
 
 1. Instalá Tailscale en la PC y el teléfono, misma cuenta. `tailscale status`
@@ -214,6 +263,10 @@ HTTPS sí, para las dos cookies.
 4. Abrí esa URL en el teléfono, entrá con el token y emparejá el dispositivo
    desde la PC con el QR.
 5. Revocá el dispositivo y confirmá que el teléfono queda afuera.
+6. En el teléfono, **Ajustes → Notificaciones → Activar** y aceptá el permiso.
+7. **Enviar prueba** desde la misma pantalla: tiene que llegar la
+   notificación y al tocarla abrir `/m/settings`.
+8. Pausá y reanudá: la pausa tiene silenciar sin perder la suscripción.
 
 ---
 
@@ -222,3 +275,9 @@ HTTPS sí, para las dos cookies.
 - Acceso real desde un Android y desde otra máquina: no probado en este
   entorno. Verificá con la checklist de arriba.
 - Wake-on-LAN desde fuera de la LAN: no probado, se anota como limitado.
+- **Push real a Android**: sin dispositivo no se pudo verificar de punta a
+  punta. Lo que SÍ está verificado por tests: la estructura del registro
+  cifrado (RFC 8291), que el JWT VAPID verifica con firma real, la coalescencia,
+  el tope por minuto, el saneamiento del payload y el despacho con emisor
+  falso. Lo que falta en vivo: que FCM acepte el envío y que la notificación
+  llegue al teléfono (checklist manual de arriba, pasos 6 a 8).

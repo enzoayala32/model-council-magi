@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
 import { getDb } from "../db";
+// Fase 6: notificaciones push. El módulo es liviano y sale temprano cuando no
+// hay suscripciones (ver `notifyStatusChange`), así que un import estático no
+// agrega trabajo a los tests ni a los caminos que no notifican.
+import { notifyStatusChange } from "../push/notify";
 
 /**
  * Máquina de estados cerrada en el diseño de Fase 2 (sección 8). Notas
@@ -392,6 +396,13 @@ export function transitionTask(id: string, to: TaskStatus, patch?: TransitionPat
     // que un salto de estado inválido: la transición pedida ya no aplica.
     throw new InvalidTaskTransitionError(id, task.status, to);
   }
+
+  // Fase 6: notificación push. Va DESPUÉS de que la transición quedó
+  // persistida, porque un servicio de push caído no puede deshacer nada.
+  // `notifyStatusChange` no hace nada si no hay nadie suscrito, así que los
+  // tests no cambian de comportamiento. La firma es síncrona a propósito: si
+  // se esperara el envío, un push lento frenaría la transición.
+  notifyStatusChange({ taskId: next.id, status: to, prompt: next.prompt });
 
   return next;
 }

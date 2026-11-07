@@ -5,9 +5,9 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 ## 1. Fase actual y último commit
 
-- **Misión 2**, Fase 5 (acceso remoto) **HECHA** (5.3 doctor, 5.4 SSE tras proxy,
-  5.5 cookie `Secure`). Sigue la **Fase 6**: push Web Push/VAPID para Android.
-- Último commit: `b9fd7a5` — `fase 5.5: cookie Secure solo con HTTPS real`.
+- **Misión 2**, Fase 6 (push Web Push/VAPID) **HECHA**. Fase 5 también HECHA.
+  Siguen las **Fases 7-9 (MCP)**.
+- Último commit: ver `git log -1` (branch main).
 
 ## 2. Estado de verificación (sobre HEAD)
 
@@ -22,10 +22,9 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 ## 3. Próximos 3 pasos concretos
 
-1. Fase 6: push Web Push/VAPID — suscripción por dispositivo, coalescencia,
-   preferencias y tests con emisor falso.
-2. Fases 7-9 (MCP): config fuera del repo, cliente read-only con allowlist,
-   escritura con aprobación, y `/api/mcp` como servidor.
+1. Fases 7-9 (MCP): configuración FUERA del repo, cliente read-only con
+   allowlist, escritura con aprobación y `/api/mcp` como servidor.
+2. Barrido de rutas con cada ruta nueva (default-deny + scopes).
 3. Empujar y mantener este archivo al cierre de cada sub-bloque.
 
 ## 4. Decisiones vigentes
@@ -56,6 +55,13 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 - **El SSE se prueba con una cadena real de servers** (proxy con buffering →
   origen); en dev, Next compila cada ruta al pedirla, así que los tests que
   levantan servers precompilan las rutas antes de medir.
+- **El push notifica desde `transitionTask`**, DESPUÉS de persistir: un
+  servicio de push caído no puede deshacer una transición. Sin suscripciones,
+  `notifyStatusChange` sale sin abrir claves ni tocar la red.
+- **Los scripts de `npm` no aceptan `VAR=valor` en Windows** (usa `cmd`): los
+  tiempos de test van como default dentro del archivo.
+- **`requireScope` sale de `lib/auth/authorize.ts`**, no de `guard.ts` (guard no
+  lo re-exporta).
 
 ## 5. Trampas conocidas (ya pagadas)
 

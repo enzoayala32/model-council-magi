@@ -131,6 +131,20 @@ export const ROUTE_RULES: readonly RouteRule[] = [
   { pattern: "/api/auth/step-up", method: "POST", scope: "public", note: "Canje de TOTP por sesion de step-up. Se autentica con el dispositivo + codigo + rate limiting." },
   { pattern: "/api/auth/totp/enroll", method: "POST", scope: "approve", stepUp: true, note: "Inscribe el segundo factor de un dispositivo. Ademas se restringe a loopback dentro de la ruta: anotar un secreto TOTP es tarea de la PC." },
 
+  // ---------- Notificaciones push (Fase 6) ----------
+  // La clave pública VAPID no es un secreto (la ve cualquier servicio de push),
+  // pero igual se pide credencial: el navegador del operador o el dispositivo
+  // emparejado ya la tienen, y así no se filtra qué servidor está configurado.
+  { pattern: "/api/push/key", method: "GET", scope: "observe", note: "Clave pública VAPID para suscribirse." },
+  // Suscribirse es de observe: cualquier dispositivo que ya entró puede pedir
+  // notificaciones. Lo que se le notifica depende de sus preferencias.
+  { pattern: "/api/push/subscribe", method: "POST", scope: "observe", note: "Da de alta o actualiza la suscripción del navegador/dispositivo actual." },
+  { pattern: "/api/push/subscriptions", method: "GET", scope: "observe", note: "Lista las suscripciones propias." },
+  { pattern: "/api/push/subscriptions", method: "PATCH", scope: "observe", note: "Cambia preferencias o pausa una suscripción propia." },
+  { pattern: "/api/push/unsubscribe", method: "POST", scope: "observe", note: "Borra una suscripción propia por endpoint." },
+  // Enviar una prueba opera sobre el sistema de notificaciones: no es observe.
+  { pattern: "/api/push/test", method: "POST", scope: "operate", note: "Envía una notificación de prueba a las suscripciones propias." },
+
   // ---------- Gestion de dispositivos y auditoria (Fase 4d) ----------
   // Todas se restringen ADICIONALMENTE a loopback dentro de la ruta: ver o
   // cambiar que dispositivos tienen acceso es informacion de la PC. El scope

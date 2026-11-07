@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { MobileNav } from "../../components/mobile/mobile-nav";
+import { PushSettings } from "../../components/mobile/push-settings";
 
 /** Fase 3.2 — ajustes y estado del acceso.
  *
@@ -68,6 +69,8 @@ export default function MobileSettings() {
           <li><a href="/docs/ACCESO-REMOTO.md">Cómo acceder de forma remota</a></li>
         </ul>
       </section>
+
+      <PushSettings />
 
       <section className="mSection">
         <div className="mSectionHead"><h2>Dispositivos</h2></div>

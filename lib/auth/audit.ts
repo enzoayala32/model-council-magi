@@ -35,6 +35,10 @@ export type AuditAction =
   | "task_discarded"
   | "stepup_ok"
   | "stepup_failed"
+  | "push_subscribed"
+  | "push_subscription_updated"
+  | "push_sent"
+  | "push_failed"
   | "access_denied";
 
 export type AuditResult = "ok" | "denied" | "error";
