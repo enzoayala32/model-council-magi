@@ -65,7 +65,7 @@ export class ExecWithTreeKillError extends Error {
  * `process.kill(-pid,...)` (ESRCH) como `taskkill` (código de error, PID
  * no encontrado) simplemente fallan sin efecto — es exactamente el
  * resultado correcto, no hay nada que matar. */
-function killProcessTree(pid: number): void {
+export function killProcessTree(pid: number): void {
   if (process.platform === "win32") {
     // Argumentos separados, nunca un string armado a mano — `taskkill`
     // corre como comando propio, no interpolado dentro de otra shell.

@@ -109,7 +109,8 @@
     "security:test-remote-doctor": "tsx lib/test-remote-doctor.ts",
     "security:test-sse-proxy": "tsx lib/test-sse-proxy.ts",
     "security:test-request-proto": "tsx lib/test-request-proto.ts",
-    "security:test-web-push": "tsx lib/test-web-push.ts"
+    "security:test-web-push": "tsx lib/test-web-push.ts",
+    "security:test-mcp-client": "tsx lib/test-mcp-client.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.55",

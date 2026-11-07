@@ -371,6 +371,7 @@ docs/ARQUITECTURA-AGENTE.md       # límites ledger.ts / loop.ts + plan de divis
 docs/ROADMAP.md                   # estado de cada frente (consejo, agente, remoto, MCP)
 docs/API-AGENTE.md                # contrato de las rutas que consume la PWA /m
 docs/ACCESO-REMOTO.md             # LAN, Tailscale, Cloudflare, doctor y advertencias de HTTP
+docs/MCP.md                      # servidores MCP: config fuera del repo, allowlist y entorno aislado
 ```
 
 Los archivos `test-*.ts` viven junto al módulo que prueban (`lib/`, `lib/agent/`, `lib/agent/autonomy/`, `lib/agent/context/`, `lib/provider-resilience/`) y se ejecutan con `tsx` vía scripts de `package.json`.
