@@ -1330,8 +1330,10 @@ Ese smoke es la verificación de la aceptación de 4c/4d junta: un dispositivo
 | seg. | `lib/test-remote-doctor.ts` | 65 | `security:test-remote-doctor` |
 | seg. | `lib/test-sse-proxy.ts` | 26 | `security:test-sse-proxy` |
 | seg. | `lib/test-request-proto.ts` | 34 | `security:test-request-proto` |
-| seg. | `lib/test-web-push.ts` | 77 | `security:test-web-push` |
+| seg. | `lib/test-web-push.ts` | 90 | `security:test-web-push` |
+| seg. | `lib/test-push-endpoint.ts` | 78 | `security:test-push-endpoint` |
 | seg. | `lib/test-mcp-client.ts` | 45 | `security:test-mcp-client` |
+| seg. | `lib/test-mcp-loop.ts` | 39 | `security:test-mcp-loop` |
 | seg. | `lib/test-mcp-server.ts` | 53 | `security:test-mcp-server` |
 
 Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar que el tipado no cambió el comportamiento (46 casos entre los cuatro scripts). Fase 4 agrega 245 casos y el total de scripts del runner pasa de 63 a 67. Fase 5 agrega 54 casos con un proveedor falso y el total pasa a 68 scripts. Fase 7 agrega 95 casos (pricing, trazas puras y persistencia en una DB temporal con migración aditiva) y el total pasa a **69 scripts**.
@@ -1831,6 +1833,92 @@ emparejado es un dispositivo más.
 Tests: `lib/test-mcp-server.ts` (**53/53**).
 
 El barrido de rutas quedó en **46 pares ruta+método con guardia verificada**.
+
+## 1I. Misión 2 — correcciones de la revisión sobre Fases 5-9
+
+### Punto 1 — Push: el endpoint era un SSRF
+
+**El bug, reproducido contra las rutas reales:** `app/api/push/subscribe/route.ts`
+solo exigía `https:`. Con eso daban **200** `https://127.0.0.1:1/x`,
+`https://localhost:9/x`, `https://10.0.0.5/x`, `https://192.168.0.104/x`,
+`https://169.254.1.2/x`, `https://[::1]/x`, `https://fcm.googleapis.com:8443/x`
+y `https://user:pass@fcm.googleapis.com/x`. El server habría mandado un POST
+—con el JWT VAPID en el header `Authorization`— a donde dijera la URL.
+
+**Fix** (`lib/push/endpoint.ts`):
+
+- allowlist de servicios de push: `fcm.googleapis.com`,
+  `*.push.services.mozilla.com`, `*.notify.windows.com`, `web.push.apple.com`,
+  ampliable **solo** por `PUSH_ALLOWED_HOSTS` (el cliente nunca puede);
+- rechazo de IPs literales, de hosts que resuelvan a loopback/privadas/
+  link-local (la resolución DNS es **inyectable**, así el test prueba
+  "hostname de la allowlist que apunta a 10.x" sin tocar la red), de puertos
+  distintos de 443 y de credenciales en la URL;
+- **revalidación al enviar** (por si el registro es anterior a la allowlist),
+  `redirect: "error"`, y errores persistidos solo como **categoría**
+  (`rechazado`, `expirado`, `red`, `tiempo`) — nunca el cuerpo de la respuesta;
+- las claves de la suscripción se validan con la forma que manda un navegador
+  (punto P-256 sin comprimir de 65 bytes + secreto de 16). Sin eso, una clave
+  corrupta hacía que OpenSSL lanzara y **tumbara el proceso** en el primer
+  envío (tercer bug encontrado al verificar el fix).
+
+**Tests:** `lib/test-push-endpoint.ts` (**78/78**) con la matriz completa de
+válidos e inválidos, más 8 casos nuevos en `lib/test-web-push.ts`
+(**90/90**).
+
+**Otros dos bugs que el mismo repro destapó:**
+
+- `GET /api/push/subscriptions` devolvía lista **vacía** para el operador: el
+  SQL usaba `owner_id = ?` con `null`, y en SQL `col = NULL` nunca matchea.
+  Ahora se pregunta por `IS NULL`.
+- `GET /api/push/key` decía "no configurado" con `MAGI_TOTP_KEY` puesta: la ruta
+  solo **leía** la clave, y nadie la había generado todavía (se generaba recién
+  en el primer envío). Ahora la genera. El requisito exacto queda documentado en
+  `docs/ACCESO-REMOTO.md`.
+
+### Punto 2 — MCP conectado al producto
+
+Antes `lib/mcp/client.ts`, `config.ts` y `approvals.ts` **solo se usaban en sus
+tests**.
+
+**7.4 — herramientas en el loop** (`lib/agent/mcp-tools.ts`):
+`mcp__<servidor>__<herramienta>`, solo para servidores de la config del usuario
+y solo herramientas de la allowlist. La de lectura se ejecuta; la de escritura
+crea una aprobación y le dice al modelo que espere. La salida vuelve marcada
+como no confiable, recortada a 20.000 caracteres, y se registra en el event log
+como **metadato** (`chars`, `sha256`, `preview` de 160 caracteres redactado),
+nunca como contenido. Las conexiones se cachean por servidor y se cierran al
+terminar la corrida.
+
+**Bug de diseño que encontró el primer test de punta a punta:** la decisión de
+"puede escribir" era **por servidor**, no por herramienta. Con un servidor
+`readOnly: false`, hasta la herramienta de lectura pedía aprobación humana.
+Ahora se consulta al servidor (`tools/list`) y se cachea por
+servidor+herramienta.
+
+**8.1-8.3 — aprobación humana:** rutas `/api/mcp/approvals` (GET/POST) y
+`/api/mcp/approvals/approve` (POST), con scope `approve` y **step-up** para
+dispositivos remotos. Un cliente MCP externo no puede aprobar: `/api/mcp` no
+expone ningún método de aprobación (`-32601`) y las rutas exigen `approve`.
+UI en `/m/settings` y en la PC, con campo de TOTP cuando corresponde.
+El evento `approval.required` ya existe para push.
+
+**Tests:** `lib/test-mcp-loop.ts` (**39/39**) con un servidor MCP real por
+stdio: lectura ejecuta y viene marcada, escritura espera, aprobar consume una
+sola vez, argumentos distintos invalidan, vencimiento, rechazo, servidor fuera
+de allowlist, y los cuatro intentos de aprobar desde `/api/mcp` o con scope
+insuficiente (todos 403 / `-32601`).
+
+El barrido de rutas quedó en **49 pares ruta+método con guardia verificada**.
+
+### Punto 3 — documentación del estado real
+
+`docs/MCP.md` arranca con una tabla de qué está conectado y qué no; aclara que
+`GITHUB_TOKEN` y los demás secretos de la app **no** se reenvían y que un
+servidor que los necesite debe usar una variable con otro nombre; y lista lo
+que falta (UI de administración de servidores, transport `http` en el loop).
+`docs/ROADMAP.md` y `docs/REPORTE-REFACTOR.md` dicen lo mismo, y los NO
+VERIFICADOS quedaron explícitos (servidores MCP reales de terceros, push real).
 
 ## Apéndice — Matriz ruta por scope
 

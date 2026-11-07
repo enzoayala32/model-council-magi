@@ -5,17 +5,24 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 ## 1. Fase actual y último commit
 
-- **Misión 2**: Fases 5, 6, 7, 8 y 9 **HECHAS**. Queda pendiente solo la UI de
-  administración de servidores MCP (editar el JSON a mano está documentado) y lo
-  NO VERIFICADO de la lista de abajo.
-- Último commit: `70d6586` — `docs: reportar las fases 7, 8 y 9 (MCP)`.
+- **Misión 2**: Fases 5, 6, 7, 8 y 9 **HECHAS**, con las correcciones de la
+  revisión sobre 5-9 aplicadas. Conectado al producto: push con allowlist de
+  servicios, herramientas MCP en el loop del agente, aprobación humana con
+  step-up y sus rutas. **NO conectado todavía**: transport `http` de MCP (el
+  loop solo habla stdio) y la UI de administración de servidores MCP.
+- Último commit: `6c928e5` — `fase 7.4 y 8: herramientas MCP en el loop del
+  agente y aprobacion humana con step-up`.
 
 ## 2. Estado de verificación (sobre HEAD)
 
 - `npm run typecheck`: exit 0.
 - `npm run lint -- --max-warnings 37`: exit 0 (37 warnings).
-- `npm test`: **87/87 OK** (suite completa ~9 min) (incluye `security:test-remote-doctor` 65/65,
-  `security:test-sse-proxy` 26/26, `security:test-request-proto` 34/34).
+- `npm test`: **92/92 OK** (incluye `security:test-push-endpoint` 78/78,
+  `security:test-web-push` 90/90, `security:test-mcp-client` 45/45,
+  `security:test-mcp-server` 53/53 y `security:test-mcp-loop` 39/39).
+- Barrido de rutas: `security:test-route-enforcement` 13/13 sobre
+  **49 pares ruta+método** con guardia verificada; `security:test-peer-spoof`
+  34/34 en verde.
 - `npm run build`: exit 0.
 - `npx tsx scripts/run-tests.ts --verify`: exit 0 (tests + tope de lint).
 - Barrido de rutas: `security:test-route-enforcement` 13/13 y
@@ -23,10 +30,12 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 ## 3. Próximos 3 pasos concretos
 
-1. UI de administración de servidores MCP (loopback only): hoy el JSON se edita
+1. Transport `http` para MCP en el loop (hoy el cliente del agente solo habla
+   stdio; la config acepta http pero no se usa).
+2. UI de administración de servidores MCP (loopback only): hoy el JSON se edita
    a mano, fuera del repo.
-2. Verificar en vivo lo NO VERIFICADO de abajo (Android, túnel, push).
-3. Mantener este archivo al cierre de cada sub-bloque.
+3. Verificar en vivo lo NO VERIFICADO de abajo (Android, túnel, push, un
+   servidor MCP real de terceros).
 
 ## 4. Decisiones vigentes
 
@@ -64,7 +73,14 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 - **Backticks dentro de un comentario SQL de `lib/db.ts`** cierran el template
   literal y rompen el archivo (pasó dos veces). Sin backticks en esos comments.
 - **MCP: la config va FUERA del repo**; el proceso hijo nunca hereda el entorno
-  completo (allowlist + lista de nunca reenviar).
+  completo (allowlist + lista de nunca reenviar). `GITHUB_TOKEN` también está en
+  la lista: un servidor que lo "necesite" debe usar otra variable con otro
+  nombre.
+- **La decisión de "herramienta de escritura" es por HERRAMIENTA, no por
+  servidor** (`tools/list` + cache). Por servidor, hasta una tool de lectura
+  pedía aprobación humana.
+- **En SQL, `col = NULL` nunca matchea**: para dueños sin id (el operador) hay
+  que usar `IS NULL`. Ese fue el bug de la lista vacía de suscripciones push.
 - **`requireScope` sale de `lib/auth/authorize.ts`**, no de `guard.ts` (guard no
   lo re-exporta).
 
