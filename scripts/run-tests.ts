@@ -44,6 +44,35 @@ const filter = filterArg ? filterArg.slice("--filter=".length) : null;
 const timeoutArg = cli.find((arg) => arg.startsWith("--timeout="));
 const timeoutMs = timeoutArg ? Number(timeoutArg.slice("--timeout=".length)) * 1000 : 15 * 60 * 1000;
 
+/**
+ * Los servers de prueba compilan en `.next/dev/types`, y `tsconfig.json` incluye
+ * esos archivos. Si un test se cancela a mitad de una compilacion, los `.d.ts`
+ * quedan truncados y `npm run typecheck` empieza a fallar con errores de sintaxis
+ * que no son de nadie. Se borran al arrancar, antes de que corra nada.
+ */
+function limpiarTiposDev(): void {
+  const target = path.join(root, ".next", "dev", "types");
+  try {
+    fs.rmSync(target, { recursive: true, force: true });
+  } catch {
+    /* si esta en uso (otro server vivo), no se puede: no es fatal */
+  }
+}
+
+/**
+ * Timeout propio por script, para los que levantan servers de verdad.
+ *
+ * Estos arrancan 2 o 3 servers (modo dev: Next compila cada ruta en el primer
+ * pedido) y esperan a que estén listos. Con la máquina cargada —la suite
+ * completa, o la suite completa sin red— la compilación tarda mucho más, y el
+ * timeout global de 15 min no alcanzaba: el test se cancelaba a mitad y sus
+ * últimos checks daban 404 (rutas todavía compilando), no un fallo real.
+ */
+const PER_SCRIPT_TIMEOUT_MS: Record<string, number> = {
+  "security:test-peer-spoof": 25 * 60 * 1000,
+  "security:test-route-enforcement": 25 * 60 * 1000,
+};
+
 /** Harness que necesitan un proveedor real, red o credenciales. */
 const LIVE_SCRIPTS = [
   "agent:test",
@@ -157,10 +186,12 @@ function runOne(
     });
 
     let timedOut = false;
+    // El timeout del script manda si existe; si no, el global.
+    const effectiveTimeout = PER_SCRIPT_TIMEOUT_MS[name] ?? timeoutMs;
     const timer = setTimeout(() => {
       timedOut = true;
       killTree(child);
-    }, timeoutMs);
+    }, effectiveTimeout);
 
     const finish = (ok: boolean) => {
       clearTimeout(timer);
@@ -182,7 +213,7 @@ function runOne(
     });
     child.on("close", (code, signal) => {
       const ok = !timedOut && code === 0;
-      if (timedOut) console.error(`\n⏱️  ${name} superó ${Math.round(timeoutMs / 1000)}s y se canceló.`);
+      if (timedOut) console.error(`\n⏱️  ${name} superó ${Math.round(effectiveTimeout / 1000)}s y se canceló.`);
       else if (!ok) console.error(`\n❌ ${name} terminó con ${signal ? `signal ${signal}` : `exit ${code}`}.`);
       finish(ok);
     });
@@ -201,6 +232,8 @@ function runOne(
     console.log(`Omitidos por agrupadores (sus sub-tests ya corren): ${[...aggregatorSet].join(", ")}`);
   }
   console.log("");
+
+  limpiarTiposDev();
 
   const results: Array<{ name: string; ok: boolean; seconds: number; timedOut: boolean }> = [];
   for (let i = 0; i < candidates.length; i++) {

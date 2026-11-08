@@ -101,6 +101,23 @@ async function fetchWarm(url: string, init: RequestInit = {}, attempts = 12): Pr
   return last as Response;
 }
 
+/**
+ * Reintenta hasta obtener el status esperado. En modo dev, Next compila la ruta
+ * en el primer pedido: con la máquina cargada (suite completa), la primera
+ * respuesta puede no ser la definitiva (403 mientras termina de levantar, o un
+ * 404 de "ruta todavía no compilada"). Fijar un único intento hacia que este
+ * test fallara de tanto en tanto sin que hubiera un bug real.
+ */
+async function fetchUntil(url: string, expected: number, attempts = 12, init: RequestInit = {}): Promise<Response> {
+  let last: Response | null = null;
+  for (let i = 0; i < attempts; i += 1) {
+    last = await fetch(url, init);
+    if (last.status === expected) return last;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  return last as Response;
+}
+
 /** Rutas que la matriz verifica: se precompilan al levantar el server. */
 const ROUTES_TO_WARM = [
   "/api/threads",
@@ -290,7 +307,7 @@ async function main(): Promise<void> {
   const localPort = Number(new URL(localServer.base).port);
   console.log("\n== uso local sin credencial (no debe cambiar) ==\n");
   {
-    check("GET projects: 200", (await fetchWarm(`${localServer.base}/api/agent/projects`, { headers: { Host: `localhost:${localPort}` } })).status === 200);
+    check("GET projects: 200", (await fetchUntil(`${localServer.base}/api/agent/projects`, 200, 12, { headers: { Host: `localhost:${localPort}` } })).status === 200);
     check("GET threads: 200", (await fetchWarm(`${localServer.base}/api/threads`, { headers: { Host: `localhost:${localPort}` } })).status === 200);
     check(
       "POST pairing: 200 (peer verificado)",
