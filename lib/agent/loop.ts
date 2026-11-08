@@ -643,7 +643,11 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
                 // `output` tipa como la unión de todas las tools; los campos
                 // de MCP se leen de forma defensiva.
                 const mcpOutput = output as Record<string, unknown>;
-                const mcp = part.toolName.startsWith("mcp__")
+                // Solo se adjunta metadato cuando la tool realmente trajo una
+                // salida: un resultado "pendiente de aprobación" no tiene chars
+                // ni hash que reportar.
+                const mcp =
+                  part.toolName.startsWith("mcp__") && typeof mcpOutput.chars === "number" && (mcpOutput.chars as number) > 0
                   ? {
                       chars: typeof mcpOutput.chars === "number" ? mcpOutput.chars : 0,
                       sha256: typeof mcpOutput.sha256 === "string" ? mcpOutput.sha256 : "",
