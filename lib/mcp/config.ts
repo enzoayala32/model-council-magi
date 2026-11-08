@@ -61,6 +61,18 @@ export type McpServerConfig = {
   url?: string;
   /** Headers cuyos VALORES salen de variables de entorno del padre. */
   headersForward?: string[];
+  /**
+   * http: headers a mandar. Los VALORES van por REFERENCIA a variables de
+   * entorno (`"Authorization": "${MI_TOKEN_MCP}"`), nunca en claro en el
+   * archivo. Una referencia a una variable que no existe omite el header.
+   */
+  httpHeaders?: Record<string, string>;
+  /**
+   * http: permitir `http://` (sin TLS) SOLO si el host es loopback. Es para un
+   * server local de prueba; tiene que estar marcado a mano. Sin esto, http se
+   * rechaza siempre.
+   */
+  allowInsecureLocal?: boolean;
   /** Herramientas permitidas. Vacío = ninguna. */
   tools: string[];
   /**
@@ -216,6 +228,25 @@ export function validateConfig(raw: unknown, source: string): { ok: true; config
       return fail(source, where + ": \"cwd\" tiene que ser un string.");
     }
 
+    // httpHeaders: objeto de string -> string. Los valores van por REFERENCIA a
+    // variables de entorno ("${VAR}"), nunca en claro en el archivo.
+    let httpHeaders: Record<string, string> | undefined;
+    if (server.httpHeaders !== undefined) {
+      if (typeof server.httpHeaders !== "object" || server.httpHeaders === null || Array.isArray(server.httpHeaders)) {
+        return fail(source, where + ": httpHeaders tiene que ser un objeto.");
+      }
+      httpHeaders = {};
+      for (const [key, value] of Object.entries(server.httpHeaders as Record<string, unknown>)) {
+        if (typeof value !== "string") {
+          return fail(source, where + ": el header \"" + key + "\" tiene que ser un string.");
+        }
+        httpHeaders[key] = value.slice(0, 500);
+      }
+    }
+    if (server.allowInsecureLocal !== undefined && typeof server.allowInsecureLocal !== "boolean") {
+      return fail(source, where + ": allowInsecureLocal tiene que ser true o false.");
+    }
+
     // FAIL-CLOSED: sin `readOnlyTools` explícita, NINGUNA herramienta queda
     // eximida de aprobación. Una entrada en `readOnlyTools` que no esté en
     // `tools` es error: el operador creyó eximir algo que no se puede llamar.
@@ -244,6 +275,8 @@ export function validateConfig(raw: unknown, source: string): { ok: true; config
       envForward: (envForward as string[]).length > 0 ? (envForward as string[]) : undefined,
       url: typeof server.url === "string" ? server.url.trim() : undefined,
       headersForward: (headersForward as string[]).length > 0 ? (headersForward as string[]) : undefined,
+      httpHeaders,
+      allowInsecureLocal: server.allowInsecureLocal === true,
       tools: toolsList,
       readOnlyTools,
       readOnly,

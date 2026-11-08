@@ -59,7 +59,7 @@ Si el archivo no existe, MCP está desactivado. No es un error.
       "name": "http-remoto",
       "transport": "http",
       "url": "https://mcp.ejemplo.com/mcp",
-      "headersForward": ["TOKEN_MCP"],
+      "httpHeaders": { "Authorization": "${MI_TOKEN_MCP}" },
       "tools": ["listar"],
       "readOnlyTools": [],
       "readOnly": true
@@ -283,6 +283,53 @@ pendientes, porque el endpoint no lo devuelve.
 Cada servidor tiene su `timeoutMs`. Si no responde, la conexión queda en error
 —no colgada— y el proceso se mata **por árbol** (`killProcessTree`), para que en
 Windows no queden procesos nieto vivos.
+
+## 6bis. Transporte HTTP (Fase 7)
+
+Un servidor MCP puede vivir detrás de una URL en vez de en un proceso local. El
+cliente HTTP (`lib/mcp/http-client.ts`) tiene el **mismo contrato** que el de
+stdio (`connect`, `listTools`, `callTool`, `ping`, `close`), así que el loop no
+distingue el transporte.
+
+### Config
+
+| Campo | Qué es |
+|---|---|
+| `url` | endpoint MCP del servidor |
+| `httpHeaders` | headers a mandar. Los valores van **por referencia** a variables de entorno: `"Authorization": "${MI_TOKEN_MCP}"`. Nunca en claro. Una referencia a una variable que no existe **omite el header** y se informa cuál faltó. |
+| `allowInsecureLocal` | `true` solo para `http://` **y** host loopback (server local de prueba). Tiene que estar marcado a mano. |
+
+### Anti-SSRF (las mismas reglas que el push)
+
+- **HTTPS siempre.** HTTP únicamente si el host es loopback y
+  `allowInsecureLocal: true`.
+- **Sin credenciales en la URL** (`user:pass@`): quedarían en logs.
+- **Sin redirects** (`redirect: "error"`): un 302 a una IP privada sería el
+  mismo SSRF por otra puerta.
+- **IPs literales privadas/link-local/metadata rechazadas**, y los hostnames que
+  **resuelvan** a ellas —la resolución es inyectable, igual que en
+  `lib/push/endpoint.ts`, así los tests prueban el caso sin tocar la red.
+- **Timeout** por servidor y **tope de respuesta de 8 MB**: si se pasa, se
+  cancela la lectura y se devuelve un error explícito ("respuesta demasiado
+  grande"), no un JSON roto.
+- Se **revalida la URL en cada conexión**: un registro viejo no queda confiado
+  para siempre.
+
+### Lo demás, igual que stdio
+
+Fail-closed (`readOnlyTools`), salida marcada como no confiable y redactada, y
+el mismo event log con tamaño, hash y preview.
+
+```
+npm run security:test-mcp-http      # 46 casos
+```
+
+Prueba la cadena completa contra un servidor MCP local de prueba (sin red
+externa): lectura ejecuta, escritura pasa por aprobación, redirect rechazado,
+host privado rechazado (por IP y por DNS), respuesta gigante cortada, y que el
+token de la cabecera no aparece en la salida.
+
+---
 
 ## 7. Lo que falta
 

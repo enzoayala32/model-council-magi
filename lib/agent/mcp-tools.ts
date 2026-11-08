@@ -31,6 +31,7 @@ import { z } from "zod";
 import crypto from "node:crypto";
 import { isDeclaredReadOnly as declaradaSoloLectura, loadMcpConfig, isToolAllowed, type McpServerConfig } from "../mcp/config";
 import { looksWriteCapable, McpStdioConnection, type McpToolInfo } from "../mcp/client";
+import { McpHttpConnection } from "../mcp/http-client";
 import { requestApproval } from "../mcp/approvals";
 import { redactSecrets } from "../provider-resilience/redact";
 import { wrapToolExecute } from "./tool-policy";
@@ -42,21 +43,37 @@ const MCP_POLICY = { timeoutMs: 60_000, maxOutputChars: 120_000 };
 /** Tope de caracteres que se le devuelven al modelo. */
 const MAX_TOOL_OUTPUT_CHARS = 20_000;
 
+/** Interfaz mínima que comparten stdio y http: el loop no distingue. */
+type CualquierConexion = {
+  connect(): Promise<{ ok: true; tools: McpToolInfo[] } | { ok: false; error: string }>;
+  listTools(): Promise<McpToolInfo[]>;
+  callTool(name: string, args: unknown): Promise<{ ok: boolean; text: string; error?: string }>;
+  close(): Promise<void>;
+};
+
 type CachedConnection = {
-  connection: McpStdioConnection;
+  connection: CualquierConexion;
   server: McpServerConfig;
   lastUsedAt: number;
 };
 
 /** Cache por nombre de servidor. Vive mientras vive la corrida del agente. */
 export class McpToolRegistry {
+  /** Conexiones vivas, por servidor: un proceso stdio o una sesión http. */
   private readonly connections = new Map<string, CachedConnection>();
   /** Cache de "esta herramienta puede escribir", por servidor+herramienta. */
 
   readonly options: { approvalsEnabled: boolean };
 
-  constructor(options: { approvalsEnabled: boolean }) {
+  /**
+   * Opciones de validación anti-SSRF para el transporte http. En producción
+   * van vacías (DNS real); los tests inyectan un resolutor.
+   */
+  readonly transportOptions: { resolve?: (host: string) => Promise<string[]>; allowInsecureLocal?: boolean };
+
+  constructor(options: { approvalsEnabled: boolean }, transportOptions: { resolve?: (host: string) => Promise<string[]>; allowInsecureLocal?: boolean } = {}) {
     this.options = options;
+    this.transportOptions = transportOptions;
   }
 
   /**
@@ -115,13 +132,18 @@ export class McpToolRegistry {
     await Promise.allSettled(entries.map((entry) => entry.connection.close()));
   }
 
-  async connectionFor(server: McpServerConfig): Promise<McpStdioConnection> {
+  async connectionFor(server: McpServerConfig): Promise<CualquierConexion> {
     const cached = this.connections.get(server.name);
     if (cached) {
       cached.lastUsedAt = Date.now();
       return cached.connection;
     }
-    const connection = new McpStdioConnection(server, { untrustedLabel: server.name });
+    // Fase 7 (pendiente): el transporte lo decide la config. stdio y http tienen
+    // el mismo contrato, así que el resto del código no se entera.
+    const connection: CualquierConexion =
+      server.transport === "http"
+        ? new McpHttpConnection(server, { untrustedLabel: server.name, transportOptions: this.transportOptions })
+        : new McpStdioConnection(server, { untrustedLabel: server.name });
     const handshake = await connection.connect();
     if (!handshake.ok) {
       await connection.close();

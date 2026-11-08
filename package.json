@@ -113,6 +113,7 @@
     "security:test-push-endpoint": "tsx lib/test-push-endpoint.ts",
     "security:test-mcp-client": "tsx lib/test-mcp-client.ts",
     "security:test-mcp-failclosed": "tsx lib/test-mcp-failclosed.ts",
+    "security:test-mcp-http": "tsx lib/test-mcp-http.ts",
     "security:test-mcp-loop": "tsx lib/test-mcp-loop.ts",
     "security:test-mcp-server": "tsx lib/test-mcp-server.ts"
   },
