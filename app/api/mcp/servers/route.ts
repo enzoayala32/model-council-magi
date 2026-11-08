@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { readJsonBody } from "@/lib/api-json";
 import { guardRequest, requireLocalAccess } from "@/lib/auth/guard";
 import { isOperatorRequest } from "@/lib/auth/operator";
+import { allowsLocalImplicit } from "@/lib/peer";
 import { constantTimeEqual } from "@/lib/api-security";
 import { requireScope } from "@/lib/auth/authorize";
 import { recordAudit } from "@/lib/auth/audit";
@@ -75,11 +76,9 @@ export async function POST(request: Request) {
   const parsed = await readJsonBody<{ server?: unknown; confirmToken?: unknown }>(request);
   if (!parsed.ok) return parsed.response;
 
-  // Doble confirmación: el token de operador, OTRA VEZ, y comparado en tiempo
+  // Doble confirmación: el token de operador, OTRA VEZ, comparado en tiempo
   // constante contra el real. Sin la comparación, cualquier string servía.
-  const confirm = typeof parsed.body.confirmToken === "string" ? parsed.body.confirmToken.trim() : "";
-  const expected = process.env.APP_ACCESS_TOKEN?.trim() ?? "";
-  if (!expected || !confirm || !constantTimeEqual(confirm, expected) || !isOperatorRequest(request)) {
+  if (!confirmacionValida(parsed.body.confirmToken, request)) {
     recordAudit({ action: "access_denied", result: "denied", detail: "alta de servidor MCP sin confirmar" });
     return NextResponse.json(
       { ok: false, error: "Para agregar o cambiar un servidor hay que confirmar con el token de acceso." },
@@ -132,11 +131,9 @@ export async function DELETE(request: Request) {
   const parsed = await readJsonBody<{ name?: unknown; confirmToken?: unknown }>(request);
   if (!parsed.ok) return parsed.response;
 
-  const confirm = typeof parsed.body.confirmToken === "string" ? parsed.body.confirmToken.trim() : "";
-  const expected = process.env.APP_ACCESS_TOKEN?.trim() ?? "";
   const name = typeof parsed.body.name === "string" ? parsed.body.name.trim() : "";
   if (!name) return NextResponse.json({ ok: false, error: "Falta el nombre." }, { status: 400 });
-  if (!expected || !confirm || !constantTimeEqual(confirm, expected) || !isOperatorRequest(request)) {
+  if (!confirmacionValida(parsed.body.confirmToken, request)) {
     recordAudit({ action: "access_denied", result: "denied", detail: "baja de servidor MCP sin confirmar" });
     return NextResponse.json(
       { ok: false, error: "Para eliminar un servidor hay que confirmar con el token de acceso." },
@@ -153,6 +150,29 @@ export async function DELETE(request: Request) {
 
   recordAudit({ action: "mcp_tool_called", result: "ok", targetId: name, detail: "servidor MCP eliminado" });
   return NextResponse.json({ ok: true, servers: written.config.servers.map(describeServerForUi), needsRestart: true });
+}
+
+/**
+ * ¿La doble confirmación es válida?
+ *
+ * - **Con `APP_ACCESS_TOKEN` configurado**: hace falta el token otra vez,
+ *   comparado en tiempo constante contra el real. Es el caso normal, y el que
+ *   justifica la regla: una sesión de operador alcanza para *listar*, no para
+ *   *cambiar*.
+ * - **Sin token configurado**: no hay nada que tipear, así que exigirlo dejaba
+ *   la administración inutilizable en una PC de una sola persona (donde el
+ *   acceso ya es implícito por peer loopback, que es lo que `requireLocalAccess`
+ *   comprobó antes de llegar acá). En ese caso la confirmación ya está hecha.
+ */
+function confirmacionValida(confirmToken: unknown, request: Request): boolean {
+  const expected = process.env.APP_ACCESS_TOKEN?.trim() ?? "";
+  // Sin token configurado no hay nada que tipear. La prueba de "es esta PC" ya
+  // la hizo `requireLocalAccess` antes de llegar acá (operador o peer loopback
+  // verificado), así que se respeta ese mismo criterio. `isOperatorRequest`
+  // solo no alcanzaría: sin token configurado, nunca considera operador a nadie.
+  if (!expected) return isOperatorRequest(request) || allowsLocalImplicit(request);
+  const confirm = typeof confirmToken === "string" ? confirmToken.trim() : "";
+  return confirm !== "" && constantTimeEqual(confirm, expected) && isOperatorRequest(request);
 }
 
 /** Convierte el body en la forma que espera el validador (mismos campos). */

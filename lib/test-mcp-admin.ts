@@ -249,6 +249,33 @@ async function main(): Promise<void> {
   check("dispositivo approve NO puede crear (403)", dispositivoEscribe.status === 403, dispositivoEscribe.status);
   check("y la config no cambió", (readManagedConfig() as { config: { servers: unknown[] } }).config.servers.length === 1);
 
+  console.log("\n== sin APP_ACCESS_TOKEN no hay nada que confirmar ==\n");
+  // En una PC de una sola persona (acceso implícito por peer loopback) no hay
+  // token que tipear: exigirlo dejaba la administración inutilizable.
+  const sinToken = process.env.APP_ACCESS_TOKEN;
+  delete process.env.APP_ACCESS_TOKEN;
+  {
+    const altaSinToken = await serversModule.POST(
+      req({ peer: "loopback" }, "POST", { server: nuevoServidor, confirmToken: "" }),
+    );
+    check("sin token configurado se puede agregar desde loopback", altaSinToken.status === 200, await altaSinToken.clone().json());
+    check("y quedó guardado", (readManagedConfig() as { config: { servers: unknown[] } }).config.servers.length === 2);
+
+    // Desde un peer REMOTO, sin token, sigue sin poder: no es la PC.
+    const remotoSinToken = await serversModule.POST(
+      req({}, "POST", { server: nuevoServidor, confirmToken: "" }),
+    );
+    check("sin token, desde remoto NO puede (403)", remotoSinToken.status === 403, remotoSinToken.status);
+
+    // Un dispositivo emparejado tampoco, con o sin token.
+    const dispositivoSinToken = await serversModule.POST(
+      req({ cookie: "magi_device_token=" + aprobador.token }, "POST", { server: nuevoServidor, confirmToken: "" }),
+    );
+    check("sin token, un dispositivo approve NO puede (403)", dispositivoSinToken.status === 403, dispositivoSinToken.status);
+  }
+  if (sinToken === undefined) delete process.env.APP_ACCESS_TOKEN;
+  else process.env.APP_ACCESS_TOKEN = sinToken;
+
   fs.rmSync(tempDir, { recursive: true, force: true });
   if (savedToken === undefined) delete process.env.APP_ACCESS_TOKEN;
   else process.env.APP_ACCESS_TOKEN = savedToken;

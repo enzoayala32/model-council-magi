@@ -41,6 +41,8 @@ export function McpServerAdmin() {
     url: "",
     tools: "",
     readOnlyTools: "",
+    /** Un header por línea, `clave: ${VAR}`. Los valores van por referencia. */
+    headers: "",
     note: "",
   });
   const [confirmToken, setConfirmToken] = useState("");
@@ -80,6 +82,25 @@ export function McpServerAdmin() {
           : { command: draft.command.trim(), args: draft.args.split(" ").filter(Boolean) }),
         tools: draft.tools.split(",").map((entry) => entry.trim()).filter(Boolean),
         readOnlyTools: draft.readOnlyTools.split(",").map((entry) => entry.trim()).filter(Boolean),
+        // Un header por línea. El valor tiene que ser una referencia a variable
+        // de entorno: nunca se escribe un secreto en el archivo de config.
+        ...(draft.transport === "http" && draft.headers.trim()
+          ? {
+              httpHeaders: Object.fromEntries(
+                draft.headers
+                  .split("\n")
+                  .map((line) => line.trim())
+                  .filter(Boolean)
+                  .map((line) => {
+                    const sep = line.indexOf(":");
+                    return sep === -1
+                      ? ([line, ""] as const)
+                      : ([line.slice(0, sep).trim(), line.slice(sep + 1).trim()] as const);
+                  })
+                  .filter(([key, value]) => key !== "" && value.startsWith("${")),
+              ),
+            }
+          : {}),
         readOnly: true,
         ...(draft.note.trim() ? { note: draft.note.trim() } : {}),
       };
@@ -203,7 +224,21 @@ export function McpServerAdmin() {
           </select>
         </div>
         {draft.transport === "http" ? (
-          <input className="mInput" placeholder="https://…/mcp" value={draft.url} onChange={(e) => setDraft({ ...draft, url: e.target.value })} disabled={busy} />
+          <>
+            <input className="mInput" placeholder="https://…/mcp" value={draft.url} onChange={(e) => setDraft({ ...draft, url: e.target.value })} disabled={busy} />
+            <textarea
+              className="mInput"
+              rows={2}
+              placeholder={"headers, uno por línea, con valores por referencia a variables de entorno:\nAuthorization: ${MI_TOKEN_MCP}"}
+              value={draft.headers}
+              onChange={(e) => setDraft({ ...draft, headers: e.target.value })}
+              disabled={busy}
+            />
+            <p className="mNote">
+              Los valores van por <strong>referencia</strong> a variables de entorno (<code>${"{VAR}"}</code>). Si
+              escribís un secreto en claro, se guarda en el archivo: usá una variable.
+            </p>
+          </>
         ) : (
           <div className="mRow">
             <input className="mInput" placeholder="comando (ej: npx)" value={draft.command} onChange={(e) => setDraft({ ...draft, command: e.target.value })} disabled={busy} />

@@ -79,7 +79,7 @@ hasta que el usuario lo pruebe; cada fase trae su checklist manual.
 | Fase | Qué es | Estado |
 |---|---|---|
 | 7 | Cliente MCP **fail-closed** + integración al loop (7.4): config validada fuera del repo, allowlist explícita por herramienta, `readOnlyTools` como única exención de aprobación, aislamiento de `process.env`, salida no confiable, y **transporte http** con anti-SSRF | **HECHA** |
-| 8 | Herramientas MCP de escritura **solo con aprobación humana** (código de un solo uso, hash de argumentos, 5 min de vida, código que no viaja al modelo, UI en PC y `/m`, push `approval.required`) | **HECHA** (salvo UI de administración de servidores) |
+| 8 | Herramientas MCP de escritura **solo con aprobación humana** (código de un solo uso, hash de argumentos, 5 min de vida, código que no viaja al modelo, UI en PC y `/m`, push `approval.required`) + administración de servidores solo desde la PC con doble confirmación | **HECHA** |
 | 9 | El consejo y el agente como **servidor MCP** (`/api/mcp`), clientes emparejados como dispositivos, sin herramientas de aprobación expuestas | **HECHA** |
 
 Reglas no negociables: la config de MCP vive fuera del repo y nunca se
