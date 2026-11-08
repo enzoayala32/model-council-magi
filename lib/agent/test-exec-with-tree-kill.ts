@@ -108,20 +108,38 @@ async function main(): Promise<void> {
     check("code refleja el exit code real (3)", error instanceof ExecWithTreeKillError && error.code === 3, error);
   }
 
+  /**
+   * Espera con sondeo hasta `timeoutMs`. Los tiempos fijos de 2s + 2.3s daban
+   * un margen de 300ms: con la máquina cargada (suite completa) el arranque de
+   * node se pasaba de largo y el test fallaba sin que hubiera un bug real.
+   */
+  const waitFor = async (predicate: () => Promise<boolean>, timeoutMs = 6000): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      if (await predicate()) return true;
+      if (Date.now() > deadline) return false;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  };
+
+  /** Espera a que el marker NO exista: misma idea, con margen. */
+  const waitForNoMarker = async (markerPath: string, timeoutMs = 6000): Promise<boolean> =>
+    waitFor(async () => !(await markerExists(markerPath)), timeoutMs);
+
   // --- Caso 2: abort ANTES de que el proceso termine — mata el árbol real ---
   console.log("\n--- Caso 2: abort mientras el proceso está en curso — el árbol muere de verdad ---");
   {
     const dir = await tempWorkspace();
-    const { scriptPath, markerPath } = await makeDelayedMarkerScript(dir, 2000);
+    const { scriptPath, markerPath } = await makeDelayedMarkerScript(dir, 1200);
     const controller = new AbortController();
     const promise = execWithTreeKill("node", [scriptPath], { cwd: dir, maxBuffer: 1024 * 1024, timeoutMs: 10_000, signal: controller.signal });
-    await new Promise((r) => setTimeout(r, 200));
+    // Que el proceso haya arrancado de verdad antes de abortar.
+    await waitFor(async () => (await countLiveSlowJsProcesses()) !== null, 5000);
     const liveBeforeAbort = await countLiveSlowJsProcesses();
     controller.abort();
     const error = await promise.catch((e) => e as ExecWithTreeKillError);
     check("rechaza (no resuelve como éxito)", error instanceof ExecWithTreeKillError, error);
-    await new Promise((r) => setTimeout(r, 2300));
-    check("el marker (solo a los 2s) nunca apareció", !(await markerExists(markerPath)), { markerPath });
+    check("el marker nunca apareció", await waitForNoMarker(markerPath), { markerPath });
     if (liveBeforeAbort !== null) {
       const liveAfter = await countLiveSlowJsProcesses();
       check(`no quedó ningún proceso descendiente vivo (había ${liveBeforeAbort} antes del abort, quedan ${liveAfter})`, liveAfter === 0, { liveBeforeAbort, liveAfter });
@@ -132,11 +150,11 @@ async function main(): Promise<void> {
   console.log("\n--- Caso 3: timeout (sin abort) — mismo camino de terminación, sin esperar 120s reales ---");
   {
     const dir = await tempWorkspace();
-    const { scriptPath, markerPath } = await makeDelayedMarkerScript(dir, 2000);
+    const { scriptPath, markerPath } = await makeDelayedMarkerScript(dir, 1200);
     const error = await execWithTreeKill("node", [scriptPath], { cwd: dir, maxBuffer: 1024 * 1024, timeoutMs: 150 }).catch((e) => e as ExecWithTreeKillError);
     check("rechaza mencionando el timeout", error instanceof ExecWithTreeKillError && error.message.includes("timeout"), error);
     await new Promise((r) => setTimeout(r, 2300));
-    check("el marker (solo a los 2s) nunca apareció — el timeout mató el árbol real, no solo dejó de esperar", !(await markerExists(markerPath)), { markerPath });
+    check("el marker nunca apareció — el timeout mató el árbol real, no solo dejó de esperar", await waitForNoMarker(markerPath), { markerPath });
   }
 
   // --- Caso 4/5: abort DESPUÉS de que el proceso ya terminó — no rompe nada, no mata un PID ajeno ---
@@ -162,7 +180,7 @@ async function main(): Promise<void> {
   console.log("\n--- Caso 6: abort y timeout casi al mismo tiempo — terminación única e idempotente ---");
   {
     const dir = await tempWorkspace();
-    const { scriptPath, markerPath } = await makeDelayedMarkerScript(dir, 2000);
+    const { scriptPath, markerPath } = await makeDelayedMarkerScript(dir, 1200);
     const controller = new AbortController();
     const promise = execWithTreeKill("node", [scriptPath], { cwd: dir, maxBuffer: 1024 * 1024, timeoutMs: 150, signal: controller.signal });
     // Dispara el abort prácticamente en el mismo instante en que el
