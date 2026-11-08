@@ -47,45 +47,8 @@ if (!process.env.MAGI_DATA_DIR) {
   process.env.MAGI_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "magi-mcp-loop-"));
 }
 
-/** Servidor MCP falso con una tool de lectura y una de escritura. */
-const FAKE = `
-function send(obj) { process.stdout.write(JSON.stringify(obj) + "\\n"); }
-let buffer = "";
-let ejecutadas = 0;
-process.stdin.on("data", (chunk) => {
-  buffer += chunk.toString("utf8");
-  let i = buffer.indexOf("\\n");
-  while (i !== -1) {
-    const line = buffer.slice(0, i).trim();
-    buffer = buffer.slice(i + 1);
-    if (line) {
-      let msg = null;
-      try { msg = JSON.parse(line); } catch { msg = null; }
-      if (msg && typeof msg.id === "number") {
-        if (msg.method === "initialize") return send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "falso", version: "1" } } });
-        if (msg.method === "tools/list") return send({ jsonrpc: "2.0", id: msg.id, result: { tools: [
-          { name: "leer", description: "lee un dato de prueba" },
-          { name: "borrar", description: "borra un archivo (escritura)" },
-          { name: "oculta", description: "herramienta fuera de la allowlist" }
-        ] } });
-        if (msg.method === "tools/call") {
-          const name = msg.params && msg.params.name;
-          const args = (msg.params && msg.params.arguments) || {};
-          if (name === "leer") return send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "DATOS-LEIDOS:" + JSON.stringify(args) }] } });
-          if (name === "borrar") { ejecutadas += 1; return send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "BORRADO " + String(args.ruta) }] } }); }
-          if (name === "oculta") return send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "no deberia ejecutarse" }] } });
-          return send({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "desconocida" } });
-        }
-        send({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "metodo desconocido" } });
-      }
-    }
-    i = buffer.indexOf("\\n");
-  }
-});
-// Al salir, informa cuántas veces se ejecutó "borrar" (para verificar el
-// "una sola vez" desde el test, mirando el event log no alcanza).
-process.on("exit", () => { try { send({ jsonrpc: "2.0", method: "notificacion/ejecutadas", params: { ejecutadas } }); } catch {} });
-`;
+/** Servidor MCP falso reusable (mismo que usan los demas tests de MCP). */
+const FAKE_PATH = path.join(REPO_ROOT, "lib", "test", "fixtures", "fake-mcp-server.js");
 
 async function main(): Promise<void> {
   const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "magi-mcp-loop-cfg-"));
@@ -110,11 +73,13 @@ async function main(): Promise<void> {
           name: "falso",
           transport: "stdio",
           command: process.execPath,
-          args: ["-e", FAKE],
+          args: [FAKE_PATH],
           envForward: ["VAR_PROPIA_MCP"],
-          tools: ["leer", "borrar"],
-          // FAIL-CLOSED: solo "leer" queda eximida de aprobación.
-          readOnlyTools: ["leer"],
+          tools: ["leer", "list_files", "get_updates", "search_created_issues", "borrar"],
+          // FAIL-CLOSED: las cuatro primeras quedan eximidas (incluidas las que
+          // el servidor declara readOnlyHint=false y las que la heuristica vieja
+          // bloqueaba). "borrar" NO: exige aprobacion.
+          readOnlyTools: ["leer", "list_files", "get_updates", "search_created_issues"],
           readOnly: false,
           timeoutMs: 8000,
           note: "servidor de prueba",
@@ -136,9 +101,9 @@ async function main(): Promise<void> {
   const registry = new McpToolRegistry({ approvalsEnabled: true });
   const tools = createMcpTools(registry);
   const nombres = Object.keys(tools);
-  check("se crean solo las herramientas de la allowlist", nombres.length === 2, nombres);
+  check("se crean solo las herramientas de la allowlist", nombres.length === 5, nombres);
   check("el nombre es mcp__<servidor>__<herramienta>", nombres.includes("mcp__falso__leer") && nombres.includes("mcp__falso__borrar"), nombres);
-  check("una herramienta fuera de la allowlist no se crea", !nombres.includes("mcp__falso__oculta"), nombres);
+  check("una herramienta fuera de la allowlist no se crea", !nombres.includes("mcp__falso__envcheck"), nombres);
 
   console.log("\n== herramienta de solo lectura: ejecuta y viene marcada ==\n");
   // Las tools se arman en forma dinamica, asi que el tipo del `execute` se
@@ -150,13 +115,21 @@ async function main(): Promise<void> {
     const out = await selected.execute(input, { abortSignal: undefined, toolCallId: "test", messages: [] });
     return (out ?? {}) as Record<string, unknown>;
   };
+  // Las cuatro declaradas de solo lectura ejecutan, INCLUDIDA get_updates (que el
+  // servidor declara readOnlyHint=false) y search_created_issues (que la
+  // heuristica vieja bloqueaba).
+  for (const name of ["leer", "list_files", "get_updates", "search_created_issues"]) {
+    const salida = await run("mcp__falso__" + name, {});
+    check("ejecuta sin aprobacion (esta en readOnlyTools): " + name, salida.ok === true && salida.untrusted === true, salida);
+    check("trae el contenido del servidor: " + name, String(salida.output ?? "").includes("EJECUTO:" + name));
+  }
   const readResult = await run("mcp__falso__leer", { ruta: "/tmp/x" });
   check("la de lectura se ejecuta", readResult.ok === true, readResult);
   check("marca la salida como no confiable", readResult.untrusted === true);
   check("informa el tamaño", typeof readResult.chars === "number" && (readResult.chars as number) > 0, readResult.chars);
   check("informa el hash", typeof readResult.sha256 === "string" && (readResult.sha256 as string).length === 16);
   check("el texto trae el preambulo", String(readResult.output ?? "").includes("contenido no confiable"), String(readResult.output).slice(0, 60));
-  check("trae los datos del servidor", String(readResult.output ?? "").includes("DATOS-LEIDOS"));
+  check("trae los datos del servidor", String(readResult.output ?? "").includes("EJECUTO:leer"));
 
   // Recorte: una salida enorme se corta y se avisa.
   const info = describeOutput("y".repeat(50_000));

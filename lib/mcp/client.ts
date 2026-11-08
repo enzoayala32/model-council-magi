@@ -90,7 +90,7 @@ export class McpStdioConnection {
 
   constructor(
     private readonly config: McpServerConfig,
-    private readonly options: { untrustedLabel?: string } = {},
+    private readonly options: { untrustedLabel?: string; /** Opt-in: barrera heurística por nombre (solo para uso directo de la librería). */ gateWriteByName?: boolean } = {},
   ) {
     this.timeoutMs = config.timeoutMs;
   }
@@ -150,22 +150,40 @@ export class McpStdioConnection {
   }
 
   /**
-   * Llama una herramienta. Rechaza ANTES de hablar con el servidor si no está
-   * en la allowlist, o si el servidor es read-only y la herramienta parece de
-   * escritura (eso es Fase 8 y exige aprobación humana).
+   * Llama una herramienta.
+   *
+   * CORRECCIÓN DE LA REVISIÓN: la decisión de "¿necesita aprobación?" vive en
+   * UN solo lugar, `readOnlyTools` de la config (`isDeclaredReadOnly`). Antes
+   * acá había una barrera heurística que adivinaba por el nombre y la
+   * descripción, y acertaba con ~20 palabras: `get_updates`,
+   * `search_created_issues` y decenas de nombres legítimos quedaban bloqueados
+   * aunque el operador los hubiera declarado de solo lectura.
+   *
+   * Ahora:
+   * - si la config declara la herramienta en `readOnlyTools`, se ejecuta;
+   * - si no, la rechaza `callToolBlockedReason`, que es la misma regla.
+   *
+   * `opts.approved` + `gateWriteByName` quedan para el uso DIRECTO de la
+   * librería, sin config que diga qué es de solo lectura (un script que se
+   * conecta a un servidor y quiere ejecutar algo de escritura). Con
+   * `gateWriteByName: true`, la heurística sobre el nombre endurece: si parece
+   * de escritura, hay que pasar `approved: true`. El loop del agente NO la usa:
+   * le pasa por `readOnlyTools`.
    */
   async callTool(name: string, args: unknown, opts: { approved?: boolean } = {}): Promise<McpToolResult> {
     if (!isToolAllowed(this.config, name)) {
       return { ok: false, text: "", error: "herramienta no permitida por la config: " + name, untrusted: true };
     }
-    const tool = (await this.safeListTools()).find((entry) => entry.name === name);
-    if (tool?.writeCapable && !opts.approved) {
-      return {
-        ok: false,
-        text: "",
-        error: "la herramienta " + name + " puede escribir: requiere aprobación humana (Fase 8).",
-        untrusted: true,
-      };
+    if (this.options.gateWriteByName && !opts.approved) {
+      const tool = (await this.safeListTools()).find((entry) => entry.name === name);
+      if (tool?.writeCapable) {
+        return {
+          ok: false,
+          text: "",
+          error: "la herramienta " + name + " puede escribir: requiere aprobación humana (Fase 8).",
+          untrusted: true,
+        };
+      }
     }
 
     const response = await this.request("tools/call", { name, arguments: args ?? {} });
@@ -276,6 +294,10 @@ export class McpStdioConnection {
     } catch {
       return; // línea no-JSON: se ignora (un servidor puede loggear por stdout)
     }
+    // Un JSON válido que no es un objeto (null, un número, un string) también se
+    // ignora: sin este chequeo, un servidor que responde "null" tiraba el
+    // proceso con un TypeError.
+    if (message === null || typeof message !== "object") return;
     if (typeof message.id !== "number") return;
     const entry = this.pending.get(message.id);
     if (!entry) return;

@@ -54,64 +54,19 @@ if (!process.env.MAGI_DATA_DIR) {
 
 const REPO_ROOT = path.resolve(fileURLToPath(import.meta.url), "..", "..");
 
-/** Servidor MCP falso: responde a initialize, tools/list y tools/call.
- *  `envcheck` devuelve su propio entorno, para probar el aislamiento. */
-const FAKE_SERVER = `
-const NODE_ENV = process.env.NODE_ENV;
-function send(obj) { process.stdout.write(JSON.stringify(obj) + "\\n"); }
-process.stdout.on("error", () => process.exit(0));
-let buffer = "";
-process.stdin.on("data", (chunk) => {
-  buffer += chunk.toString("utf8");
-  let index = buffer.indexOf("\\n");
-  while (index !== -1) {
-    const line = buffer.slice(0, index).trim();
-    buffer = buffer.slice(index + 1);
-    if (line) {
-      let msg;
-      try { msg = JSON.parse(line); } catch { msg = null; }
-      if (msg && typeof msg.id === "number") handle(msg);
-    }
-    index = buffer.indexOf("\\n");
-  }
-});
-function handle(msg) {
-  if (msg.method === "initialize") {
-    return send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "falso", version: "1" } } });
-  }
-  if (msg.method === "ping") return send({ jsonrpc: "2.0", id: msg.id, result: {} });
-  if (msg.method === "tools/list") {
-    return send({ jsonrpc: "2.0", id: msg.id, result: { tools: [
-      { name: "leer", description: "lee algo" },
-      { name: "borrar_todo", description: "borra todo lo que ve" },
-      { name: "envcheck", description: "devuelve el entorno del proceso" },
-      { name: "repite", description: "devuelve lo que le manden" }
-    ] } });
-  }
-  if (msg.method === "tools/call") {
-    const name = msg.params && msg.params.name;
-    const args = (msg.params && msg.params.arguments) || {};
-    if (name === "leer") return send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "contenido leido" }] } });
-    if (name === "borrar_todo") return send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "borrado (no de verdad)" }] } });
-    if (name === "envcheck") return send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify(process.env) }] } });
-    if (name === "repite") return send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: String(args.texto ?? "") }] } });
-    return send({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "herramienta desconocida" } });
-  }
-  if (msg.method === "cuelga") return; // a proposito: no contesta
-  send({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "metodo desconocido" } });
-}
-`;
+/** Servidor MCP falso reusable (mismo que usan los demás tests de MCP). */
+const FAKE_PATH = path.join(REPO_ROOT, "lib", "test", "fixtures", "fake-mcp-server.js");
 
 function baseServer(overrides: Partial<McpServerConfig> = {}): McpServerConfig {
   return {
     name: "falso",
     transport: "stdio",
     command: process.execPath,
-    args: ["-e", FAKE_SERVER],
+    args: [FAKE_PATH],
     envForward: ["MI_TOKEN_MCP"],
-    tools: ["leer", "borrar_todo", "envcheck", "repite"],
+    tools: ["leer", "borrar", "envcheck", "gigante"],
     // FAIL-CLOSED: por defecto NINGUNA herramienta queda eximida de aprobación.
-    readOnlyTools: ["leer", "envcheck", "repite"],
+    readOnlyTools: ["leer", "envcheck", "gigante"],
     readOnly: false,
     timeoutMs: 5000,
     ...overrides,
@@ -194,22 +149,23 @@ async function main(): Promise<void> {
   const handshake = await connection.connect();
   check("el handshake funciona", handshake.ok === true, handshake);
   if (handshake.ok) {
-    check("lista las 4 herramientas del servidor", handshake.tools.length === 4, handshake.tools.map((t) => t.name));
-    check("marca borrar_todo como de escritura", handshake.tools.find((t) => t.name === "borrar_todo")?.writeCapable === true);
+    check("lista las 8 herramientas del servidor", handshake.tools.length === 8, handshake.tools.map((t) => t.name));
+    check("marca borrar como de escritura", handshake.tools.find((t) => t.name === "borrar")?.writeCapable === true);
     check("leer no es de escritura", handshake.tools.find((t) => t.name === "leer")?.writeCapable === false);
+    check("get_updates se marca como de escritura (readOnlyHint=false del servidor)", handshake.tools.find((t) => t.name === "get_updates")?.writeCapable === true);
     check("el ping responde", await connection.ping());
 
     const lectura = await connection.callTool("leer", {});
-    check("una herramienta permitida devuelve contenido", lectura.ok === true && lectura.text.includes("contenido leido"));
+    check("una herramienta permitida devuelve contenido", lectura.ok === true && lectura.text.includes("EJECUTO:leer"));
     check("la salida viene marcada como no confiable", lectura.text.startsWith(UNTRUSTED_PREAMBLE));
 
-    // "borrar_todo" está en `tools` pero NO en `readOnlyTools`: con la regla
-    // fail-closed, exige aprobación antes de llegar al servidor.
-    const blocked = await connection.callTool("borrar_todo", {});
-    check("una herramienta sin declarar de solo lectura exige aprobacion", !blocked.ok && (blocked.error ?? "").includes("aprobación"), blocked);
+    // La decisión de "¿necesita aprobación?" NO vive en el cliente: vive en
+    // `readOnlyTools`, y la aplica el loop. Quien use la librería en forma
+    // directa puede pedir la barrera heurística con `gateWriteByName`.
+    const sinBarrera = await connection.callTool("borrar", {});
+    check("con config, el cliente no bloquea por heuristic a", sinBarrera.ok === true, sinBarrera.error);
 
-    // Una que no está en `tools` ni en `readOnlyTools`: allowlist.
-    const notAllowed = await connection.callTool("herramienta_que_no_existe", {});
+    const notAllowed = await connection.callTool("no-existe", {});
     check("herramienta fuera de la allowlist se rechaza en el cliente", !notAllowed.ok && (notAllowed.error ?? "").includes("no permitida"), notAllowed);
 
     const envProbe = await connection.callTool("envcheck", {});
@@ -218,25 +174,37 @@ async function main(): Promise<void> {
     check("el hijo SI vio la variable de la allowlist", envProbe.text.includes("valor-permitido"));
     check("el hijo vio su propio NODE_ENV", typeof process.env.NODE_ENV === "string" ? envProbe.text.includes(process.env.NODE_ENV) : true);
 
-    // Con la herramienta EN la allowlist, sin aprobación: se rechaza con el
-    // motivo de aprobación (no de allowlist, que ya pasó).
-    const writeAllowed = new McpStdioConnection(baseServer({ tools: ["leer", "borrar_todo", "envcheck"], readOnly: false }));
+    // Uso DIRECTO de la librería, sin config que declare solo lectura: la
+    // barrera heurística es opt-in (`gateWriteByName`).
+    const writeAllowed = new McpStdioConnection(
+      baseServer({ tools: ["leer", "borrar", "envcheck"], readOnly: false }),
+      { gateWriteByName: true },
+    );
     await writeAllowed.connect();
-    const writeCall = await writeAllowed.callTool("borrar_todo", {}, { approved: false });
-    check("una herramienta de escritura sin aprobacion se rechaza", !writeCall.ok && (writeCall.error ?? "").includes("aprobación"), writeCall);
-    const approved = await writeAllowed.callTool("borrar_todo", {}, { approved: true });
+    const writeCall = await writeAllowed.callTool("borrar", {}, { approved: false });
+    check("con la barrera heuristic a, una de escritura sin aprobacion se rechaza", !writeCall.ok && (writeCall.error ?? "").includes("aprobación"), writeCall);
+    const approved = await writeAllowed.callTool("borrar", {}, { approved: true });
     check("con aprobacion explicita, pasa", approved.ok === true, approved);
     await writeAllowed.close();
+
+    // Y esa barrera NO bloquea una herramienta que el operador declaró de solo
+    // lectura, aunque el servidor diga readOnlyHint=false.
+    const declarada = new McpStdioConnection(
+      baseServer({ tools: ["leer", "get_updates"], readOnlyTools: ["leer", "get_updates"], readOnly: false }),
+    );
+    await declarada.connect();
+    const eximida = await declarada.callTool("get_updates", {});
+    check("una declarada en readOnlyTools ejecuta (readOnlyHint=false del servidor no cuenta)", eximida.ok === true, eximida.error);
+    await declarada.close();
 
     // Redaccion: si un servidor devuelve material que parece un secreto de la
     // app, igual no sale en claro.
     registerSecret("token-que-no-debe-salir");
-    const echoed = await connection.callTool("repite", { texto: "hola token-que-no-debe-salir adios" });
+    const echoed = await connection.callTool("leer", { texto: "hola token-que-no-debe-salir adios" });
     check("la salida redacta secretos de la app", !echoed.text.includes("token-que-no-debe-salir"), echoed.text.slice(0, 140));
 
     // Timeout: el servidor no contesta "cuelga" -> error, no cuelgue.
-    const timeoutConfig = baseServer({ timeoutMs: 700 });
-    const timeoutConnection = new McpStdioConnection(timeoutConfig);
+    const timeoutConnection = new McpStdioConnection(baseServer({ timeoutMs: 700 }));
     await timeoutConnection.connect();
     const started = Date.now();
     let timedOut = false;
