@@ -155,7 +155,10 @@ export async function sendWebPush(
   // Revalidación al enviar (la suscripción puede ser de antes de la allowlist).
   const endpointCheck = await validatePushEndpoint(subscription.endpoint, endpointOptions);
   if (!endpointCheck.ok) {
-    return { ok: false, status: 0, error: "rechazado" };
+    // Un fallo de DNS NO es un rechazo del servicio: es un problema de red, y
+    // sobre todo NO debe desactivar la suscripción (el navegador seguiría
+    // intentando suscribirse a un endpoint perfectamente válido).
+    return { ok: false, status: 0, error: endpointCheck.reason === "dns" ? "red" : "rechazado" };
   }
 
   let encrypted: { body: Buffer; salt: Buffer; ephemeralPublicKey: Buffer };

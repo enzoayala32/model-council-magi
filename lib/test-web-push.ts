@@ -156,6 +156,10 @@ async function main(): Promise<void> {
   console.log("\n== envio con emisor inyectable ==\n");
   // Tipado explícito con valor inicial: si no, TypeScript lo estrecha
   // a null y no ve la asignación que ocurre dentro del emisor falso.
+  // El endpoint de este test no es un servicio de push conocido, así que para
+  // probar el envío en sí hay que saltear la validación de host (y el DNS: con
+  // un resolver inyectado el test corre sin red).
+  const sendOptions = { allowlist: [new URL(subscription.endpoint).hostname], skipDns: true };
   const lastRequestBox: { value: { url: string; headers: Record<string, string>; bodyLength: number } | null } = { value: null };
   const fakeFetch = (async (url: string, init: RequestInit) => {
     lastRequestBox.value = {
@@ -166,7 +170,7 @@ async function main(): Promise<void> {
     return new Response(null, { status: 201 });
   }) as unknown as typeof fetch;
 
-  const sent = await sendWebPush(subscription, { title: "listo", body: "termine", tag: "t1", url: "/m" }, keys, fakeFetch);
+  const sent = await sendWebPush(subscription, { title: "listo", body: "termine", tag: "t1", url: "/m" }, keys, fakeFetch, sendOptions);
   check("el envio correcto da ok", sent.ok && sent.status === 201, sent);
   check("apunta al endpoint del servicio", lastRequestBox.value?.url === subscription.endpoint);
   check("manda Content-Encoding aes128gcm", lastRequestBox.value?.headers["Content-Encoding"] === "aes128gcm");
@@ -186,10 +190,6 @@ async function main(): Promise<void> {
   check("manda Encryption con el salt", /^salt=[A-Za-z0-9_-]+$/.test(lastRequestBox.value?.headers.Encryption ?? ""));
   check("manda Crypto-Key dh + p256ecdsa", /dh=[A-Za-z0-9_-]+/.test(lastRequestBox.value?.headers["Crypto-Key"] ?? "") && /p256ecdsa=[A-Za-z0-9_-]+/.test(lastRequestBox.value?.headers["Crypto-Key"] ?? ""));
   check("el cuerpo no es texto plano", (lastRequestBox.value?.bodyLength ?? 0) > 21 + 65 + 16, lastRequestBox.value?.bodyLength);
-
-  // El endpoint de este test no es un servicio de push conocido, así que para
-  // probar el envío en sí hay que saltear la validación de host.
-  const sendOptions = { allowlist: [new URL(subscription.endpoint).hostname], skipDns: true };
 
   const failFetch = (async () => new Response("suscripcion inexistente", { status: 404 })) as unknown as typeof fetch;
   const failedSend = await sendWebPush(subscription, { title: "x" }, keys, failFetch, sendOptions);
@@ -226,6 +226,17 @@ async function main(): Promise<void> {
     sendOptions,
   );
   check("un 5xx se categoriza como red", serverError.error === "red", serverError);
+
+  // Un fallo de DNS al enviar es de RED, no un rechazo del servicio: la
+  // suscripción no debe desactivarse por eso (status 0, no 404/410).
+  const dnsFetch = (async () => new Response(null, { status: 201 })) as unknown as typeof fetch;
+  const dnsFail = await sendWebPush(subscription, { title: "x" }, keys, dnsFetch, {
+    ...sendOptions,
+    skipDns: false,
+    resolve: () => Promise.reject(new Error("ENOTFOUND")),
+  });
+  check("un fallo de DNS se categoriza como red", !dnsFail.ok && dnsFail.error === "red", dnsFail);
+  check("y no viene con status de suscripcion muerta", dnsFail.status === 0);
 
   // SSRF: un endpoint guardado antes de la allowlist no se manda.
   const ssrfEndpoint = { ...subscription, endpoint: "https://127.0.0.1:9/x" };
