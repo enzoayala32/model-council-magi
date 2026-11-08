@@ -1330,10 +1330,11 @@ Ese smoke es la verificación de la aceptación de 4c/4d junta: un dispositivo
 | seg. | `lib/test-remote-doctor.ts` | 65 | `security:test-remote-doctor` |
 | seg. | `lib/test-sse-proxy.ts` | 26 | `security:test-sse-proxy` |
 | seg. | `lib/test-request-proto.ts` | 34 | `security:test-request-proto` |
-| seg. | `lib/test-web-push.ts` | 90 | `security:test-web-push` |
+| seg. | `lib/test-web-push.ts` | 92 | `security:test-web-push` |
 | seg. | `lib/test-push-endpoint.ts` | 78 | `security:test-push-endpoint` |
 | seg. | `lib/test-mcp-client.ts` | 45 | `security:test-mcp-client` |
 | seg. | `lib/test-mcp-loop.ts` | 39 | `security:test-mcp-loop` |
+| seg. | `lib/test-mcp-failclosed.ts` | 61 | `security:test-mcp-failclosed` |
 | seg. | `lib/test-mcp-server.ts` | 53 | `security:test-mcp-server` |
 
 Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar que el tipado no cambió el comportamiento (46 casos entre los cuatro scripts). Fase 4 agrega 245 casos y el total de scripts del runner pasa de 63 a 67. Fase 5 agrega 54 casos con un proveedor falso y el total pasa a 68 scripts. Fase 7 agrega 95 casos (pricing, trazas puras y persistencia en una DB temporal con migración aditiva) y el total pasa a **69 scripts**.
@@ -1919,6 +1920,63 @@ servidor que los necesite debe usar una variable con otro nombre; y lista lo
 que falta (UI de administración de servidores, transport `http` en el loop).
 `docs/ROADMAP.md` y `docs/REPORTE-REFACTOR.md` dicen lo mismo, y los NO
 VERIFICADOS quedaron explícitos (servidores MCP reales de terceros, push real).
+
+## 1J. Misión 2 — correcciones de la revisión, segunda tanda
+
+### Punto 1 — MCP: clasificación lectura/escritura fail-closed
+
+**El bug, reproducido:** `looksWriteCapable` acertaba con ~20 palabras en
+inglés. Los 29 nombres reportados (`post_message`, `deploy`, `restart_service`,
+`kill_process`, `transfer_funds`, `publish`, `commit`, `merge_pull_request`,
+`approve`, `pay_invoice`, `charge_card`, `grant_access`, `revoke_token`,
+`shutdown`, `reboot`, `format_disk`, `drop_table`, `chmod`, `eval`,
+`install_package`, `upload`, `submit`, `click`, `navigate`, `fill_form`,
+`type_text`, `set_config`, `toggle`, `trigger`) se clasificaban como **lectura**
+y se ejecutaban sin ninguna aprobación. El comentario del código decía "si duda,
+escritura", que era exactamente lo contrario de lo que hacía.
+
+**Fix:**
+
+- campo nuevo por servidor, `readOnlyTools` (subconjunto de `tools`): la ÚNICA
+  exención de aprobación. Config sin él = todo con aprobación.
+- `readOnlyHint` del servidor ya no exime nada: el servidor es el no confiable.
+  Solo se muestra en la UI como dato.
+- la heurística sobrevive como **advertencia** (`McpToolRegistry.configWarnings()`):
+  si el operador eximió algo cuyo nombre parece de escritura, se lo dice; no
+  bloquea.
+- `readOnlyTools` que no está en `tools` = error de config (rechazo total).
+
+**Tests:** `lib/test-mcp-failclosed.ts` (**61/61**) con los ~50 nombres
+reportados más los de lectura típicos: por defecto TODOS piden aprobación, y
+solo los listados ejecutan directo. Incluye los casos de config inválida.
+
+### Punto 2 — el código de aprobación ya no viaja al modelo
+
+El resultado de la herramienta devolvía `approvalCode` y el mensaje lo repetía.
+Eso dejaba el código de un solo uso en el historial de mensajes del loop, en el
+event log y en el transcript: quien los leyera podía aprobar sin ser el humano.
+
+Ahora el resultado trae solo `approvalId` y la advertencia de que hay una
+decisión pendiente; el código lo ve el humano en la UI. Verificado por test
+(ningún campo del resultado matchea el formato del código, y el mensaje
+tampoco). De paso, el metadato `mcp` del event log solo se adjunta cuando la
+tool trajo salida real: un resultado "pendiente" no tiene chars ni hash que
+reportar.
+
+**Tests:** `lib/test-mcp-loop.ts` (**43/43**).
+
+### Punto 3 — hermetismo: la suite corre sin red
+
+`lib/test-web-push.ts` hacía DNS real al revalidar el endpoint antes de enviar.
+Ahora el resolver se inyecta en el test, y un fallo de DNS al enviar se
+categoriza como **`red`** (no `rechazado`) con `status: 0`, para que **no**
+desactive la suscripción: el navegador seguiría intentando suscribirse a un
+endpoint válido.
+
+**Aceptación verificada:** la suite completa (**93/93**, exit 0) corre con un
+preload que rompe toda resolución DNS que no sea loopback
+(`NODE_OPTIONS=--require dns-block.js`). Los otros tests que tocan
+`validatePushEndpoint` usan resolución inyectada o `skipDns`.
 
 ## Apéndice — Matriz ruta por scope
 

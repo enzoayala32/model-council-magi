@@ -56,6 +56,8 @@ proyecto.
 | 3.4 `docs/API-AGENTE.md` | **HECHO** |
 | Instalar en Android real / entrar desde otra máquina | **NO VERIFICADO** (sin dispositivo) |
 | Servidores MCP reales de terceros | **NO VERIFICADO** (sin servidor real; los tests usan uno falso por stdio) |
+| Transport `http` de MCP en el loop del agente | **PENDIENTE** (la config lo valida; el cliente del loop solo habla stdio) |
+| UI de administración de servidores MCP (loopback only) | **PENDIENTE** (hoy el JSON se edita a mano, fuera del repo) |
 | Push real de punta a punta (FCM/Mozilla) | **NO VERIFICADO** (sin dispositivo) |
 | Nota: no existe "reanudar" en el servidor; reintentar = crear task nueva | **HECHO** |
 | 4a Tablas + canje con rate limiting + cookie de dispositivo + auditoría | **HECHO** |
@@ -76,8 +78,8 @@ hasta que el usuario lo pruebe; cada fase trae su checklist manual.
 
 | Fase | Qué es | Estado |
 |---|---|---|
-| 7 | Cliente MCP de **solo lectura** + integración al loop (7.4): config validada fuera del repo, allowlist explícita por herramienta, aislamiento de `process.env` para procesos stdio, salida tratada como contenido no confiable | **HECHA** (transport `http` sin conectar al loop) |
-| 8 | Herramientas MCP de escritura **solo con aprobación humana** (código de un solo uso, hash de argumentos, 5 min de vida, UI en PC y `/m`, push `approval.required`) | **HECHA** (salvo UI de administración de servidores) |
+| 7 | Cliente MCP **fail-closed** + integración al loop (7.4): config validada fuera del repo, allowlist explícita por herramienta, `readOnlyTools` como única exención de aprobación, aislamiento de `process.env`, salida tratada como contenido no confiable | **HECHA** (transport `http` sin conectar al loop) |
+| 8 | Herramientas MCP de escritura **solo con aprobación humana** (código de un solo uso, hash de argumentos, 5 min de vida, código que no viaja al modelo, UI en PC y `/m`, push `approval.required`) | **HECHA** (salvo UI de administración de servidores) |
 | 9 | El consejo y el agente como **servidor MCP** (`/api/mcp`), clientes emparejados como dispositivos, sin herramientas de aprobación expuestas | **HECHA** |
 
 Reglas no negociables: la config de MCP vive fuera del repo y nunca se

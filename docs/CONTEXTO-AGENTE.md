@@ -5,21 +5,25 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 ## 1. Fase actual y último commit
 
-- **Misión 2**: Fases 5, 6, 7, 8 y 9 **HECHAS**, con las correcciones de la
-  revisión sobre 5-9 aplicadas. Conectado al producto: push con allowlist de
-  servicios, herramientas MCP en el loop del agente, aprobación humana con
-  step-up y sus rutas. **NO conectado todavía**: transport `http` de MCP (el
-  loop solo habla stdio) y la UI de administración de servidores MCP.
-- Último commit: `6c928e5` — `fase 7.4 y 8: herramientas MCP en el loop del
-  agente y aprobacion humana con step-up`.
+- **Misión 2**: Fases 5, 6, 7, 8 y 9 **HECHAS**, con las dos tandas de
+  correcciones de la revisión aplicadas. Conectado al producto: push con
+  allowlist de servicios, herramientas MCP **fail-closed** en el loop,
+  aprobación humana con step-up y sus rutas.
+  **NO conectado todavía**: transport `http` de MCP (el loop solo habla stdio) y
+  la UI de administración de servidores MCP.
+- Último commit: ver `git log -1` (branch main, pusheado).
 
 ## 2. Estado de verificación (sobre HEAD)
 
 - `npm run typecheck`: exit 0.
 - `npm run lint -- --max-warnings 37`: exit 0 (37 warnings).
-- `npm test`: **92/92 OK** (incluye `security:test-push-endpoint` 78/78,
-  `security:test-web-push` 90/90, `security:test-mcp-client` 45/45,
-  `security:test-mcp-server` 53/53 y `security:test-mcp-loop` 39/39).
+- `npm test`: **93/93 OK** (incluye `security:test-mcp-failclosed` 61/61,
+  `security:test-push-endpoint` 78/78, `security:test-web-push` 92/92,
+  `security:test-mcp-client` 46/46, `security:test-mcp-server` 53/53 y
+  `security:test-mcp-loop` 43/43).
+- **Hermetismo verificado**: la suite corre con un preload que rompe el DNS no
+  loopback (`NODE_OPTIONS=--require dns-block.js`), 93/93 exit 0. Si un test
+  nuevo toca la red, eso falla.
 - Barrido de rutas: `security:test-route-enforcement` 13/13 sobre
   **49 pares ruta+método** con guardia verificada; `security:test-peer-spoof`
   34/34 en verde.
@@ -31,7 +35,7 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 ## 3. Próximos 3 pasos concretos
 
 1. Transport `http` para MCP en el loop (hoy el cliente del agente solo habla
-   stdio; la config acepta http pero no se usa).
+   stdio; la config lo valida pero no se usa).
 2. UI de administración de servidores MCP (loopback only): hoy el JSON se edita
    a mano, fuera del repo.
 3. Verificar en vivo lo NO VERIFICADO de abajo (Android, túnel, push, un
@@ -76,6 +80,14 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
   completo (allowlist + lista de nunca reenviar). `GITHUB_TOKEN` también está en
   la lista: un servidor que lo "necesite" debe usar otra variable con otro
   nombre.
+- **MCP fail-closed**: solo `readOnlyTools` exime de aprobación. El
+  `readOnlyHint` del servidor NO exime (es el no confiable) y la heurística de
+  nombres solo advierte. Una heurística de ~20 palabras clasificaba como lectura
+  `deploy`, `transfer_funds`, `drop_table`... y se ejecutaban sin aprobación.
+- **El código de aprobación no viaja al modelo**: solo `approvalId` + "pendiente".
+  El código lo ve el humano en la UI.
+- **Un fallo de DNS al enviar push es `red`, no `rechazado`**, y con status 0:
+  así no se desactiva una suscripción válida.
 - **La decisión de "herramienta de escritura" es por HERRAMIENTA, no por
   servidor** (`tools/list` + cache). Por servidor, hasta una tool de lectura
   pedía aprobación humana.
