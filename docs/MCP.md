@@ -352,6 +352,10 @@ Reglas, y por qué:
   `confirmToken`, que se compara en tiempo constante contra
   `APP_ACCESS_TOKEN`. Una sesión de operador alcanza para *listar*, no para
   *cambiar*: crear un servidor es un acto distinto.
+  **Si no hay `APP_ACCESS_TOKEN` configurado no se pide**: no habría nada que
+  tipear, y el acceso ya es implícito por peer loopback verificado —que es lo que
+  `requireLocalAccess` comprobó antes de llegar acá—. Sin token, desde un peer
+  remoto o desde un dispositivo emparejado sigue siendo 403.
 - **La config sigue FUERA del repo** (`%APPDATA%\consenso-ia\mcp.json`, o
   `MAGI_MCP_CONFIG`). Nada se commitea, y el agente no puede modificarla.
 - **Escritura atómica con respaldo**: se escribe a un temporal, se renombra, y
