@@ -109,7 +109,9 @@ function baseServer(overrides: Partial<McpServerConfig> = {}): McpServerConfig {
     command: process.execPath,
     args: ["-e", FAKE_SERVER],
     envForward: ["MI_TOKEN_MCP"],
-    tools: ["leer", "envcheck", "repite"],
+    tools: ["leer", "borrar_todo", "envcheck", "repite"],
+    // FAIL-CLOSED: por defecto NINGUNA herramienta queda eximida de aprobación.
+    readOnlyTools: ["leer", "envcheck", "repite"],
     readOnly: false,
     timeoutMs: 5000,
     ...overrides,
@@ -201,8 +203,14 @@ async function main(): Promise<void> {
     check("una herramienta permitida devuelve contenido", lectura.ok === true && lectura.text.includes("contenido leido"));
     check("la salida viene marcada como no confiable", lectura.text.startsWith(UNTRUSTED_PREAMBLE));
 
+    // "borrar_todo" está en `tools` pero NO en `readOnlyTools`: con la regla
+    // fail-closed, exige aprobación antes de llegar al servidor.
     const blocked = await connection.callTool("borrar_todo", {});
-    check("herramienta fuera de la allowlist se rechaza en el cliente", !blocked.ok && (blocked.error ?? "").includes("no permitida"), blocked);
+    check("una herramienta sin declarar de solo lectura exige aprobacion", !blocked.ok && (blocked.error ?? "").includes("aprobación"), blocked);
+
+    // Una que no está en `tools` ni en `readOnlyTools`: allowlist.
+    const notAllowed = await connection.callTool("herramienta_que_no_existe", {});
+    check("herramienta fuera de la allowlist se rechaza en el cliente", !notAllowed.ok && (notAllowed.error ?? "").includes("no permitida"), notAllowed);
 
     const envProbe = await connection.callTool("envcheck", {});
     check("envcheck responde", envProbe.ok === true);

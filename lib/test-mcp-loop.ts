@@ -113,6 +113,8 @@ async function main(): Promise<void> {
           args: ["-e", FAKE],
           envForward: ["VAR_PROPIA_MCP"],
           tools: ["leer", "borrar"],
+          // FAIL-CLOSED: solo "leer" queda eximida de aprobación.
+          readOnlyTools: ["leer"],
           readOnly: false,
           timeoutMs: 8000,
           note: "servidor de prueba",
@@ -163,8 +165,13 @@ async function main(): Promise<void> {
   console.log("\n== herramienta de escritura: espera aprobacion, no ejecuta ==\n");
   const writeResult = await run("mcp__falso__borrar", { ruta: "/tmp/x" });
   check("la de escritura NO se ejecuta", writeResult.ok === true && writeResult.pending === true, writeResult);
-  check("devuelve el codigo de aprobacion", /^[0-9A-F]{4}(-[0-9A-F]{4}){3}$/.test(String(writeResult.approvalCode ?? "")), writeResult.approvalCode);
   check("le avisa al modelo que espere", String(writeResult.message ?? "").includes("PENDIENTE"));
+  // El código de un solo uso NO puede viajar al modelo: si viajara, quedaría en
+  // el historial de mensajes, en el event log y en el transcript.
+  check("el resultado no lleva el codigo de aprobacion", writeResult.approvalCode === undefined, Object.keys(writeResult));
+  check("el resultado no lleva ningun campo que parezca un codigo", !JSON.stringify(writeResult).match(/[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}/), JSON.stringify(writeResult));
+  check("si trae id, es el id de la aprobacion (no el codigo)", typeof writeResult.approvalId === "string" && writeResult.approvalId.length > 10, writeResult.approvalId);
+  check("el mensaje no contiene el codigo", !/[0-9A-F]{4}-[0-9A-F]{4}-/.test(String(writeResult.message ?? "")));
 
   const pendientes = listApprovals().filter((approval) => approval.serverName === "falso");
   check("queda una solicitud pendiente", pendientes.length === 1, pendientes.length);
@@ -176,18 +183,22 @@ async function main(): Promise<void> {
   const consumo = consumeApproval(approval.code, { serverName: "falso", toolName: "borrar", argsHash });
   check("sin aprobar no se puede consumir", !consumo.ok, consumo);
 
-  // El código en claro lo devuelve la tool al crear. Reconsultar no lo recupera
-  // (a propósito: en la DB queda solo el hash).
-  const codigoCreado = String(writeResult.approvalCode ?? "");
-  const reuso = requestApproval({ serverName: "falso", toolName: "borrar", args: { ruta: "/tmp/x" } });
-  check("la misma solicitud se reusa (mismo id)", reuso.id === approval.id);
+  // El código en claro solo lo ve el humano (lo crea la ruta y lo muestra la
+  // UI). Acá se simula esa creación para probar el consumo.
   const { approveApproval } = await import("./mcp/approvals");
-  const decision = approveApproval(codigoCreado, "operador");
+  const reuso = requestApproval({ serverName: "falso", toolName: "borrar", args: { ruta: "/tmp/x" } });
+  check("el mismo pedido reusa la misma solicitud (mismo id)", reuso.id === approval.id);
+  // Con argumentos distintos se crea una nueva, y ESA sí devuelve el código en
+  // claro (única vez): es lo que vería el humano en la UI.
+  const creada = requestApproval({ serverName: "falso", toolName: "borrar", args: { ruta: "/tmp/consumo" } });
+  check("argumentos distintos crean otra solicitud", creada.id !== approval.id && creada.code.length > 0);
+  const decision = approveApproval(creada.code, "operador");
   check("el operador aprueba", decision.ok === true, decision);
 
-  const primero = consumeApproval(codigoCreado, { serverName: "falso", toolName: "borrar", argsHash });
+  const hashConsumo = hashArgs({ ruta: "/tmp/consumo" });
+  const primero = consumeApproval(creada.code, { serverName: "falso", toolName: "borrar", argsHash: hashConsumo });
   check("el primer consumo funciona", primero.ok === true, primero);
-  const segundo = consumeApproval(codigoCreado, { serverName: "falso", toolName: "borrar", argsHash });
+  const segundo = consumeApproval(creada.code, { serverName: "falso", toolName: "borrar", argsHash: hashConsumo });
   check("el segundo consumo falla (un solo uso)", !segundo.ok, segundo);
 
   const otrosArgs = requestApproval({ serverName: "falso", toolName: "borrar", args: { ruta: "/OTRO" } });

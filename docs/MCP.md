@@ -50,6 +50,7 @@ Si el archivo no existe, MCP está desactivado. No es un error.
       "args": ["-y", "algun-mcp"],
       "envForward": ["MI_TOKEN_MCP"],
       "tools": ["leer_cosa", "listar_otra"],
+      "readOnlyTools": ["leer_cosa"],
       "readOnly": true,
       "timeoutMs": 60000,
       "note": "por qué confío en este servidor"
@@ -60,11 +61,17 @@ Si el archivo no existe, MCP está desactivado. No es un error.
       "url": "https://mcp.ejemplo.com/mcp",
       "headersForward": ["TOKEN_MCP"],
       "tools": ["listar"],
+      "readOnlyTools": [],
       "readOnly": true
     }
   ]
 }
 ```
+
+**`readOnlyTools` es la lista que decide qué se ejecuta sin aprobación humana.**
+Tiene que ser subconjunto de `tools`; si listás algo que no está en `tools`, la
+config se rechaza (no se podría llamar de todos modos). **Si la omitís, ninguna
+herramienta queda eximida: todo pide aprobación.**
 
 Validación (todo o nada, nunca a medias):
 
@@ -76,6 +83,7 @@ Validación (todo o nada, nunca a medias):
 | http remoto **solo HTTPS** | los headers suelen ser credenciales |
 | `timeoutMs` entre 1 y 15 min | ni cuelgue ni espera infinita |
 | `tools` es lista de strings | la allowlist es explícita |
+| `readOnlyTools` ⊆ `tools` | eximir una herramienta que no se puede llamar es un error del operador: se rechaza la config |
 
 ## 2bis. Los secretos de la app NO se reenvían (léelo antes de configurar)
 
@@ -121,6 +129,36 @@ tu token de GitHub.
  Los headers de un servidor `http` siguen la misma regla (`headersForward`).
 
 ---
+
+## 2c. FAIL-CLOSED: qué se ejecuta sin aprobación
+
+**Solo lo que el operador escribió en `readOnlyTools`.** Nada más.
+
+Antes la decisión la tomaba una heurística sobre el nombre y la descripción, y
+el comentario del código decía "si duda, escritura" — que era falso: acertaba con
+~20 palabras en inglés y clasificaba como **lectura** herramientas como
+`post_message`, `deploy`, `restart_service`, `kill_process`, `transfer_funds`,
+`publish`, `commit`, `merge_pull_request`, `approve`, `pay_invoice`,
+`charge_card`, `grant_access`, `revoke_token`, `shutdown`, `reboot`,
+`format_disk`, `drop_table`, `chmod`, `eval`, `install_package`, `upload`,
+`submit`, `click`, `navigate`, `fill_form`, `type_text`, `set_config`, `toggle`
+y `trigger`, que se ejecutaban **sin ninguna aprobación**.
+
+Tres consecuencias de la regla nueva:
+
+1. **`readOnlyHint: true` del servidor NO exime.** El servidor es el no
+   confiable: si le creemos lo que dice de sí mismo, un servidor comprometido se
+   declara de solo lectura y hace lo que quiere. El hint se muestra en la UI
+   como dato, nada más.
+2. **La heurística sigue, pero solo para ADVERTIR.** Si eximís una herramienta
+   cuyo nombre parece de escritura, el reporte de config lo dice
+   (`McpToolRegistry.configWarnings()`); no bloquea, decidís vos.
+3. **Config sin `readOnlyTools` = todo con aprobación.** Es lo seguro por
+   defecto: agregar excepciones es un acto deliberado.
+
+El código de un solo uso de la aprobación **no viaja al modelo**: el resultado
+de la herramienta solo dice que quedó pendiente y que un humano la aprueba desde
+la app. El código lo ve el humano en la UI de la PC o de `/m`.
 
 ## 3. Las tres reglas de seguridad
 

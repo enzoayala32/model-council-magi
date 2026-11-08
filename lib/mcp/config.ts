@@ -63,7 +63,19 @@ export type McpServerConfig = {
   headersForward?: string[];
   /** Herramientas permitidas. Vacío = ninguna. */
   tools: string[];
-  /** `false` = puede escribir: sus herramientas de escritura exigen aprobación (Fase 8). */
+  /**
+   * FAIL-CLOSED (corrección de la revisión): las ÚNICAS herramientas que se
+   * ejecutan sin aprobación humana. Todo lo que no esté acá —aunque el
+   * servidor diga que es de solo lectura— exige aprobación.
+   *
+   * Tiene que ser subconjunto de `tools`. Omitida = ninguna herramienta es de
+   * solo lectura: todo pide aprobación.
+   */
+  readOnlyTools: string[];
+  /**
+   * Declaración del SERVIDOR sobre sí mismo. No se usa para autorizar: el
+   * servidor es el no confiable. Solo para mostrarlo en la UI como dato.
+   */
   readOnly: boolean;
   timeoutMs: number;
   /** Nota libre para el operador: por qué este servidor está de confianza. */
@@ -204,6 +216,23 @@ export function validateConfig(raw: unknown, source: string): { ok: true; config
       return fail(source, where + ": \"cwd\" tiene que ser un string.");
     }
 
+    // FAIL-CLOSED: sin `readOnlyTools` explícita, NINGUNA herramienta queda
+    // eximida de aprobación. Una entrada en `readOnlyTools` que no esté en
+    // `tools` es error: el operador creyó eximir algo que no se puede llamar.
+    const readOnlyToolsRaw = asStringArray(server.readOnlyTools, "readOnlyTools", where);
+    if (typeof readOnlyToolsRaw !== "object" || "error" in readOnlyToolsRaw) {
+      return fail(source, (readOnlyToolsRaw as { error: string }).error);
+    }
+    const readOnlyTools = [...new Set(readOnlyToolsRaw as string[])];
+    const toolsList = tools as string[];
+    const fuera = readOnlyTools.filter((toolName) => !toolsList.includes(toolName));
+    if (fuera.length > 0) {
+      return fail(
+        source,
+        where + ': "' + fuera.join('", "') + '" está en readOnlyTools pero no en tools (no se podría llamar).',
+      );
+    }
+
     const readOnly = server.readOnly === false ? false : true;
 
     servers.push({
@@ -215,7 +244,8 @@ export function validateConfig(raw: unknown, source: string): { ok: true; config
       envForward: (envForward as string[]).length > 0 ? (envForward as string[]) : undefined,
       url: typeof server.url === "string" ? server.url.trim() : undefined,
       headersForward: (headersForward as string[]).length > 0 ? (headersForward as string[]) : undefined,
-      tools: tools as string[],
+      tools: toolsList,
+      readOnlyTools,
       readOnly,
       timeoutMs,
       note: typeof server.note === "string" ? server.note.slice(0, 300) : undefined,
@@ -283,4 +313,15 @@ export function httpHeadersFor(config: McpServerConfig, parentEnv: NodeJS.Proces
 /** ¿El servidor permite esta herramienta? Lista cerrada, por nombre exacto. */
 export function isToolAllowed(config: McpServerConfig, toolName: string): boolean {
   return config.tools.includes(toolName);
+}
+
+/**
+ * FAIL-CLOSED: ¿la herramienta queda eximida de aprobación humana?
+ *
+ * SOLO si el operador la listó en `readOnlyTools`. El `readOnlyHint` del
+ * servidor NO cuenta (el servidor es el no confiable), y una heurística de
+ * nombres tampoco puede eximir: solo endurece.
+ */
+export function isDeclaredReadOnly(config: McpServerConfig, toolName: string): boolean {
+  return config.readOnlyTools.includes(toolName);
 }

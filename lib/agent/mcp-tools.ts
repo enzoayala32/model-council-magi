@@ -29,7 +29,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import crypto from "node:crypto";
-import { loadMcpConfig, isToolAllowed, type McpServerConfig } from "../mcp/config";
+import { isDeclaredReadOnly as declaradaSoloLectura, loadMcpConfig, isToolAllowed, type McpServerConfig } from "../mcp/config";
 import { looksWriteCapable, McpStdioConnection, type McpToolInfo } from "../mcp/client";
 import { requestApproval } from "../mcp/approvals";
 import { redactSecrets } from "../provider-resilience/redact";
@@ -52,7 +52,6 @@ type CachedConnection = {
 export class McpToolRegistry {
   private readonly connections = new Map<string, CachedConnection>();
   /** Cache de "esta herramienta puede escribir", por servidor+herramienta. */
-  private readonly writeCache = new Map<string, boolean>();
 
   readonly options: { approvalsEnabled: boolean };
 
@@ -61,28 +60,52 @@ export class McpToolRegistry {
   }
 
   /**
-   * ¿La herramienta puede escribir? Se consulta al servidor (su declaración
-   * manda) y se cachea. Si no se puede conectar, se cae al heuristico sobre el
-   * NOMBRE, que erra hacia el lado de pedir aprobacion.
+   * FAIL-CLOSED: ¿la herramienta queda eximida de aprobación humana?
    *
-   * Se decide por HERRAMIENTA y no por servidor: un servidor puede exponer
-   * `leer` (solo lectura) y `borrar` (escritura) a la vez, y tratar a los dos
-   * igual hacia que hasta una consulta inocente pidiera aprobacion humana.
+   * SOLO si el operador la listó en `readOnlyTools`. Ni el `readOnlyHint` del
+   * servidor (que es el no confiable) ni una heurística de nombres pueden
+   * eximir: antes, la heurística acertaba con ~20 palabras y clasificaba como
+   * lectura cosas como `post_message`, `deploy`, `kill_process` o
+   * `transfer_funds`, que se ejecutaban sin ninguna aprobación.
+   *
+   * La heurística sigue existiendo, pero como ADVERTENCIA: si el operador eximió
+   * una herramienta cuyo nombre parece de escritura, se registra en el reporte
+   * de config para que decida él. Nunca bloquea.
    */
-  async isWriteCapable(server: McpServerConfig, toolName: string): Promise<boolean> {
-    const key = server.name + "|" + toolName;
-    const cached = this.writeCache.get(key);
-    if (cached !== undefined) return cached;
-    let writeCapable = looksWriteCapable(toolName);
-    try {
-      const connection = await this.connectionFor(server);
-      const info = (await connection.listTools()).find((tool) => tool.name === toolName);
-      if (info) writeCapable = info.writeCapable;
-    } catch {
-      // Sin conexion no se puede saber: el heuristico ya erra hacia aprobar.
+  async isDeclaredReadOnly(server: McpServerConfig, toolName: string): Promise<boolean> {
+    return declaradaSoloLectura(server, toolName);
+  }
+
+  /**
+   * Reporte para el operador: herramientas eximidas cuyo nombre o descripción
+   * PARECEN de escritura. No bloquea nada (él ya decidió), pero lo dice.
+   */
+  async configWarnings(): Promise<string[]> {
+    const config = loadMcpConfig();
+    if (!config.ok) return [];
+    const warnings: string[] = [];
+    for (const server of config.config.servers) {
+      for (const toolName of server.readOnlyTools) {
+        if (!looksWriteCapable(toolName)) continue;
+        let description = "";
+        try {
+          const connection = await this.connectionFor(server);
+          description = (await connection.listTools()).find((tool) => tool.name === toolName)?.description ?? "";
+        } catch {
+          // Sin conexión se avisa igual solo con el nombre.
+        }
+        warnings.push(
+          '"' +
+            toolName +
+            '" del servidor "' +
+            server.name +
+            '" está declarada de solo lectura, pero su nombre/descripción parece de escritura' +
+            (description ? " (" + description.slice(0, 60) + ")" : "") +
+            ". Si no es intencional, quitala de readOnlyTools.",
+        );
+      }
     }
-    this.writeCache.set(key, writeCapable);
-    return writeCapable;
+    return warnings;
   }
 
   /** Cierra todas las conexiones (al terminar la corrida). */
@@ -176,12 +199,18 @@ export function createMcpTools(registry: McpToolRegistry): Record<string, McpAge
           fullName,
           async (input) => {
             try {
-              // Por herramienta, no por servidor: un servidor con readOnly
-              // false puede exponer herramientas de lectura.
-              if (await registry.isWriteCapable(server, toolName)) {
+              // FAIL-CLOSED: solo lo que el operador declaró de solo lectura en
+              // la config se ejecuta. Todo lo demás —aunque el servidor jure que
+              // es de lectura— pasa por aprobación humana.
+              if (!(await registry.isDeclaredReadOnly(server, toolName))) {
                 // Escritura: aprobación humana, no ejecución.
                 if (!registry.options.approvalsEnabled) {
-                  return { ok: false, error: "esta herramienta puede escribir y las aprobaciones están desactivadas." };
+                  return {
+                    ok: false,
+                    error:
+                      "la herramienta '" + toolName + "' no está declarada de solo lectura en la config, " +
+                      "así que requiere aprobación humana; pero las aprobaciones están desactivadas.",
+                  };
                 }
                 const approval = requestApproval({
                   serverName: server.name,
@@ -191,14 +220,21 @@ export function createMcpTools(registry: McpToolRegistry): Record<string, McpAge
                 return {
                   ok: true,
                   pending: true,
+                  // El CODIGO de un solo uso NO viaja al modelo. Si fuera parte
+                  // del resultado, quedaría en el historial de mensajes del
+                  // loop, en el event log y en el transcript: cualquiera que los
+                  // lea podría aprobar la herramienta sin ser el humano que
+                  // debía hacerlo. El modelo solo se entera de que hay una
+                  // decisión pendiente; el código lo ve el humano en la UI.
+                  approvalId: approval.id,
                   serverName: server.name,
                   toolName,
-                  approvalCode: approval.code,
-                  expiresAt: approval.expiresAt,
                   message:
-                    "La herramienta '" + toolName + "' puede escribir, así que quedó PENDIENTE de aprobación humana. " +
-                    "Código " + approval.code + " (vence en 5 minutos, un solo uso). " +
-                    "Avisá que hace falta la aprobación y no reintentes: si la aprueban, se ejecuta una sola vez.",
+                    "La herramienta '" + toolName + "' del servidor '" + server.name + "' puede escribir, así que " +
+                    "quedó PENDIENTE de aprobación humana y NO se ejecutó. " +
+                    "Un operador (o un dispositivo con permiso de aprobación) la aprueba desde la app; " +
+                    "si la aprueban, se ejecuta una sola vez. " +
+                    "No reintentes: reintentar crea otra aprobación para la misma acción.",
                 };
               }
 
