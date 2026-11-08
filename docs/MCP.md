@@ -15,8 +15,8 @@ que puedan escribir (Fase 8) y cómo se expone la app como servidor (Fase 9).
 | Servidor MCP propio (`/api/mcp`) | **Conectado**: solo lectura |
 | Aislamiento del entorno del hijo | **Conectado** (tests con servidor real por stdio) |
 | Push al aprobar (`approval.required`) | **Conectado** como evento de push; envío real **NO VERIFICADO** |
-| Cliente HTTP remoto (transport `http`) | **NO conectado al loop**: la config lo acepta y el cliente solo implementa stdio |
-| UI de administración de servidores | **Pendiente**: el JSON se edita a mano (ver sección 7) |
+| Transporte HTTP (`lib/mcp/http-client.ts`) | **Conectado** al loop, con anti-SSRF (sección 6bis) |
+| Administración de servidores (`/api/mcp/servers`) | **Conectado**: solo PC + doble confirmación (sección 6ter) |
 | Servidores MCP reales de terceros | **NO VERIFICADO**: sin un servidor real para probar |
 
 ---
@@ -61,6 +61,7 @@ Si el archivo no existe, MCP está desactivado. No es un error.
       "url": "https://mcp.ejemplo.com/mcp",
       "httpHeaders": { "Authorization": "${MI_TOKEN_MCP}" },
       "tools": ["listar"],
+      "readOnlyTools": ["listar"],
       "readOnlyTools": [],
       "readOnly": true
     }
@@ -331,13 +332,63 @@ token de la cabecera no aparece en la salida.
 
 ---
 
+## 6ter. Administración de servidores (solo desde la PC)
+
+Rutas nuevas, con scope y guardia:
+
+| Ruta | Método | Scope | Restricción extra |
+|---|---|---|---|
+| `/api/mcp/servers` | GET | `approve` | `requireLocalAccess()` |
+| `/api/mcp/servers` | POST | `approve` | `requireLocalAccess()` + **token de operador otra vez** |
+| `/api/mcp/servers` | DELETE | `approve` | `requireLocalAccess()` + **token de operador otra vez** |
+
+Reglas, y por qué:
+
+- **Solo la PC del operador.** `requireLocalAccess()` exige operador (token o
+  sesión) o peer loopback verificado. Un dispositivo emparejado con scope
+  `approve` **no puede**: agregar un servidor stdio equivale a ejecutar un
+  comando en la PC.
+- **Confirmar con el token de acceso otra vez.** El body lleva
+  `confirmToken`, que se compara en tiempo constante contra
+  `APP_ACCESS_TOKEN`. Una sesión de operador alcanza para *listar*, no para
+  *cambiar*: crear un servidor es un acto distinto.
+- **La config sigue FUERA del repo** (`%APPDATA%\consenso-ia\mcp.json`, o
+  `MAGI_MCP_CONFIG`). Nada se commitea, y el agente no puede modificarla.
+- **Escritura atómica con respaldo**: se escribe a un temporal, se renombra, y
+  antes se guarda `<archivo>.bak`. Si algo falla a mitad, la config válida sigue
+  en su lugar.
+- **Se valida antes de escribir**, con el mismo `validateConfig` de la lectura:
+  una config inválida no toca el disco.
+- **Nunca se muestran valores de variables de entorno**: solo las referencias
+  (`${VAR}`), que es lo que hay en el archivo.
+- **El proceso en marcha no recarga solo**: la respuesta lo dice
+  (`needsRestart`). Es a propósito: recargar en caliente permitiría que un
+  servidor recién agregado empezara a ejecutar comandos sin que nadie reinicie
+  nada.
+
+La UI está en `/m/settings` (misma pieza sirve en la PC): lista servidores,
+allowlist, qué está eximido de aprobación, y el formulario con el campo de
+confirmación.
+
+```
+npm run security:test-mcp-admin      # 36 casos
+```
+
+Cubre: lectura/escritura atómica con respaldo, rechazo de config inválida sin
+tocar el disco, dispositivo `approve` recibiendo 403 al listar y al escribir,
+cookie falsa 401/403, doble confirmación (sin token, token equivocado, token
+correcto), y que la config nueva la vea el loop sin reiniciar.
+
+---
+
 ## 7. Lo que falta
 
-- **UI de administración de servidores**: hoy el JSON se edita a mano, fuera del
-  repo (ver sección 1). No hay pantalla para agregar o quitar servidores.
-- **Transport `http` en el loop**: la config lo acepta y valida, pero el cliente
-  que usa el agente solo implementa stdio. Un servidor `http` queda sin uso
-  hasta que se implemente.
+No queda nada pendiente de implementación en MCP. Lo que resta es verificación
+en vivo:
+
+- **Un servidor MCP real de terceros**: los tests usan uno falso local. Falta
+  probar handshake, permisos y timeouts contra uno real.
+- **Android real** para las notificaciones push (ver `docs/ACCESO-REMOTO.md`).
 
 ---
 

@@ -159,6 +159,15 @@ export const ROUTE_RULES: readonly RouteRule[] = [
   { pattern: "/api/mcp/approvals", method: "POST", scope: "approve", stepUp: true, note: "Rechaza una aprobación. step-up desde dispositivo remoto." },
   { pattern: "/api/mcp/approvals/approve", method: "POST", scope: "approve", stepUp: true, note: "Aprueba una herramienta MCP de escritura. step-up desde dispositivo remoto." },
 
+  // ---------- Administración de servidores MCP (Fase 8, solo loopback) ----------
+  // Las tres se restringen ADICIONALMENTE a loopback dentro de la ruta (ver
+  // `requireLocalAccess`): agregar un servidor stdio equivale a ejecutar un
+  // comando en la PC, y eso no se hace desde un teléfono. Un dispositivo
+  // emparejado con scope `approve` NO puede: no es la PC del operador.
+  { pattern: "/api/mcp/servers", method: "GET", scope: "approve", note: "Lista los servidores MCP configurados y sus herramientas. Solo loopback + operador." },
+  { pattern: "/api/mcp/servers", method: "POST", scope: "approve", note: "Crea o actualiza un servidor MCP. Solo loopback + operador + token de nuevo." },
+  { pattern: "/api/mcp/servers", method: "DELETE", scope: "approve", note: "Elimina un servidor MCP. Solo loopback + operador + token de nuevo." },
+
   // ---------- Gestion de dispositivos y auditoria (Fase 4d) ----------
   // Todas se restringen ADICIONALMENTE a loopback dentro de la ruta: ver o
   // cambiar que dispositivos tienen acceso es informacion de la PC. El scope

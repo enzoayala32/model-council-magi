@@ -5,22 +5,25 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 ## 1. Fase actual y último commit
 
-- **Misión 2**: Fases 5, 6, 7, 8 y 9 **HECHAS**, con las dos tandas de
+- **Misión 2**: Fases 5, 6, 7, 8 y 9 **HECHAS**, con las tres tandas de
   correcciones de la revisión aplicadas. Conectado al producto: push con
-  allowlist de servicios, herramientas MCP **fail-closed** en el loop,
-  aprobación humana con step-up y sus rutas.
-  **NO conectado todavía**: transport `http` de MCP (el loop solo habla stdio) y
-  la UI de administración de servidores MCP.
+  allowlist de servicios, herramientas MCP **fail-closed** en el loop (stdio **e
+  http**), aprobación humana con step-up, rutas de aprobación y administración de
+  servidores MCP. **No queda nada pendiente de implementación** en la Misión 2;
+  lo que resta son los NO VERIFICADOS de abajo.
 - Último commit: ver `git log -1` (branch main, pusheado).
 
 ## 2. Estado de verificación (sobre HEAD)
 
 - `npm run typecheck`: exit 0.
 - `npm run lint -- --max-warnings 37`: exit 0 (37 warnings).
-- `npm test`: **93/93 OK** (incluye `security:test-mcp-failclosed` 61/61,
+- `npm test`: **95/95 OK** (incluye `security:test-mcp-failclosed` 61/61,
+  `security:test-mcp-http` 46/46, `security:test-mcp-admin` 36/36,
   `security:test-push-endpoint` 78/78, `security:test-web-push` 92/92,
-  `security:test-mcp-client` 46/46, `security:test-mcp-server` 53/53 y
-  `security:test-mcp-loop` 43/43).
+  `security:test-mcp-client` 48/48, `security:test-mcp-server` 53/53 y
+  `security:test-mcp-loop` 51/51).
+- **Hermetismo verificado**: la suite corre con un preload que rompe el DNS no
+  loopback. Si un test nuevo toca la red, eso falla.
 - **Hermetismo verificado**: la suite corre con un preload que rompe el DNS no
   loopback (`NODE_OPTIONS=--require dns-block.js`), 93/93 exit 0. Si un test
   nuevo toca la red, eso falla.
@@ -34,12 +37,11 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 ## 3. Próximos 3 pasos concretos
 
-1. Transport `http` para MCP en el loop (hoy el cliente del agente solo habla
-   stdio; la config lo valida pero no se usa).
-2. UI de administración de servidores MCP (loopback only): hoy el JSON se edita
-   a mano, fuera del repo.
-3. Verificar en vivo lo NO VERIFICADO de abajo (Android, túnel, push, un
-   servidor MCP real de terceros).
+1. Verificar en vivo lo NO VERIFICADO de abajo, con las checklists manuales.
+2. Si aparece un flaky nuevo: el patrón es el de `agent:test-exec-with-tree-kill`
+   (tiempos fijos con 300ms de margen, que con la suite cargada se pasaban de
+   largo). Reemplazarlos por esperas con sondeo.
+3. Mantener este archivo al cierre de cada sub-bloque.
 
 ## 4. Decisiones vigentes
 
@@ -88,6 +90,12 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
   El código lo ve el humano en la UI.
 - **Un fallo de DNS al enviar push es `red`, no `rechazado`**, y con status 0:
   así no se desactiva una suscripción válida.
+- **En un test que spawn procesos, jamás tiempos fijos con margen chico**: con la
+  suite completa cargada, 2s + 2.3s no alcanzaban y el test fallaba sin bug real.
+- **Una respuesta demasiado grande se corta con ERROR explícito**, no recortando
+  el cuerpo: si se corta a mitad, el JSON queda roto y parece un server roto.
+- **Los fixtures de test van en `lib/test/fixtures/`** (reutilizables por varios
+  tests), no inline en cada archivo: el inline escurría `\n` y rompía el spawn.
 - **La decisión de "herramienta de escritura" es por HERRAMIENTA, no por
   servidor** (`tools/list` + cache). Por servidor, hasta una tool de lectura
   pedía aprobación humana.

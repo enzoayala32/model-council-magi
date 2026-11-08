@@ -1335,6 +1335,8 @@ Ese smoke es la verificación de la aceptación de 4c/4d junta: un dispositivo
 | seg. | `lib/test-mcp-client.ts` | 45 | `security:test-mcp-client` |
 | seg. | `lib/test-mcp-loop.ts` | 39 | `security:test-mcp-loop` |
 | seg. | `lib/test-mcp-failclosed.ts` | 61 | `security:test-mcp-failclosed` |
+| seg. | `lib/test-mcp-http.ts` | 46 | `security:test-mcp-http` |
+| seg. | `lib/test-mcp-admin.ts` | 36 | `security:test-mcp-admin` |
 | seg. | `lib/test-mcp-server.ts` | 53 | `security:test-mcp-server` |
 
 Fase 3 no agrega casos nuevos: reejecuta los harness existentes para demostrar que el tipado no cambió el comportamiento (46 casos entre los cuatro scripts). Fase 4 agrega 245 casos y el total de scripts del runner pasa de 63 a 67. Fase 5 agrega 54 casos con un proveedor falso y el total pasa a 68 scripts. Fase 7 agrega 95 casos (pricing, trazas puras y persistencia en una DB temporal con migración aditiva) y el total pasa a **69 scripts**.
@@ -1977,6 +1979,73 @@ endpoint válido.
 preload que rompe toda resolución DNS que no sea loopback
 (`NODE_OPTIONS=--require dns-block.js`). Los otros tests que tocan
 `validatePushEndpoint` usan resolución inyectada o `skipDns`.
+
+## 1K. Misión 2 — tercer tramo: fail-closed fino, transporte http y administración
+
+### Punto 1 — `readOnlyTools` es la única fuente de verdad
+
+`McpStdioConnection.callTool` seguía teniendo una barrera heurística. Reproducido
+con un servidor real por stdio: con `readOnlyTools = [list_files, get_updates,
+search_created_issues]`, las dos últimas devolvían "puede escribir: requiere
+aprobación humana" y no se ejecutaban. La decisión vivía en dos lugares y
+divergían.
+
+Ahora `callTool` solo verifica la allowlist; la aprobación la decide
+`readOnlyTools`. La heurística queda como **opt-in** para el uso directo de la
+librería (`gateWriteByName: true`), y `configWarnings()` la mantiene como
+adicertencia para el operador. Verificado que el flujo con aprobación sigue
+funcionando y que sin `readOnlyTools` todo sigue pidiendo aprobación.
+
+De paso, dos bugs que aparecieron al mover el fixture reusable: un servidor que
+respondía `null` tiraba el proceso (TypeError en el parseo), y la primera
+versión del cliente http cortaba la respuesta gigante y devolvía un JSON roto —
+ahora cancela la lectura y avisa "respuesta demasiado grande".
+
+**Tests:** `lib/test-mcp-client.ts` (48), `lib/test-mcp-loop.ts` (51),
+`lib/test-mcp-failclosed.ts` (61).
+
+### Punto 2 — transporte http con las mismas garantías
+
+`lib/mcp/http-client.ts` + `lib/mcp/http-transport.ts`. Mismo contrato que
+stdio, así que el loop no distingue el transporte.
+
+- **Config**: `url`, `httpHeaders` con valores **por referencia** a entorno
+  (`"${MI_TOKEN_MCP}"`, nunca en claro; una variable inexistente omite el header
+  y se informa cuál), y `allowInsecureLocal` para `http://` sobre loopback.
+- **Anti-SSRF**: HTTPS siempre (salvo loopback con opt-in explícito), sin
+  credenciales en la URL, **sin redirects**, IPs privadas/link-local/**metadata**
+  rechazadas por literal y por DNS (resolución inyectable), timeout por servidor,
+  **tope de respuesta de 8 MB** (con cancelación de lectura) y **revalidación en
+  cada conexión**.
+- **Lo demás igual que stdio**: fail-closed sobre `readOnlyTools`, salida marcada
+  como no confiable y redactada, y el mismo event log con metadato.
+
+**Tests:** `lib/test-mcp-http.ts` (**46/46**) contra un servidor MCP local, sin
+red externa: lectura ejecuta, escritura pasa por aprobación, redirect rechazado,
+host privado rechazado (por IP y por DNS), respuesta gigante cortada, y que el
+token de la cabecera no aparece en la salida.
+
+### Punto 3 — administración de servidores, solo desde la PC
+
+Rutas `/api/mcp/servers` (GET/POST/DELETE) con scope `approve` +
+`requireLocalAccess()`, escritura desde `lib/mcp/admin-config.ts`:
+
+- **Solo la PC del operador**: un dispositivo emparejado con `approve` recibe
+  403, incluso para listar.
+- **Doble confirmación**: escribir exige `confirmToken`, comparado en **tiempo
+  constante** contra `APP_ACCESS_TOKEN`. (La primera versión aceptaba cualquier
+  string: lo detectó el test.)
+- **Config fuera del repo**, escritura **atómica con respaldo** (`.bak`), y
+  **validación antes de escribir**: una config inválida no toca el disco.
+- **Nunca se muestran valores de variables de entorno**, solo referencias.
+- El proceso en marcha no recarga solo (`needsRestart`): recargar en caliente
+  dejaría que un servidor recién agregado ejecutara comandos sin que nadie
+  reinicie nada.
+
+UI en `/m/settings` (misma pieza en la PC).
+
+**Tests:** `lib/test-mcp-admin.ts` (**36/36**). El barrido de rutas quedó en
+**52 pares ruta+método** con guardia verificada.
 
 ## Apéndice — Matriz ruta por scope
 
