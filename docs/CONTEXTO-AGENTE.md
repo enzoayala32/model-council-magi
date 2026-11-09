@@ -6,7 +6,9 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 ## 1. Fase actual y último commit
 
 - **Misión 2**: Fases 5, 6, 7, 8 y 9 **HECHAS**, con las tres tandas de
-  correcciones de la revisión aplicadas. Conectado al producto: push con
+  correcciones de la revisión aplicadas. Últimas: 4 modelos NVIDIA NIM
+  validados con tool-calling en vivo (step-5-preview entre ellos),
+  composer estilo opencode, y la app como servidor MCP para opencode. Conectado al producto: push con
   allowlist de servicios, herramientas MCP **fail-closed** en el loop (stdio **e
   http**), aprobación humana con step-up, rutas de aprobación y administración de
   servidores MCP. **No queda nada pendiente de implementación** en la Misión 2;
@@ -17,7 +19,7 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 - `npm run typecheck`: exit 0.
 - `npm run lint -- --max-warnings 37`: exit 0 (37 warnings).
-- `npm test`: **95/95 OK** (incluye `security:test-mcp-failclosed` 61/61,
+- `npm test`: **95/95 OK** (incluye `agent:test-web-search-compat` 17/17) (incluye `security:test-mcp-failclosed` 61/61,
   `security:test-mcp-http` 46/46, `security:test-mcp-admin` 36/36,
   `security:test-push-endpoint` 78/78, `security:test-web-push` 92/92,
   `security:test-mcp-client` 48/48, `security:test-mcp-server` 53/53 y
