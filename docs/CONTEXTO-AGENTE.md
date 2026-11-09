@@ -5,6 +5,16 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 ## 1. Fase actual y último commit
 
+- **Etapa 0 (cierre de pendientes de la auditoría): HECHA**, salvo 0.5, que
+  queda **pendiente de aprobación del usuario**. Cerrados: 0.1 (admin MCP solo
+  desde la PC con step-up), 0.2 (hermetismo de los tests de MCP), 0.3 (pin de
+  IP anti-rebinding), 0.4 (docs del subagente opencode, que destapó dos bugs
+  previos: el emparejamiento estaba bloqueado por el proxy y el token de
+  dispositivo solo se leía de cookie), 0.6 (ROADMAP corregido).
+- **No seguir con la Etapa 1** hasta que el usuario lo indique (punto de
+  parada).
+- Último commit: ver `git log -1` (branch main, pusheado).
+
 - **Misión 2**: Fases 5, 6, 7, 8 y 9 **HECHAS**, con las tres tandas de
   correcciones de la revisión aplicadas. Últimas: 4 modelos NVIDIA NIM
   validados con tool-calling en vivo (step-5-preview entre ellos),

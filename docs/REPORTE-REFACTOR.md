@@ -2047,6 +2047,105 @@ UI en `/m/settings` (misma pieza en la PC).
 **Tests:** `lib/test-mcp-admin.ts` (**36/36**). El barrido de rutas quedó en
 **52 pares ruta+método** con guardia verificada.
 
+## 2A. Etapa 0 — cierre de pendientes de la auditoría
+
+Cinco sub-bloques, cada uno con su commit, su test y su verificación real.
+
+### 0.1 — La administración de servidores MCP no estaba restringida a la PC
+
+**El bug, reproducido contra el server real** (modo LAN, desde la IP de LAN):
+`POST /api/mcp/servers` con `Authorization: Bearer <APP_ACCESS_TOKEN>` y
+`confirmToken` dio de alta un servidor **stdio** con `command: "/bin/sh"`,
+`args: ["-c", "id"]` y respondió **200**. Es decir: un operador remoto podía
+hacer que la PC ejecutara comandos. La ruta tenía `requireLocalAccess()`, pero
+ese helper deja pasar al operador desde cualquier peer ("es su secreto").
+
+**Fix:** dos categorías con exigencia distinta.
+
+| Qué se cambia | Qué exige |
+|---|---|
+| `command`, `args`, `envForward`, `url`, `httpHeaders`, `allowInsecureLocal` | peer **loopback verificado** + **step-up vigente** + token de operador |
+| `tools`, `readOnlyTools`, `note` | operador + `confirmToken` |
+| crear un servidor (siempre puede ejecutar) | igual que la fila peligrosa |
+
+Y en **modo LAN o con `ALLOWED_HOSTS` no loopback**, la administración de
+servidores queda deshabilitada desde afuera salvo `MCP_ADMIN_ALLOW_REMOTE=1`
+(riesgo documentado en `docs/MCP.md`).
+
+**Verificado:** el ataque original ahora da 403; el listado remoto en LAN da
+403; desde loopback un cambio peligroso sin step-up da 403 con
+`reason: "step_up_requerido"`. Tests: `lib/test-mcp-admin-lockdown.ts`
+**19/19**.
+
+### 0.2 — Hermetismo: los tests de MCP leían la config real
+
+`createMcpTools()` llama a `loadMcpConfig()` sin ruta, que cae al directorio de
+configuración del USUARIO. Varios tests lo hacían sin fijar
+`MAGI_MCP_CONFIG`. Peor: al reproducir el bug 0.1, la petición llegó a
+**escribir** un servidor `/bin/sh -c id` en `%APPDATA%\consenso-ia\mcp.json`
+real. (Se borró.)
+
+**Fix:**
+- `lib/test/fixtures/guard-mcp-config.js`: preload que hace **fallar** cualquier
+  acceso a la ruta real de config (lectura, escritura, y también `.bak`).
+- El runner (**`scripts/run-tests.ts`**) propaga la guardia vía `NODE_OPTIONS`
+  **y** asigna a cada test su propio `MAGI_MCP_CONFIG` temporal.
+
+**Verificado:** la guardia detectó dos tests reales que leían la config
+(`agent:test-web-search-compat`, `agent:test-web-search-tool`), que ahora
+quedaron aislados. Suite completa con la guardia activa: **97/97**, y la config
+real intacta. Tests: `lib/test-mcp-guard.ts` **8/8**.
+
+### 0.3 — Pin de IP en el transporte HTTP de MCP (anti DNS rebinding)
+
+La ventana: `validateHttpTransport()` resolvía el hostname para validarlo, y
+después `fetch(url)` **volvía a resolver**. Un atacante podía responder con una
+IP pública en la validación y una privada en la petición.
+
+**Fix:** `lib/mcp/pinned-http.ts` resuelve **una sola vez** y conecta a ESA IP,
+poniendo a mano el header `Host` y el `servername` del SNI con el nombre
+original. Sin librerías: `node:https` acepta `hostname` y `servername` separados.
+
+**Dos bugs que aparecieron al implementarlo:**
+1. `postPinned` seguía resolviendo dos veces (la validación + el pin) — la
+   ventana seguía abierta. Ahora la validación acepta `skipDns` y las
+   direcciones se validan aparte.
+2. Un header a medias hacía que el test se recursara sin fin (el interceptor
+   delegaba con el mismo `requestImpl`).
+
+**Verificado:** el pin toma la PRIMERA ip resuelta; si la segunda resolución da
+una IP privada, se rechaza; si da otra pública, el pin la ignora. Tests:
+`lib/test-mcp-http.ts` **55/55**.
+
+### 0.4 — Docs del subagente opencode (y dos bugs previos que destapó)
+
+El ejemplo usaba el token maestro. Se reescribió para usar un **dispositivo
+emparejado scope `observe`**, con el paso a paso del emparejado y la advertencia
+contra pasar `APP_ACCESS_TOKEN` a clientes externos.
+
+**Dos bugs reales que salieron de verificar el flujo contra el server real:**
+
+1. **El emparejamiento era imposible con `APP_ACCESS_TOKEN` configurado.**
+   `POST /api/pairing/redeem` daba 403 "Token de acceso ausente o inválido"
+   desde CUALQUIER peer, incluso loopback: el proxy exigía el token antes de que
+   el cliente tuviera ninguna credencial — justo lo que viene a buscar.
+   **Fix:** esas dos rutas quedaron exentas en el proxy (se protegen solas:
+   código de un solo uso, TTL de 5 min, rate limiting estricto).
+2. **El token de dispositivo solo se leía de la cookie.** Un cliente sin cookies
+   (CLI, SDK, opencode) no tenía forma de autenticarse. **Fix:** también por
+   header `x-magi-device-token`, en `readDeviceToken`, en el proxy y en el
+   bypass de exentos.
+
+**Verificado de punta a punta:** generar código → canjear **sin credencial** →
+token en `Set-Cookie` → handshake MCP con el header → `tools/list` con el
+dispositivo. Tests: `security:test-proxy` **85/85** y `security:test-devices`
+**88/88**.
+
+### 0.6 — ROADMAP corregido
+
+Filas sin columna de estado, conteos viejos de tests y secciones mezcladas. Se
+reordenó y se agregó la tabla de la Etapa 0 con evidencia por ítem.
+
 ## Apéndice — Matriz ruta por scope
 
 Las 35 rutas (39 handlers). Todas pasan por `guardRequest`; verificado por

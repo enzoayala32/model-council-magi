@@ -85,6 +85,31 @@ hasta que el usuario lo pruebe; cada fase trae su checklist manual.
 | 8 | Herramientas MCP de escritura **solo con aprobación humana** (código de un solo uso, hash de argumentos, 5 min de vida, código que no viaja al modelo, UI en PC y `/m`, push `approval.required`) + administración de servidores solo desde la PC con doble confirmación | **HECHA** |
 | 9 | El consejo y el agente como **servidor MCP** (`/api/mcp`), clientes emparejados como dispositivos, sin herramientas de aprobación expuestas | **HECHA** |
 
+## 4C. Misión 2 — Etapa 0, cierre de pendientes (auditoría)
+
+| Ítem | Estado | Evidencia |
+|---|---|---|
+| 0.1 Alta/cambio de servidores MCP restringida a la PC | **HECHA** | Reproducido el ataque (operador remoto + Bearer + confirmToken daba de alta `/bin/sh` → 200). Ahora: loopback verificado + **step-up** para `command`/`args`/`env`/`url`; en modo LAN deshabilitado salvo `MCP_ADMIN_ALLOW_REMOTE=1`. `lib/test-mcp-admin-lockdown.ts` 19/19 |
+| 0.2 Hermetismo de los tests de MCP | **HECHA** | Guardia `lib/test/fixtures/guard-mcp-config.js` + aislamiento en el runner. Detectó que **varios** tests leían la config real. `lib/test-mcp-guard.ts` 8/8 |
+| 0.3 Pin de IP en el transporte HTTP de MCP | **HECHA** | Anti DNS-rebinding: se resuelve UNA vez y se conecta a esa IP con Host/SNI originales. `lib/test-mcp-http.ts` 55/55 |
+| 0.4 Docs del subagente opencode con dispositivo emparejado | **HECHA** | `docs/OPENCODE-SUBAGENTE.md`. **Destapó dos bugs previos**: el canje de emparejamiento estaba bloqueado por el proxy para TODOS (403), y el token de dispositivo solo se leía de cookie |
+| 0.5 Fase 8G (cierre del Context Engine) | **PENDIENTE DE APROBACIÓN DEL USUARIO** | El governor del historial sigue APAGADO por defecto; ver `docs/CONTEXTO-AGENTE.md` |
+| 0.6 ROADMAP corregido (estados + evidencia) | **HECHA** | Esta tabla |
+
+### Los dos bugs que destapó 0.4 (arreglados)
+
+1. **El emparejamiento era imposible con `APP_ACCESS_TOKEN` configurado.** El
+   proxy exigía el token antes de que el cliente tuviera ninguna credencial
+   —justo lo que viene a buscar—, así que `POST /api/pairing/redeem` daba 403
+   desde CUALQUIER peer, incluso loopback. Ahora esas dos rutas son exentas
+   (se protegen solas: código de un solo uso, TTL de 5 min, rate limiting).
+2. **El token de dispositivo solo se aceptaba por cookie.** Un cliente sin
+   cookies (CLI, SDK, opencode) no tenía forma de autenticarse. Ahora también
+   por header `x-magi-device-token`.
+
+Verificado de punta a punta contra el server real: generar código → canjear sin
+credencial → token en `Set-Cookie` → handshake MCP con el header.
+
 Reglas no negociables: la config de MCP vive fuera del repo y nunca se
 lee del workspace del agente (un repo clonado no puede registrar comandos
 que se ejecuten); la salida de herramientas MCP es dato, no instrucción.
