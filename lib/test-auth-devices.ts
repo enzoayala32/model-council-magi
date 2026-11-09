@@ -27,6 +27,7 @@ import {
   setDeviceScope,
   touchDevice,
 } from "./auth/devices";
+import { readDeviceToken } from "./auth/cookie";
 import {
   DEFAULT_PAIRING_TTL_MS,
   countPairingCodes,
@@ -70,6 +71,36 @@ function check(label: string, ok: boolean, detail?: unknown): void {
 function cookieFor(token: string): string {
   return `${DEVICE_COOKIE}=${encodeURIComponent(token)}`;
 }
+
+  console.log("\n== token de dispositivo por header (Etapa 0.4) ==\n");
+  {
+    const valor = "a".repeat(64);
+    const otro = "b".repeat(64);
+    const conCookie = { headers: { get: (n: string) => (n === "cookie" ? "magi_device_token=" + valor : null) } };
+    check("se lee de la cookie", readDeviceToken(conCookie) === valor);
+    const conHeader = {
+      headers: {
+        get: (n: string) =>
+          n === "cookie" ? null : n === "x-magi-device-token" ? otro : null,
+      },
+    };
+    check("y tambien del header (clientes sin cookies)", readDeviceToken(conHeader) === otro);
+    const ambos = {
+      headers: {
+        get: (n: string) =>
+          n === "cookie" ? "magi_device_token=" + valor : n === "x-magi-device-token" ? otro : null,
+      },
+    };
+    check("la cookie gana si estan las dos", readDeviceToken(ambos) === valor);
+    check("sin nada, null", readDeviceToken({ headers: { get: () => null } }) === null);
+    const headerVacio = {
+      headers: {
+        get: (n: string) =>
+          n === "cookie" ? null : n === "x-magi-device-token" ? "" : null,
+      },
+    };
+    check("header vacio no cuenta", readDeviceToken(headerVacio) === null);
+  }
 
 async function main(): Promise<void> {
   const inheritedDataDir = process.env.MAGI_DATA_DIR?.trim();

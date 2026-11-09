@@ -38,8 +38,17 @@ export function clearDeviceCookie(): string {
   return `${DEVICE_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict`;
 }
 
-/** Token de dispositivo desde el header Cookie, o null. */
+/**
+ * Header alternativo para clientes que no manejan cookies (CLI, SDK, opencode).
+ * Aportado en la Etapa 0.4: la guía de subagente prometía un header que no
+ * existía — el token de dispositivo solo se leía de la cookie.
+ */
+export const DEVICE_TOKEN_HEADER = "x-magi-device-token";
+
+/** Token de dispositivo desde la cookie, o desde el header si no hay cookie. */
 export function readDeviceToken(request: { headers: { get(name: string): string | null } }): string | null {
-  const raw = readCookie(request.headers.get("cookie"), DEVICE_COOKIE);
-  return raw && raw.trim() ? raw.trim() : null;
+  const desdeCookie = readCookie(request.headers.get("cookie"), DEVICE_COOKIE);
+  if (desdeCookie && desdeCookie.trim()) return desdeCookie.trim();
+  const desdeHeader = request.headers.get(DEVICE_TOKEN_HEADER);
+  return desdeHeader && desdeHeader.trim() ? desdeHeader.trim() : null;
 }

@@ -391,6 +391,36 @@ async function main(): Promise<void> {
   check("con token de la app sigue funcionando igual", isOk(decide({ authorization: "Bearer secreto" }, { APP_ACCESS_TOKEN: "secreto" })));
   check("sin nada, sigue bloqueado", isFailure(decide({}, { APP_ACCESS_TOKEN: "secreto" }), "token", 403));
 
+  // Etapa 0.4: el emparejamiento tiene que fluir SIN credencial. El cliente
+  // (el teléfono, el CLI, opencode) todavía no tiene ninguna —para eso
+  // viene—. Antes el proxy le exigía APP_ACCESS_TOKEN y el canje daba 403
+  // "Token de acceso ausente o inválido" desde cualquier peer, incluso
+  // loopback: el flujo de emparejamiento era imposible con token configurado.
+  // La ruta se protege con código de un solo uso + TTL + rate limiting.
+  // Host remoto válido: si no está en ALLOWED_HOSTS el rechazo sería por host,
+  // no por token, y el test no probaría lo que dice probar.
+  const emparejar = { host: "app.local:3000", origin: "http://app.local:3000", secFetchSite: "same-origin" };
+  check(
+    "POST /api/pairing sin credencial pasa el proxy (exento)",
+    isOk(decide({ ...emparejar, tokenExempt: true }, { ALLOWED_HOSTS: "app.local:3000", APP_ACCESS_TOKEN: "secreto" })),
+  );
+  check(
+    "POST /api/pairing/redeem sin credencial pasa el proxy (exento)",
+    isOk(decide({ ...emparejar, tokenExempt: true }, { ALLOWED_HOSTS: "app.local:3000", APP_ACCESS_TOKEN: "secreto" })),
+  );
+  check(
+    "pero SIN la exención, sigue bloqueado (no se coló por accidente)",
+    isFailure(decide(emparejar, { ALLOWED_HOSTS: "app.local:3000", APP_ACCESS_TOKEN: "secreto" }), "token", 403),
+  );
+  check(
+    "el header de dispositivo también es credencial suficiente para el proxy",
+    isOk(decide({ deviceTokenHeader: "x".repeat(64) }, { APP_ACCESS_TOKEN: "secreto" })),
+  );
+  check(
+    "header de dispositivo vacío no cuenta",
+    isFailure(decide({ deviceTokenHeader: "   " }, { APP_ACCESS_TOKEN: "secreto" }), "token", 403),
+  );
+
   console.log(`\n${passed}/${passed + failed} casos OK`);
   if (failed > 0) process.exit(1);
 }

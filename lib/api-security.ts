@@ -33,6 +33,8 @@ export type ApiSecurityRequest = {
   contentType?: string | null;
   authorization?: string | null;
   cookie?: string | null;
+  /** Header `x-magi-device-token` (clientes sin cookies). */
+  deviceTokenHeader?: string | null;
   /** El proxy lo calcula con Content-Length / Transfer-Encoding. */
   hasBody: boolean;
   /** Rutas como el login del token: se saltan el chequeo de token (no
@@ -277,6 +279,7 @@ function hasAnyCredential(request: ApiSecurityRequest, env: ApiSecurityEnv): boo
   if (env.APP_ACCESS_TOKEN?.trim()) return true;
   if (readCookie(request.cookie ?? null, TOKEN_COOKIE)) return true;
   if (readCookie(request.cookie ?? null, DEVICE_COOKIE)) return true;
+  if ((request.deviceTokenHeader ?? "").trim()) return true;
   if (readCookie(request.cookie ?? null, OPERATOR_SESSION_COOKIE)) return true;
   return false;
 }
@@ -349,9 +352,15 @@ export function evaluateApiRequest(
   // El proxy no puede (ni debe) consultar la DB: si hay una cookie de
   // dispositivo o de sesión de operador, la deja pasar y la validación real
   // la hace la ruta (`lib/auth/guard.ts` / `lib/auth/operator.ts`).
+  // Etapa 0.4: el token de dispositivo también puede llegar por HEADER
+  // (`x-magi-device-token`), que es lo que usan los clientes sin cookies
+  // (CLI, SDK, opencode como subagente). El proxy NO lo valida —no puede
+  // tocar la DB—: solo lo deja pasar, igual que con la cookie. La validación
+  // real la hace `lib/auth/authorize.ts` vía `readDeviceToken`.
   const deviceCookie = readCookie(request.cookie ?? null, DEVICE_COOKIE);
+  const deviceHeader = (request.deviceTokenHeader ?? "").trim();
   const sessionCookie = readCookie(request.cookie ?? null, OPERATOR_SESSION_COOKIE);
-  if (token && !request.tokenExempt && !deviceCookie && !sessionCookie) {
+  if (token && !request.tokenExempt && !deviceCookie && !deviceHeader && !sessionCookie) {
     const bearer = readBearer(request.authorization ?? null);
     const cookie = readCookie(request.cookie ?? null, TOKEN_COOKIE);
     const bearerOk = bearer !== null && constantTimeEqual(bearer, token);

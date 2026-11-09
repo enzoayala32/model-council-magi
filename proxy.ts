@@ -9,7 +9,25 @@ import { evaluateApiRequest } from "./lib/api-security";
  * Se compara por prefijo exacto de segmento (no `startsWith` suelto) para
  * que `/api/auth/tokenX` no quede exento por accidente.
  */
-const TOKEN_EXEMPT_PATHS = ["/api/auth/token"] as const;
+/**
+ * Rutas que se autentican SOLAS y por eso no deben pasar por la exigencia de
+ * token del proxy:
+ *
+ * - `/api/auth/token`: es el login. Exigirle credencial sería circular.
+ * - `/api/pairing` y `/api/pairing/redeem`: el emparejamiento. El cliente
+ *   (el teléfono) TODAVÍA NO TIENE ninguna credencial —para eso viene—, así
+ *   que pedirle `APP_ACCESS_TOKEN` hacía imposible el flujo. La ruta se
+ *   protege con un código de un solo uso, TTL de 5 minutos y rate limiting
+ *   estricto con bloqueo progresivo.
+ *
+ * Verificado contra el server real en la Etapa 0.4: sin esta exención, el
+ * canje devolvía 403 "Token de acceso ausente o inválido" desde CUALQUIER peer.
+ */
+const TOKEN_EXEMPT_PATHS = [
+  "/api/auth/token",
+  "/api/pairing",
+  "/api/pairing/redeem",
+] as const;
 
 function isTokenExempt(pathname: string): boolean {
   return TOKEN_EXEMPT_PATHS.some((path) => pathname === path);
@@ -39,6 +57,7 @@ export function proxy(request: NextRequest) {
       contentType: request.headers.get("content-type"),
       authorization: request.headers.get("authorization"),
       cookie: request.headers.get("cookie"),
+      deviceTokenHeader: request.headers.get("x-magi-device-token"),
       hasBody,
       tokenExempt: isTokenExempt(request.nextUrl.pathname),
     },
