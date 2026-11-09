@@ -372,6 +372,7 @@ docs/ROADMAP.md                   # estado de cada frente (consejo, agente, remo
 docs/API-AGENTE.md                # contrato de las rutas que consume la PWA /m
 docs/ACCESO-REMOTO.md             # LAN, Tailscale, Cloudflare, doctor y advertencias de HTTP
 docs/MCP.md                      # servidores MCP: config fuera del repo, allowlist y entorno aislado
+docs/OPENCODE-SUBAGENTE.md        # usar esta app como servidor MCP desde opencode
 ```
 
 Los archivos `test-*.ts` viven junto al módulo que prueban (`lib/`, `lib/agent/`, `lib/agent/autonomy/`, `lib/agent/context/`, `lib/provider-resilience/`) y se ejecutan con `tsx` vía scripts de `package.json`.
