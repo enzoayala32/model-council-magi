@@ -293,9 +293,7 @@ async function main(): Promise<void> {
 
     console.log("\n--- Items: DONE y evidencia ---");
     const t1 = activePlan.items.find((item) => item.logicalId === "t1")!;
-    const t2 = activePlan.items.find((item) => item.logicalId === "t2")!;
-    const t3 = activePlan.items.find((item) => item.logicalId === "t3")!;
-    const t4 = activePlan.items.find((item) => item.logicalId === "t4")!;
+    check(t1 !== undefined, "t1 existe en el plan");
 
     const t1Start = await ledger.updatePlanItem({ runId: run.id, itemId: "t1", status: "IN_PROGRESS" });
     check(t1Start.ok, "t1 → IN_PROGRESS");

@@ -26,9 +26,9 @@
  *   la ruta (nunca `localeCompare`, que depende del locale de la máquina).
  */
 import type { RepoMapSnapshotData } from "../repo-map-views";
-import type { FileAnalysis, SymbolInfo } from "../repo-symbols";
+import type { FileAnalysis } from "../repo-symbols";
 import { filterSensitivePaths, sensitiveRuleOf, type SensitivePathExclusion } from "./sensitive-paths";
-import { scanTask, type PathMention, type TaskScan } from "./signals";
+import { scanTask, type TaskScan } from "./signals";
 
 export const SIGNAL_WEIGHTS = {
   explicitExactPath: 100,
@@ -141,10 +141,6 @@ function stripExtension(path: string): string {
   const base = basenameOf(path);
   const ext = extensionOf(path);
   return ext ? base.slice(0, -ext.length) : base;
-}
-
-function reasonKey(reason: ContextReason): string {
-  return `${reason.signal}:${reason.weight}:${reason.detail ?? ""}`;
 }
 
 function sortReasons(reasons: ContextReason[]): ContextReason[] {
@@ -281,7 +277,6 @@ export function selectContext(input: SelectContextInput): ContextSelection {
   const analyzableFiles = allowed.filter((file) => !file.skipped).length;
 
   const analyses = [...(input.snapshot.analysis?.files ?? [])].filter((analysis) => knownPaths.has(analysis.path));
-  const analysisByPath = new Map(analyses.map((analysis) => [analysis.path, analysis]));
   const symbolIndex = buildSymbolIndex(analyses);
   const graph = buildGraphIndex(input.snapshot);
   const testPairIndex = buildTestPairIndex([...knownPaths]);

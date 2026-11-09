@@ -367,7 +367,6 @@ export default function Home() {
               query={query}
               setQuery={setQuery}
               councilEnabled={councilEnabled}
-              setCouncilEnabled={setCouncilEnabled}
               enterSearchMode={enterSearchMode}
               enterCouncilMode={enterCouncilMode}
               webGrounding={webGrounding}
@@ -389,6 +388,12 @@ export default function Home() {
               onOpenSettings={() => {
                 setSettingsTab("connectors");
                 setSettingsOpen(true);
+              }}
+              onNewThread={() => {
+                // /nuevo debe crear un hilo vacío SIN recargar la página: si
+                // recargara, se perderían los borradores de los otros hilos.
+                startNewThread();
+                setMenuOpen(false);
               }}
               onFilesSelected={async (files) => {
                 const uploads = await readUploads(files);

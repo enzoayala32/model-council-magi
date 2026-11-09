@@ -12,7 +12,7 @@
  *
  * Uso: npm run provider-resilience:test-classify
  */
-import { classifyProviderError, credentialOutcomeForError, isAuthFailure, type ProviderErrorInput } from "./classify";
+import { classifyProviderError, credentialOutcomeForError, isAuthFailure } from "./classify";
 import { computeCooldownMs } from "./cooldown";
 import { CredentialPool, type CredentialEntry } from "./pool";
 

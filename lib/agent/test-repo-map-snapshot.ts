@@ -60,7 +60,7 @@ async function main() {
   console.log("--- Caché compartida con repo_map ---");
   {
     const pipeline = instantPipeline();
-    const { tracker, service } = setup(pipeline.pipeline);
+    const { service } = setup(pipeline.pipeline);
     const first = await service.getSnapshot();
     check(first.ok === true && first.cache === "rebuilt" && first.generation === 0 && first.attempts === 1, "primer snapshot: rebuilt, generación 0, 1 intento", () => first);
     if (!first.ok) throw new Error("snapshot inesperadamente fallido");

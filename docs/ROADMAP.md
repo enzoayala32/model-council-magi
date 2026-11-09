@@ -95,6 +95,9 @@ hasta que el usuario lo pruebe; cada fase trae su checklist manual.
 | 0.4 Docs del subagente opencode con dispositivo emparejado | **HECHA** | `docs/OPENCODE-SUBAGENTE.md`. **Destapó dos bugs previos**: el canje de emparejamiento estaba bloqueado por el proxy para TODOS (403), y el token de dispositivo solo se leía de cookie |
 | 0.5 Fase 8G (cierre del Context Engine) | **PENDIENTE DE APROBACIÓN DEL USUARIO** | El governor del historial sigue APAGADO por defecto; ver `docs/CONTEXTO-AGENTE.md` |
 | 0.6 ROADMAP corregido (estados + evidencia) | **HECHA** | Esta tabla |
+| 0.7 Tests del composer (crecimiento, paleta, drag & drop) | **HECHA** | `lib/agent/test-composer.ts` 22/22 |
+| 0.8 `/nuevo` sin recargar la página | **HECHA** | Usa `startNewThread()`; ver Commit |
+| Tope de warnings: 37 → 10 | **HECHA** | `.github/workflows/ci.yml`, `scripts/run-tests.ts` |
 
 ### Los dos bugs que destapó 0.4 (arreglados)
 
@@ -138,7 +141,7 @@ que se ejecuten); la salida de herramientas MCP es dato, no instrucción.
 | WebAuthn / passkeys como segundo factor | **BACKLOG** | El step-up usa TOTP por ahora (sin dependencias). Passkeys es mejor UX pero más superficie. |
 | Retención automática de la DB (poda de corridas/eventos viejos) | **BACKLOG** | Hoy se borra a mano por API (`DELETE /api/council/runs/[id]`). |
 | Dividir `dispatcher.ts` y `ledger.ts` | **BACKLOG** (plan listo) | Orden y módulos en `docs/ARQUITECTURA-AGENTE.md`. |
-| Bajar el tope de warnings de ESLint (hoy 37) | **BACKLOG** | 27 `no-unused-vars`, 8 `set-state-in-effect`, 2 `<img>`. |
+| Bajar el tope de warnings de ESLint | **HECHA** — de 37 a 10 | 27 `no-unused-vars` reales borrados + `argsIgnorePattern: ^_`; quedan 8 `set-state-in-effect` y 2 `<img>` |
 
 ---
 

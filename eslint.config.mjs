@@ -15,6 +15,19 @@ export default defineConfig([
       // Marca inicializaciones legítimas desde localStorage/SSE. No se cambia
       // comportamiento en Fase 2; la Fase 5 refactoriza page.tsx y hooks.
       "react-hooks/set-state-in-effect": "warn",
+      // Convención del repo: `_nombre` en una desestructuración es "lo descarto
+      // a propósito" (quitar un campo de un objeto, ignorar un parámetro que
+      // exige la firma). Sin este ignore, cada uno de esos casos contaba como
+      // warning y el tope medía ruido en lugar de deuda real.
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+          destructuredArrayIgnorePattern: "^_",
+        },
+      ],
     },
   },
   globalIgnores([

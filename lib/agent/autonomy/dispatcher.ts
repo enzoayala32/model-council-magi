@@ -67,7 +67,6 @@ import {
   resolveTaskOutcome,
   type AutonomyBudget,
   type AutonomyLimits,
-  type AutonomyState,
   type AutonomyStopReason,
   type AutonomyTaskOutcome,
   type AutonomyTerminalState,
@@ -91,10 +90,9 @@ import {
   type AgentStepAction,
   type FileCheckpointInput,
   type PersistedPlan,
-  type PersistedPlanItem,
   type RecordVerificationInput,
 } from "./ledger";
-import { buildFinalReport, type FinalReport } from "./final-report";
+import { buildFinalReport } from "./final-report";
 import {
   buildFallbackPlan,
   describeCriterion,

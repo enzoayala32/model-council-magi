@@ -172,6 +172,9 @@ async function main(): Promise<void> {
           // pasa tal cual, `postPinned` vuelve a llamar a este mismo
           // interceptor y se recursiona sin fin.
           const { requestImpl: _omitido, ...resto } = opts;
+          // El `void` documenta que descartar el campo es deliberado (evita la
+          // recursión), no un olvido.
+          void _omitido;
           return real.postPinned(pinned, resto);
         },
       },

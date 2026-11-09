@@ -299,7 +299,7 @@ function runOne(
 
   // Tope de warnings: si la deuda de lint crece, esto falla. El número sale
   // del tope real de hoy; se baja a medida que se limpia cada regla.
-  const maxWarnings = process.env.MAX_WARNINGS ?? "37";
+  const maxWarnings = process.env.MAX_WARNINGS ?? "10";
   console.log(`
 === Lint (--max-warnings=${maxWarnings}) ===`);
   const lint = await new Promise<{ code: number | null }>((resolve) => {

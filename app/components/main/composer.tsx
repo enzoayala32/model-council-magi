@@ -80,20 +80,19 @@ export function FollowUpComposer({
    ========================================================= */
 
 export function CouncilComposer({
-  query, setQuery, councilEnabled, setCouncilEnabled, enterSearchMode, enterCouncilMode,
+  query, setQuery, councilEnabled, enterSearchMode, enterCouncilMode,
   webGrounding, toggleWebGrounding,
   menuOpen, setMenuOpen,
   selectorOpen, setSelectorOpen,
   selectedCount, selectedFusionPanelId, applyFusionPanel, models, toggleModel, cycleReasoningEffort,
   selectTopThree, attachments, agentSkills,
-  imageGenerationEnabled, onOpenSettings,
+  imageGenerationEnabled, onOpenSettings, onNewThread,
   onFilesSelected, onRemoveAttachment, runCouncil, modelHealth,
   pingStatus, pinging, onPingModels,
 }: {
   query: string;
   setQuery: (value: string) => void;
   councilEnabled: boolean;
-  setCouncilEnabled: (value: boolean) => void;
   enterSearchMode: () => void;
   enterCouncilMode: () => void;
   webGrounding: boolean;
@@ -113,6 +112,8 @@ export function CouncilComposer({
   agentSkills: AgentSkill[];
   imageGenerationEnabled: boolean;
   onOpenSettings: () => void;
+  /** Crea un hilo nuevo. NO recarga la página (ver /nuevo). */
+  onNewThread: () => void;
   onFilesSelected: (files: FileList) => void | Promise<void>;
   onRemoveAttachment: (id: string) => void;
   runCouncil: () => void;
@@ -133,7 +134,7 @@ export function CouncilComposer({
 
   /** Comandos disponibles. Los que no aplican están, pero se informa por qué. */
   const slashCommands = [
-    { id: "nuevo", label: "/nuevo", hint: "Empezar un hilo nuevo", run: () => window.location.reload() },
+    { id: "nuevo", label: "/nuevo", hint: "Empezar un hilo nuevo (sin recargar)", run: () => onNewThread() },
     { id: "consenso", label: "/consenso", hint: "Activar el consenso de modelos", run: () => enterCouncilMode() },
     { id: "buscar", label: "/buscar", hint: "Modo búsqueda web", run: () => enterSearchMode() },
     { id: "web", label: "/web", hint: "Activar/desactivar grounding web", run: () => toggleWebGrounding() },

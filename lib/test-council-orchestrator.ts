@@ -20,9 +20,6 @@ function check(ok: boolean, label: string, detail?: unknown): void {
 function checkEq(actual: unknown, expected: unknown, label: string): void {
   check(JSON.stringify(actual) === JSON.stringify(expected), label, { esperado: expected, actual });
 }
-function includesAll(text: string, parts: string[]): boolean {
-  return parts.every((part) => text.includes(part));
-}
 
 const MODEL_A = "nvidia/nemotron-3.5-lightning:free";
 const MODEL_B = "openai/gpt-oss-20b:free";
@@ -205,7 +202,7 @@ async function main(): Promise<void> {
 
   console.log("\n--- varias rondas de debate ---");
   {
-    const { types, events } = await run(
+    const { events } = await run(
       { prompt: "q", selectedModels: [MODEL_A, MODEL_B], maxDebateRounds: 2 },
       {
         runDebate: async ({ self, round }: DebateInput) => ({

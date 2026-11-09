@@ -79,7 +79,7 @@ async function main(): Promise<void> {
     const wrapped = wrapToolExecute<Record<string, never>, { ok: boolean; error?: string }>(
       "fake_tool_abortable",
       (_input, options) =>
-        new Promise((resolve) => {
+        new Promise((_resolve) => {
           // Una tool "bien portada" que sí mira options.abortSignal — así
           // se prueba que el signal que llega es el REAL, no uno decorativo.
           options?.abortSignal?.addEventListener("abort", () => {

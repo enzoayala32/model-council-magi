@@ -356,7 +356,7 @@ async function main(): Promise<void> {
     __resetProviderPoolsForTests();
     setOpenRouterCredentials("secret-c15-A", "secret-c15-B");
     let calls = 0;
-    const fakeImpl: CompletionImpl = async (_modelId, options) => {
+    const fakeImpl: CompletionImpl = async (_modelId) => {
       calls++;
       if (calls === 1) throw new OpenRouterError("rate limited", 429);
       return { content: "respuesta ok", usage: undefined } as never;

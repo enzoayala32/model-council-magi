@@ -15,7 +15,7 @@ import { detectLanguage, type InventoryFile, type RepoInventory, type SkipReason
 import type { RepoAnalysis } from "./repo-analysis";
 import { analyzeSourceText, failedAnalysis, isParseableLanguage, type FileAnalysis } from "./repo-symbols";
 import { defaultResolutionConfig, parseResolutionConfig, type ResolutionConfig } from "./resolution-config";
-import { buildDependencyGraph, DependencyGraphError, MAX_GRAPH_EDGES, MAX_SPECIFIER_CHARS, type DependencyEdge, type DependencyGraph } from "./dependency-graph";
+import { buildDependencyGraph, DependencyGraphError, MAX_GRAPH_EDGES, MAX_SPECIFIER_CHARS, type DependencyEdge } from "./dependency-graph";
 
 /** Copia del tsconfig real del proyecto (con comentarios, como los admite TS). */
 const REAL_TSCONFIG = `{
