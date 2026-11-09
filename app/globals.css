@@ -3414,3 +3414,57 @@ tbody tr:hover { background: var(--bg-soft); }
   background: var(--bg-soft); color: var(--ink); font-size: 13px; font-weight: 600;
 }
 .pairingActions .primary { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+
+/* ===== Composer estilo opencode (Fase: chat) ===== */
+
+/* Arrastrar y soltar archivos sobre el composer. */
+.composerWrap.dragging { outline: 2px dashed var(--accent-soft); outline-offset: 4px; border-radius: 20px; }
+.composerWrap { position: relative; }
+.dropHint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--accent-soft) 12%, transparent);
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+/* Paleta de comandos `/`. */
+.slashPalette {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-raised, var(--surface));
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+}
+.slashOption {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.slashOption.active, .slashOption:hover { background: var(--accent-soft); }
+.slashOption .slashLabel { font-weight: 600; font-size: 13px; white-space: nowrap; }
+.slashOption small { color: var(--muted); font-size: 12px; }

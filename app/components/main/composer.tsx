@@ -122,9 +122,78 @@ export function CouncilComposer({
   onPingModels: () => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // --- Auto-grow: el textarea crece con el contenido hasta un tope, como el
+  // composer de opencode. Sin esto, un prompt de 6 líneas quedaba en una caja
+  // de una línea con scroll interno.
+  const [dragging, setDragging] = useState(false);
+  const [slashQuery, setSlashQuery] = useState<string | null>(null);
+  const [slashIndex, setSlashIndex] = useState(0);
+
+  /** Comandos disponibles. Los que no aplican están, pero se informa por qué. */
+  const slashCommands = [
+    { id: "nuevo", label: "/nuevo", hint: "Empezar un hilo nuevo", run: () => window.location.reload() },
+    { id: "consenso", label: "/consenso", hint: "Activar el consenso de modelos", run: () => enterCouncilMode() },
+    { id: "buscar", label: "/buscar", hint: "Modo búsqueda web", run: () => enterSearchMode() },
+    { id: "web", label: "/web", hint: "Activar/desactivar grounding web", run: () => toggleWebGrounding() },
+    { id: "skills", label: "/skills", hint: "Abrir skills del agente", run: () => onOpenSettings() },
+    {
+      id: "enviar",
+      label: "/enviar",
+      hint: "Enviar el prompt escrito",
+      run: () => {
+        if (query.trim()) runCouncil();
+      },
+    },
+  ].filter((command) => slashQuery === null || command.label.includes("/" + slashQuery) || command.hint.toLowerCase().includes(slashQuery.toLowerCase()));
+
+  function autoGrow(): void {
+    const node = textareaRef.current;
+    if (!node) return;
+    node.style.height = "auto";
+    node.style.height = Math.min(node.scrollHeight, 320) + "px";
+  }
+
+  /** Detecta `/comando` mientras se escribe (al principio, o tras un espacio). */
+  function detectSlash(value: string): void {
+    const match = /(^|\s)\/([a-z]*)$/i.exec(value);
+    if (match) {
+      setSlashQuery(match[2].toLowerCase());
+      setSlashIndex(0);
+    } else {
+      setSlashQuery(null);
+    }
+  }
+
+  function applySlash(command: (typeof slashCommands)[number]): void {
+    const node = textareaRef.current;
+    // Se borra el `/comando` escrito y se ejecuta la acción.
+    if (node) {
+      const value = query.replace(/\/[a-z]*$/i, "");
+      setQuery(value);
+    }
+    setSlashQuery(null);
+    command.run();
+  }
 
   return (
-    <div className="composerWrap">
+    <div
+      className={dragging ? "composerWrap dragging" : "composerWrap"}
+      onDragOver={(event) => {
+        if (!event.dataTransfer?.types.includes("Files")) return;
+        event.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(event) => {
+        setDragging(false);
+        if (event.dataTransfer?.files?.length) {
+          event.preventDefault();
+          void onFilesSelected(event.dataTransfer.files);
+        }
+      }}
+    >
       <div className="composer">
         <div className="composerTop">
           <div className="promptField">
@@ -135,17 +204,66 @@ export function CouncilComposer({
               </span>
             ) : null}
             <textarea
+              ref={textareaRef}
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Preguntá lo que quieras..."
+              onChange={(event) => {
+                setQuery(event.target.value);
+                autoGrow();
+                detectSlash(event.target.value);
+              }}
+              placeholder="Preguntá lo que quieras...  / para comandos"
               rows={1}
               onKeyDown={(event) => {
+                // Con la paleta de comandos abierta, las flechas y Enter son de
+                // la paleta, no del textarea.
+                if (slashQuery !== null && slashCommands.length > 0) {
+                  if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setSlashIndex((i) => (i + 1) % slashCommands.length);
+                    return;
+                  }
+                  if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setSlashIndex((i) => (i - 1 + slashCommands.length) % slashCommands.length);
+                    return;
+                  }
+                  if (event.key === "Enter" || event.key === "Tab") {
+                    event.preventDefault();
+                    applySlash(slashCommands[slashIndex]);
+                    return;
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    setSlashQuery(null);
+                    return;
+                  }
+                }
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
                   runCouncil();
                 }
+                if (event.key === "Escape") {
+                  event.currentTarget.blur();
+                }
               }}
             />
+            {slashQuery !== null && slashCommands.length > 0 ? (
+              <div className="slashPalette">
+                {slashCommands.map((command, index) => (
+                  <button
+                    key={command.id}
+                    type="button"
+                    className={index === slashIndex ? "slashOption active" : "slashOption"}
+                    onMouseEnter={() => setSlashIndex(index)}
+                    onClick={() => applySlash(command)}
+                  >
+                    <span className="slashLabel">{command.label}</span>
+                    <small>{command.hint}</small>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {dragging ? <div className="dropHint">Soltá para adjuntar</div> : null}
             {attachments.length ? (
               <div className="attachmentTray">
                 {attachments.map((attachment) => (
