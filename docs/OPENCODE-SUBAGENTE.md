@@ -139,19 +139,19 @@ Para probar a mano contra tu server corriendo:
 ```bash
 # handshake
 curl -s -X POST -H 'content-type: application/json' \
-  -H "Authorization: Bearer $APP_ACCESS_TOKEN" \
+  -H "X-Magi-Device-Token: $MAGI_DEVICE_TOKEN" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
   http://127.0.0.1:3000/api/mcp
 
 # catálogo
 curl -s -X POST -H 'content-type: application/json' \
-  -H "Authorization: Bearer $APP_ACCESS_TOKEN" \
+  -H "X-Magi-Device-Token: $MAGI_DEVICE_TOKEN" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
   http://127.0.0.1:3000/api/mcp
 
 # una herramienta
 curl -s -X POST -H 'content-type: application/json' \
-  -H "Authorization: Bearer $APP_ACCESS_TOKEN" \
+  -H "X-Magi-Device-Token: $MAGI_DEVICE_TOKEN" \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"tasks.list","arguments":{"limit":5}}}' \
   http://127.0.0.1:3000/api/mcp
 ```
