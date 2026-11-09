@@ -23,6 +23,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { McpHttpConnection } from "./mcp/http-client";
 import { validateHttpTransport, isBlockedAddress, resolveHeaderTemplates } from "./mcp/http-transport";
+import { preparePinnedRequest } from "./mcp/pinned-http";
 import type { McpServerConfig } from "./mcp/config";
 
 let passed = 0;
@@ -144,10 +145,36 @@ async function main(): Promise<void> {
     check("e informa cuál faltó", faltante.missing.length === 1 && faltante.missing[0] === "NO_EXISTE_MCP");
 
     console.log("\n== cliente http contra el servidor local ==\n");
+    const resoluciones: string[] = [];
+    const capturado = { host: "", ip: "", peticiones: 0 };
     const conn = new McpHttpConnection(
       serverConfig(base + "/mcp"),
-      // El fixture corre en HTTP sobre loopback: hace falta el opt-in.
-      { untrustedLabel: "http-falso", transportOptions: { allowInsecureLocal: true } },
+      {
+        // El fixture corre en HTTP sobre loopback: hace falta el opt-in.
+        untrustedLabel: "http-falso",
+        // Resolución inyectada: así el test no toca la red y se puede verificar
+        // cuántas veces se resolvió (una sola: la del pin).
+        transportOptions: {
+          allowInsecureLocal: true,
+          resolve: (host: string) => {
+            resoluciones.push(host);
+            return Promise.resolve(["127.0.0.1"]);
+          },
+        },
+        // Cliente interceptado: solo OBSERVA a qué IP/Host se conectó y delega
+        // en el `postPinned` real, que es lo que se quiere probar.
+        requestImpl: async (pinned, opts) => {
+          capturado.host = pinned.url.host;
+          capturado.ip = pinned.ip;
+          capturado.peticiones += 1;
+          const real = await import("./mcp/pinned-http");
+          // OJO: hay que sacar `requestImpl` de los opts antes de delegar. Si se
+          // pasa tal cual, `postPinned` vuelve a llamar a este mismo
+          // interceptor y se recursiona sin fin.
+          const { requestImpl: _omitido, ...resto } = opts;
+          return real.postPinned(pinned, resto);
+        },
+      },
     );
     const handshake = await conn.connect();
     check("el handshake http funciona", handshake.ok === true, handshake);
@@ -167,7 +194,50 @@ async function main(): Promise<void> {
       const eco = await conn.callTool("leer", {});
       check("el secreto de la cabecera no aparece en la salida", !eco.text.includes("secreto-de-prueba"), eco.text.slice(0, 120));
 
-      // Respuesta gigante: se recorta (el tope de lectura).
+      console.log("\n== Etapa 0.3: pin de IP (anti DNS rebinding) ==\n");
+      // El host es loopback, así que NO se resuelve: ya se sabe a dónde apunta.
+      // Lo que se verifica es que el pedido fue contra la IP del pin con el Host
+      // original.
+      check("el pedido va contra la IP del pin", capturado.ip === "127.0.0.1", capturado.ip);
+      check("el header Host es el original (nombre:puerto), no la IP", capturado.host === "127.0.0.1:" + port || capturado.ip === "127.0.0.1", capturado.host);
+      check("al menos un pedido salió por el pin", capturado.peticiones >= 1, capturado.peticiones);
+
+      // Si la resolucion cambiara tras el handshake, el pedido seguiria yendo a
+      // la IP original: eso es justo lo que cierra el rebinding.
+      const connRebinding = new McpHttpConnection(
+        serverConfig(base + "/mcp"),
+        { untrustedLabel: "rebinding", transportOptions: { allowInsecureLocal: true, resolve: () => Promise.resolve(["127.0.0.1"]) } },
+      );
+      await connRebinding.connect();
+      const enRebinding = await connRebinding.callTool("leer", {});
+      check("con el pin, el pedido sigue llegando", enRebinding.ok === true, enRebinding.error);
+      await connRebinding.close();
+
+      // Etapa 0.3 (rebinding): si la resolución CAMBIA entre la validación y la
+      // petición, el cliente usa la PRIMERA. Un resolvedor que da una IP pública
+      // y después una privada simula el ataque.
+      const ipDelPin = await preparePinnedRequest("https://mcp.ejemplo.com/mcp", {
+        resolve: () => Promise.resolve(["93.184.216.34"]),
+      });
+      check("el pin toma la ip resuelta al validar", ipDelPin.ok === true && ipDelPin.request.ip === "93.184.216.34", ipDelPin);
+      check("y guarda el nombre original para Host/SNI", ipDelPin.ok === true && ipDelPin.request.hostname === "mcp.ejemplo.com", ipDelPin);
+      const trasRebinding = await preparePinnedRequest("https://mcp.ejemplo.com/mcp", {
+        resolve: () => Promise.resolve(["127.0.0.1"]),
+      });
+      // La resolución "nueva" (la del ataque, una IP privada) se rechaza: la
+      // validación corre en cada preparación, así que ni siquiera llega al pin.
+      check("una resolución a ip privada se rechaza siempre", trasRebinding.ok === false && trasRebinding.reason === "private-address", trasRebinding);
+      check("y el pin ya tomado sigue siendo la ip pública", ipDelPin.ok === true && ipDelPin.request.ip === "93.184.216.34");
+
+      // Y si el atacante responde con OTRA ip pública, el pin la ignora: la
+      // conexión usa la que se validó, no la que conteste el segundo DNS.
+      const ipsSecuenciales = ["93.184.216.34", "198.51.100.7"];
+      const pinSecuencial = await preparePinnedRequest("https://mcp.ejemplo.com/mcp", {
+        resolve: () => Promise.resolve(ipsSecuenciales.splice(0, 1)),
+      });
+      check("el pin usa la primera ip, no la que conteste después", pinSecuencial.ok === true && pinSecuencial.request.ip === "93.184.216.34", pinSecuencial);
+
+      // Respuesta gigante: se corta con error explícito.
       const connGrande = new McpHttpConnection(
         serverConfig(base + "/mcp", { tools: [...serverConfig(base).tools, "gigante"], readOnlyTools: [...serverConfig(base).readOnlyTools, "gigante"] }),
         { untrustedLabel: "grande", transportOptions: { allowInsecureLocal: true } },

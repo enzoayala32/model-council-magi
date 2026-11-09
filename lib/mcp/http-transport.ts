@@ -66,6 +66,16 @@ export function isLiteralIp(host: string): boolean {
   return clean.includes(":") && /^[0-9a-fA-F:]+$/.test(clean);
 }
 
+/**
+ * Valida direcciones YA resueltas (sin tocar DNS).
+ *
+ * Existe para que `resolveAndPin` resuelva UNA sola vez: si la validación
+ * volviera a llamar al resolvedor, entre las dos llamadas cabría un rebinding.
+ */
+export function anyBlockedAddress(addresses: readonly string[]): boolean {
+  return addresses.some((ip) => isBlockedAddress(ip));
+}
+
 /** ¿La IP es privada, de loopback, link-local o de metadata? */
 export function isBlockedAddress(ip: string): boolean {
   const clean = ip.trim().replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
@@ -82,6 +92,12 @@ export type HttpTransportOptions = {
   allowInsecureLocal?: boolean;
   /** Resolución inyectable (tests). */
   resolve?: (host: string) => Promise<string[]>;
+  /**
+   * Saltea la validación por DNS. Lo usa `resolveAndPin`, que resuelve UNA vez
+   * y valida esas direcciones: si la validación resolviera también, habría dos
+   * llamadas al resolvedor y volvería la ventana de rebinding.
+   */
+  skipDns?: boolean;
 };
 
 /**
@@ -118,6 +134,8 @@ export async function validateHttpTransport(rawUrl: string, options: HttpTranspo
     }
     return { ok: true, url };
   }
+
+  if (options.skipDns) return { ok: true, url };
 
   if (options.resolve) {
     let addresses: string[];

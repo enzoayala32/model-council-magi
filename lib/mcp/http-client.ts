@@ -19,15 +19,16 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { validateHttpTransport, resolveHeaderTemplates, type HttpTransportOptions } from "./http-transport";
+import { resolveHeaderTemplates, type HttpTransportOptions } from "./http-transport";
+import { postPinned, preparePinnedRequest, type RawResponse } from "./pinned-http";
 import { isToolAllowed, type McpServerConfig } from "./config";
 import { redactSecrets } from "../provider-resilience/redact";
 import { UNTRUSTED_PREAMBLE } from "./client";
 
+export type McpToolInfo = { name: string; description?: string; writeCapable: boolean };
+
 /** Tope de respuesta: 8 MB. Un servidor que devuelve más, se corta. */
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
-
-export type McpToolInfo = { name: string; description?: string; writeCapable: boolean };
 
 export type McpToolResult = {
   ok: boolean;
@@ -46,6 +47,8 @@ function preambleFor(label?: string): string {
 export class McpHttpConnection {
   private nextId = 1;
   private lastUrl = "";
+  /** IP fijada al conectar (Etapa 0.3): null hasta el handshake. */
+  private pinned: { ip: string; hostname: string; url: URL } | null = null;
   private closed = false;
 
   constructor(
@@ -53,7 +56,8 @@ export class McpHttpConnection {
     private readonly options: {
       untrustedLabel?: string;
       /** Inyección para tests: en vez de fetch de verdad. */
-      fetchImpl?: typeof fetch;
+      /** Cliente HTTP inyectable (tests). */
+      requestImpl?: (pinned: { ip: string; hostname: string; url: URL }, opts: { payload: string; headers: Record<string, string>; timeoutMs: number; requestImpl?: unknown }) => Promise<RawResponse>;
       /** Resolución inyectable para las validaciones anti-SSRF. */
       transportOptions?: HttpTransportOptions;
     } = {},
@@ -62,9 +66,12 @@ export class McpHttpConnection {
   /** Valida la URL y resuelve los headers. Se llama en cada conexión. */
   async connect(): Promise<{ ok: true; tools: McpToolInfo[] } | { ok: false; error: string }> {
     if (!this.config.url) return { ok: false, error: "servidor http sin url." };
-    const check = await validateHttpTransport(this.config.url, this.options.transportOptions);
-    if (!check.ok) return { ok: false, error: "url rechazada (" + check.reason + ")." };
-    this.lastUrl = check.url.toString();
+    // Etapa 0.3: se PIN la IP una vez y el pedido va contra ella, con el Host y
+    // el SNI del nombre original. Sin esa segunda resolución no hay ventana de
+    // rebinding.
+    const pinned = await preparePinnedRequest(this.config.url, this.options.transportOptions);
+    if (!pinned.ok) return { ok: false, error: "url rechazada (" + pinned.reason + ")." };
+    this.pinned = pinned.request;
 
     // Headers por referencia a entorno. Si falta una variable, se informa (no se
     // manda el texto literal ni un header vacío).
@@ -120,43 +127,43 @@ export class McpHttpConnection {
     const id = this.nextId;
     this.nextId += 1;
     const payload: JsonRpcRequest = { jsonrpc: "2.0", id, method, params };
-    const doFetch = this.options.fetchImpl ?? fetch;
+    if (!this.pinned) {
+      return { jsonrpc: "2.0", id, error: { code: -1, message: "conexión no establecida (falta connect)" } };
+    }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.config.timeoutMs);
     try {
-      const response = await doFetch(this.lastUrl, {
-        method: "POST",
+      // Etapa 0.3: contra la IP fijada al conectar, con el Host y el SNI del
+      // nombre original. No hay una segunda resolución que un atacante pudiera
+      // responder distinto (DNS rebinding).
+      const response: RawResponse = await postPinned(this.pinned, {
+        payload: JSON.stringify(payload),
         headers: {
           "content-type": "application/json",
           accept: "application/json",
           ...resolveHeaderTemplates(this.config.httpHeaders ?? {}).headers,
         },
-        body: JSON.stringify(payload),
-        // Sin seguir redirects: un 302 a una IP privada sería el SSRF.
-        redirect: "error",
-        signal: controller.signal,
+        timeoutMs: this.config.timeoutMs,
+        requestImpl: this.options.requestImpl,
       });
-      if (!response.ok) {
+      if (response.status < 200 || response.status >= 300) {
         // El cuerpo NO se guarda ni se devuelve: solo el status.
-        await response.arrayBuffer().catch(() => undefined);
         return { jsonrpc: "2.0", id, error: { code: response.status, message: "el servidor respondió " + response.status } };
       }
-      let text: string;
-      try {
-        text = await this.readLimited(response);
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (message.startsWith("RESPUESTA_DEMASIADO_GRANDE:")) {
-          const limite = Number(message.split(":")[1]);
-          return {
-            jsonrpc: "2.0",
-            id,
-            error: { code: -1, message: "respuesta demasiado grande (limite " + Math.round(limite / 1024 / 1024) + " MB)" },
-          };
-        }
-        throw error;
+      // Tope duro: un servidor que devuelve más de lo debido se corta acá
+      // (la respuesta completa ya llegó; no se puede cancelar a mitad).
+      if (response.body.byteLength > MAX_RESPONSE_BYTES) {
+        return {
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code: -1,
+            message: "respuesta demasiado grande (limite " + Math.round(MAX_RESPONSE_BYTES / 1024 / 1024) + " MB)",
+          },
+        };
       }
+      const text = response.body.toString("utf8");
       try {
         return JSON.parse(text) as JsonRpcResponse;
       } catch {
@@ -180,25 +187,7 @@ export class McpHttpConnection {
    * a mitad daría un JSON inválido que parecería un server roto, cuando en
    * realidad devolvió más de lo que corresponde.
    */
-  private async readLimited(response: Response): Promise<string> {
-    const body = response.body;
-    if (!body) return "";
-    const reader = body.getReader();
-    const decoder = new TextDecoder();
-    let out = "";
-    let bytes = 0;
-    for (;;) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      bytes += chunk.value.byteLength;
-      if (bytes > MAX_RESPONSE_BYTES) {
-        await reader.cancel().catch(() => undefined);
-        throw new Error("RESPUESTA_DEMASIADO_GRANDE:" + MAX_RESPONSE_BYTES);
-      }
-      out += decoder.decode(chunk.value, { stream: true });
-    }
-    return out;
-  }
+
 
   private parseTools(result: unknown): McpToolInfo[] {
     const tools = (result as { tools?: unknown })?.tools;
