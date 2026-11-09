@@ -83,14 +83,18 @@ async function main(): Promise<void> {
   console.log("\n--- Roster real: los modelos actuales conservan exactamente el comportamiento de 6B ---");
   {
     const enabled = getCodingAgentModels();
-    check("hay exactamente 3 modelos habilitados para el Coding Agent", enabled.length === 3, enabled.map((m) => m.id));
+    // El roster crece: cualquiera de los habilitados tiene que conservar el
+    // comportamiento de 6B. El número exacto no es la invariante — la invariante
+    // es "todos se comportan igual". El piso evita que un catálogo vacío pase
+    // como si nada.
+    check("hay modelos habilitados para el Coding Agent (piso de 3)", enabled.length >= 3, enabled.map((m) => m.id));
     check(
       "ninguno declara webSearchCompatible (el default optimista queda representado por la AUSENCIA del campo)",
       enabled.every((m) => m.codingAgent && !("webSearchCompatible" in m.codingAgent)),
       enabled.map((m) => ({ id: m.id, codingAgent: m.codingAgent })),
     );
     check(
-      "el gate real (sin override) los considera a los 3 compatibles",
+      "el gate real (sin override) los considera compatibles",
       enabled.every((m) => isWebSearchCompatible(getCouncilModel(m.id)?.codingAgent)),
       enabled.map((m) => m.id),
     );

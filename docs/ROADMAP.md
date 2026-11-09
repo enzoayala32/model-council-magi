@@ -63,6 +63,9 @@ proyecto.
 | 4a Tablas + canje con rate limiting + cookie de dispositivo + auditoría | **HECHO** |
 | 4b Scopes `observe`/`operate`/`approve` + autorización central + test de cobertura de rutas | **HECHO** |
 | 4c Step-up TOTP para aprobar desde remoto | **HECHO** (RFC 6238, sin dependencias) |
+| Modelos del Coding Agent (catálogo curado) | **HECHO** — 7 habilitados, 4 validados con tool-calling en vivo el 2026-11-09 (`npm run agent:probe-models`) |
+| Composer de chat estilo opencode (auto-grow, comandos `/`, arrastrar y soltar) | **HECHO** |
+| App como servidor MCP para opencode (subagente) | **HECHO** (ver `docs/OPENCODE-SUBAGENTE.md`; cliente real de opencode NO VERIFICADO) |
 | 4d UI de Dispositivos y Actividad + QR + kill switch `REMOTE_ACCESS=off` | **HECHO** |
 | Fase 4 completa | **HECHO** (4a+4b+4c+4d) |
 | Nota: hasta 4c, `apply`/`discard` desde remoto quedaban bloqueados a propósito | **HECHO** (ya resuelto por el step-up) |
