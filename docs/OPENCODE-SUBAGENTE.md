@@ -129,6 +129,10 @@ como lo haría un cliente remoto:
 | `tools/list` con token | las 5 herramientas, todas `readOnly: true` |
 | `tools/call tasks.list` con token | `{"content":[{"type":"text","text":"[]"}]}` |
 | `approvals/approve` con token | `-32601` (no existe el método) |
+| `POST /api/pairing` (operador) | código de un solo uso |
+| `POST /api/pairing/redeem` **sin credencial** | **200** + token en `Set-Cookie` |
+| handshake MCP con `x-magi-device-token: <token>` | handshake + instrucciones |
+| `tools/list` con el dispositivo emparejado | las 5 herramientas |
 
 Para probar a mano contra tu server corriendo:
 
