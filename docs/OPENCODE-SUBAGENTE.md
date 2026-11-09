@@ -48,11 +48,15 @@ tengas en `OPENCODE_CONFIG`). Se agrega como `mcp` con transporte `remote`:
 
    ```bash
    # La PC genera el código (operador)
-   curl -s -X POST -H 'Authorization: Bearer $APP_ACCESS_TOKEN'      -H 'content-type: application/json' -d '{"scope":"observe"}'      http://127.0.0.1:3000/api/pairing
+   curl -s -X POST -H 'Authorization: Bearer $APP_ACCESS_TOKEN' \
+     -H 'content-type: application/json' -d '{"scope":"observe"}' \
+     http://127.0.0.1:3000/api/pairing
 
    # El cliente lo canjea y se queda con el token
-   TOKEN=$(curl -s -D - -o /dev/null -X POST -H 'content-type: application/json'      -d '{"code":"XXXX-XXXX-XXXX-XXXX","deviceName":"opencode"}'      http://127.0.0.1:3000/api/pairing/redeem      | grep -i '^set-cookie' | sed 's/.*magi_device_token=//' | tr -d '
-' | cut -d';' -f1)
+   TOKEN=$(curl -s -D - -o /dev/null -X POST -H 'content-type: application/json' \
+     -d '{"code":"XXXX-XXXX-XXXX-XXXX","deviceName":"opencode"}' \
+     http://127.0.0.1:3000/api/pairing/redeem \
+     | grep -i '^set-cookie' | sed 's/.*magi_device_token=//' | tr -d '\r' | cut -d';' -f1)
    ```
 
    El token se devuelve **una sola vez** y no se puede recuperar después: si lo
