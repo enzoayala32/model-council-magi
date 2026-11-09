@@ -112,6 +112,7 @@ const OFFLINE_EXACT = [
   "security:test-web-push",
   "security:test-mcp-loop",
   "security:test-mcp-admin",
+  "security:test-mcp-admin-lockdown",
   "security:test-mcp-failclosed",
   "security:test-mcp-http",
   "security:test-mcp-client",
