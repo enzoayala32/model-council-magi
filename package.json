@@ -94,6 +94,7 @@
     "test:live": "tsx scripts/run-tests.ts --live",
     "gen:pwa-icons": "tsx scripts/gen-pwa-icons.ts",
     "council:test-catalog": "tsx lib/test-model-catalog.ts",
+    "agent:probe-models": "tsx scripts/probe-agent-models.ts",
     "security:test-nvidia-rotation": "tsx lib/test-nvidia-rotation.ts",
     "security:test-agent-sse": "tsx lib/test-agent-sse.ts",
     "security:test-task-stream-reducer": "tsx lib/test-task-stream-reducer.ts",

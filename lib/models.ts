@@ -343,6 +343,82 @@ export const COUNCIL_MODELS: CouncilModel[] = [
       reason: "Fase 2E: habilitado para probar el dispatcher multi-proveedor del Coding Agent Model Registry contra un proveedor nativo (además de OpenRouter y Google).",
     },
   },
+  // ---- NVIDIA NIM: modelos validados con tool-calling en vivo (2026-11-09) ----
+  // Los tres de abajo se probaron contra https://integrate.api.nvidia.com/v1/
+  // chat/completions con una herramienta real (list_files) y un prompt que la
+  // exigía: los tres devolvieron un `tool_calls` bien formado con argumentos
+  // JSON válidos. La prueba es repetible con `npm run agent:probe-models`.
+  // Los que NO están (glm-5.3-flash, kimi-k2.6, deepseek-v4.1-flash,
+  // nemotron-3-super-120b-a12b) dieron 404 (no desplegados para esta cuenta) o
+  // tardaron más de 60s: inútiles para un loop de agente.
+  {
+    id: "stepfun-ai/step-5-preview",
+    label: "Step 5 Preview (NVIDIA directo)",
+    shortName: "Step 5",
+    maker: "StepFun",
+    accent: "#0ea5e9",
+    logoUrl: "",
+    description: "StepFun Step 5, servido por NVIDIA NIM. El modelo con el que se probó de punta a punta: tool-calling correcto y ~1s de respuesta. Requiere tu propia NVIDIA_API_KEY.",
+    defaultSelected: false,
+    defaultReasoningEffort: "medium",
+    supportsImages: false,
+    provider: "nvidia",
+    codingAgent: {
+      enabled: true,
+      reason: "Validado en vivo 2026-11-09: tool_call list_files({}) en 974ms contra integrate.api.nvidia.com. Prueba repetible con npm run agent:probe-models.",
+    },
+  },
+  {
+    id: "minimaxai/minimax-m3.1-flash",
+    label: "MiniMax M3.1 Flash (NVIDIA directo)",
+    shortName: "MiniMax M3.1",
+    maker: "MiniMax",
+    accent: "#f43f5e",
+    logoUrl: "",
+    description: "MiniMax M3.1 Flash servido por NVIDIA NIM — tool-calling correcto y ~1.6s. Requiere tu propia NVIDIA_API_KEY.",
+    defaultSelected: false,
+    defaultReasoningEffort: "medium",
+    supportsImages: false,
+    provider: "nvidia",
+    codingAgent: {
+      enabled: true,
+      reason: "Validado en vivo 2026-11-09: tool_call list_files({}) en 1652ms contra integrate.api.nvidia.com. Prueba repetible con npm run agent:probe-models.",
+    },
+  },
+  {
+    id: "nvidia/nemotron-3-ultra-550b-a55b",
+    label: "Nemotron 3 Ultra 550B (NVIDIA directo)",
+    shortName: "Nemotron Ultra",
+    maker: "NVIDIA",
+    accent: "#76b900",
+    logoUrl: "",
+    description: "El Nemotron más grande de NIM. Tool-calling correcto pero ~2.9s por llamada: sirve, es lento para un loop largo. Requiere tu propia NVIDIA_API_KEY.",
+    defaultSelected: false,
+    defaultReasoningEffort: "medium",
+    supportsImages: false,
+    provider: "nvidia",
+    codingAgent: {
+      enabled: true,
+      reason: "Validado en vivo 2026-11-09: tool_call list_files({subPath:''}) en 2909ms contra integrate.api.nvidia.com. Prueba repetible con npm run agent:probe-models.",
+    },
+  },
+  {
+    id: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+    label: "Nemotron 3 Nano Omni 30B (NVIDIA directo)",
+    shortName: "Nemotron Nano Omni",
+    maker: "NVIDIA",
+    accent: "#76b900",
+    logoUrl: "",
+    description: "Nemotron Nano Omni con reasoning, servido por NVIDIA NIM. Tool-calling correcto y ~1.9s: buena relacion velocidad/capacidad para tareas cortas. Requiere tu propia NVIDIA_API_KEY.",
+    defaultSelected: false,
+    defaultReasoningEffort: "medium",
+    supportsImages: false,
+    provider: "nvidia",
+    codingAgent: {
+      enabled: true,
+      reason: "Validado en vivo 2026-11-09: tool_call list_files({}) en 1892ms contra integrate.api.nvidia.com. Prueba repetible con npm run agent:probe-models.",
+    },
+  },
   // ---- Google AI Studio native models (not on OpenRouter) ----
   // Called directly via generativelanguage.googleapis.com (Google's own
   // documented OpenAI-compatibility endpoint) — needs GEMINI_API_KEY set in
