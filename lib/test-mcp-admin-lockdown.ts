@@ -24,6 +24,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createDevice } from "./auth/devices";
 import { issueStepUp, enrollDeviceTotp, totpEncryptionAvailable } from "./auth/step-up";
+import { counterFor, totpCode } from "./auth/totp";
 import { readManagedConfig } from "./mcp/admin-config";
 
 let passed = 0;
@@ -135,7 +136,7 @@ async function main(): Promise<void> {
   if (totpEncryptionAvailable()) {
     const enrollada = enrollDeviceTotp(aprobador.device.id, { account: "aprobador", issuer: "Consenso IA" });
     if (!("error" in enrollada)) {
-      stepUpToken = issueStepUp(aprobador.device.id, "000000");
+      stepUpToken = issueStepUp(aprobador.device.id, totpCode(enrollada.secret, counterFor(Date.now())));
     }
   }
   if (stepUpToken) {
@@ -172,6 +173,8 @@ async function main(): Promise<void> {
 
   // Desde loopback, cambiar solo tools de uno que YA existe (sin tocar command).
   const previo = (readManagedConfig() as { config: { servers: McpServerConfigParaTest[] } }).config.servers[0];
+  // Para que el cambio sea SOLO de allowlist, el body tiene que traer los
+  // campos peligrosos IDÉNTICOS a los guardados (misma forma: ausente = ausente).
   const soloTools = previo
     ? await serversModule.POST(
         req({ peer: "loopback", bearer: OP_TOKEN }, "POST", {
@@ -179,7 +182,7 @@ async function main(): Promise<void> {
             name: previo.name,
             transport: previo.transport,
             command: previo.command,
-            args: previo.args,
+            ...(previo.args ? { args: previo.args } : {}),
             tools: ["leer", "otra"],
             readOnlyTools: ["leer"],
             readOnly: true,

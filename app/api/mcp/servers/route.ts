@@ -36,11 +36,26 @@ import { loadMcpConfig, type McpServerConfig } from "@/lib/mcp/config";
 /** Campos que, al cambiar, equivalen a ejecutar código en la PC. */
 const CAMPOS_PELIGROSOS = ["command", "args", "envForward", "url", "httpHeaders", "allowInsecureLocal"] as const;
 
+/**
+ * Valor "efectivo" de un campo, para comparar sin falsos positivos.
+ *
+ * Un campo ausente y su valor por defecto son lo MISMO: si la guarda tiene
+ * `allowInsecureLocal: false` y el body no lo manda, no hubo cambio. Sin esta
+ * normalización, editar solo la allowlist de un servidor existente se
+ * clasificaba como cambio peligroso y pedía step-up de más.
+ */
+function valorEfectivo(campo: string, valor: unknown): string {
+  if (campo === "allowInsecureLocal") return valor === true ? "true" : "false";
+  if (campo === "httpHeaders") return JSON.stringify(valor ?? {});
+  if (valor === undefined || valor === null) return "null";
+  return JSON.stringify(valor);
+}
+
 /** ¿El cambio toca alguno de los campos peligrosos? */
 function tocaPeligroso(incoming: Record<string, unknown>, anterior: McpServerConfig | undefined): boolean {
   if (!anterior) return true; // un servidor NUEVO siempre puede ejecutar
   for (const campo of CAMPOS_PELIGROSOS) {
-    if (JSON.stringify(incoming[campo] ?? null) !== JSON.stringify(anterior[campo] ?? null)) return true;
+    if (valorEfectivo(campo, incoming[campo]) !== valorEfectivo(campo, anterior[campo])) return true;
   }
   return false;
 }

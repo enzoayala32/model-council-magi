@@ -19,6 +19,8 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createDevice } from "./auth/devices";
 import { describeServerForUi, readManagedConfig, writeManagedConfig } from "./mcp/admin-config";
+import { enrollDeviceTotp, issueStepUp } from "./auth/step-up";
+import { counterFor, totpCode } from "./auth/totp";
 import { loadMcpConfig } from "./mcp/config";
 
 let passed = 0;
@@ -141,7 +143,7 @@ async function main(): Promise<void> {
   const observador = createDevice({ name: "Observador MCP", scope: "observe" });
 
   const req = (
-    opts: { peer?: string; cookie?: string; bearer?: string },
+    opts: { peer?: string; cookie?: string; bearer?: string; stepUp?: string },
     method: "GET" | "POST" | "DELETE" = "GET",
     body: unknown = {},
   ) =>
@@ -154,6 +156,7 @@ async function main(): Promise<void> {
         "x-magi-peer-addr": opts.peer === "loopback" ? "127.0.0.1" : "192.168.0.50",
         ...(opts.cookie ? { cookie: opts.cookie } : {}),
         ...(opts.bearer ? { authorization: "Bearer " + opts.bearer } : {}),
+        ...(opts.stepUp ? { "x-magi-step-up": opts.stepUp } : {}),
       },
       ...(method === "GET" ? {} : { body: JSON.stringify(body) }),
     });
@@ -212,35 +215,50 @@ async function main(): Promise<void> {
   check("confirmToken equivocado: 403", tokenMalo.status === 403, tokenMalo.status);
 
   // Con el token correcto: funciona.
-  const creado = await serversModule.POST(
-    req({ peer: "loopback", bearer: OP_TOKEN }, "POST", { server: nuevoServidor, confirmToken: OP_TOKEN }),
-  );
-  check("con confirmToken correcto crea", creado.status === 200, await creado.clone().json());
-  const trasCrear = readManagedConfig();
-  check("la config tiene 2 servidores", trasCrear.ok === true && trasCrear.config.servers.length === 2);
+  // Etapa 0.1: crear un servidor (que ejecuta código) exige loopback + step-up.
+  // Con step-up de dispositivo, el camino completo funciona.
+  let paso = false;
+  const enrollada = enrollDeviceTotp(aprobador.device.id, { account: "a", issuer: "Consenso IA" });
+  if (!("error" in enrollada)) {
+    const token = issueStepUp(aprobador.device.id, totpCode(enrollada.secret, counterFor(Date.now())));
+    const credenciales = {
+      peer: "loopback" as const,
+      bearer: OP_TOKEN,
+      cookie: "magi_device_token=" + aprobador.token,
+      stepUp: token ?? "",
+    };
+    const creado = await serversModule.POST(
+      req(credenciales, "POST", { server: nuevoServidor, confirmToken: OP_TOKEN }),
+    );
+    check("con token + confirmToken + step-up crea", creado.status === 200, await creado.clone().json());
+    paso = true;
+    const trasCrear = readManagedConfig();
+    check("la config tiene 2 servidores", trasCrear.ok === true && trasCrear.config.servers.length === 2);
 
-  // La config queda válida y la puede leer el loop.
-  const recargada = loadMcpConfig();
-  check("el loop ve el servidor nuevo sin reiniciar", recargada.ok === true && recargada.config.servers.some((s) => s.name === "nuevo"));
+    // La config queda válida y la puede leer el loop.
+    const recargada = loadMcpConfig();
+    check("el loop ve el servidor nuevo sin reiniciar", recargada.ok === true && recargada.config.servers.some((srv) => srv.name === "nuevo"));
 
-  // Body inválido: 400 y no escribe.
-  const roto = await serversModule.POST(
-    req({ peer: "loopback", bearer: OP_TOKEN }, "POST", { server: { name: "x", transport: "stdio" }, confirmToken: OP_TOKEN }),
-  );
-  check("un servidor sin command da 400", roto.status === 400, roto.status);
-  check("y no se escribió", (readManagedConfig() as { config: { servers: unknown[] } }).config.servers.length === 2);
+    // Body inválido: 400 y no escribe.
+    const roto = await serversModule.POST(
+      req(credenciales, "POST", { server: { name: "x", transport: "stdio" }, confirmToken: OP_TOKEN }),
+    );
+    check("un servidor sin command da 400", roto.status === 400, roto.status);
+    check("y no se escribió", (readManagedConfig() as { config: { servers: unknown[] } }).config.servers.length === 2);
 
-  // Eliminar: misma doble confirmación.
-  const borrarSinConfirmar = await serversModule.DELETE(
-    req({ peer: "loopback", bearer: OP_TOKEN }, "DELETE", { name: "nuevo" }),
-  );
-  check("eliminar sin confirmToken: 403", borrarSinConfirmar.status === 403, borrarSinConfirmar.status);
+    // Eliminar: misma barrera.
+    const borrarSinStepUp = await serversModule.DELETE(
+      req({ peer: "loopback", bearer: OP_TOKEN }, "DELETE", { name: "nuevo", confirmToken: OP_TOKEN }),
+    );
+    check("eliminar sin step-up: 403", borrarSinStepUp.status === 403, borrarSinStepUp.status);
 
-  const borrado = await serversModule.DELETE(
-    req({ peer: "loopback", bearer: OP_TOKEN }, "DELETE", { name: "nuevo", confirmToken: OP_TOKEN }),
-  );
-  check("eliminar con confirmToken funciona", borrado.status === 200, borrado.status);
-  check("queda 1 servidor", (readManagedConfig() as { config: { servers: unknown[] } }).config.servers.length === 1);
+    const borrado = await serversModule.DELETE(
+      req(credenciales, "DELETE", { name: "nuevo", confirmToken: OP_TOKEN }),
+    );
+    check("eliminar con todo: 200", borrado.status === 200, borrado.status);
+    check("queda 1 servidor", (readManagedConfig() as { config: { servers: unknown[] } }).config.servers.length === 1);
+  }
+  if (!paso) check("crear con step-up (sin TOTP disponible, se saltea)", true);
 
   // Dispositivo approve intentando escribir: 403 antes de tocar nada.
   const dispositivoEscribe = await serversModule.POST(

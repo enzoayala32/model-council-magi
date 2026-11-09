@@ -18,6 +18,9 @@ export default defineConfig([
     },
   },
   globalIgnores([
+    // Preloads de test: JS plano a propósito, cargado con --require antes de
+    // cualquier test. No se les exige el estilo de TS.
+    "lib/test/fixtures/*.js",
     ".next/**",
     "out/**",
     "build/**",

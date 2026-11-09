@@ -58,6 +58,30 @@ function limpiarTiposDev(): void {
     /* si esta en uso (otro server vivo), no se puede: no es fatal */
   }
 }
+/**
+ * Etapa 0.2: copia la guardia de config MCP a una ruta absoluta sin espacios y
+ * devuelve esa ruta. Necesario porque `--require` con una ruta que tiene
+ * espacios se rompe al pasar por `cmd` en Windows, y una ruta relativa se
+ * resuelve contra el cwd del proceso hijo (que en los tests de subprocesos no
+ * es el repo).
+ */
+let guardiaCache: string | null = null;
+function asegurarGuardia(): string {
+  if (guardiaCache && fs.existsSync(guardiaCache)) return guardiaCache;
+  const origen = path.join(root, "lib", "test", "fixtures", "guard-mcp-config.js");
+  const destino = path.join(os.tmpdir(), "magi-guard-mcp-config.js");
+  try {
+    fs.copyFileSync(origen, destino);
+    guardiaCache = destino;
+  } catch {
+    // Si no se puede copiar, se usa el origen: funciona salvo en Windows con
+    // espacios, que es peor que no tener guardia.
+    guardiaCache = origen;
+  }
+  return guardiaCache;
+}
+
+
 
 /**
  * Timeout propio por script, para los que levantan servers de verdad.
@@ -114,6 +138,7 @@ const OFFLINE_EXACT = [
   "security:test-mcp-admin",
   "security:test-mcp-admin-lockdown",
   "security:test-mcp-failclosed",
+  "security:test-mcp-guard",
   "security:test-mcp-http",
   "security:test-mcp-client",
   "security:test-mcp-server",
@@ -171,10 +196,28 @@ function runOne(
     // Evita que una suite herede un loop autónomo de una corrida manual.
     delete env.MAGI_AUTONOMOUS_LOOP;
 
+    // Etapa 0.2: la guardia de config MCP real. Se propaga por NODE_OPTIONS
+    // (npm pasa el entorno al hijo) y hace que cualquier test que toque la
+    // config del usuario falle con un error explícito en vez de leerla o,
+    // peor, escribirla.
+    //
+    // La ruta tiene que ser ABSOLUTA y SIN ESPACIOS: los tests que spawnan
+    // subprocesos node (run_script, abort...) heredan NODE_OPTIONS con otro
+    // cwd, y una ruta relativa se resuelve contra ESE. `root` tiene espacios
+    // ("model council") y cmd los destroza, así que se copia a un temporal.
+    const guardiaAbsoluta = asegurarGuardia();
+    const previo = env.NODE_OPTIONS ?? "";
+    env.NODE_OPTIONS = (previo ? previo + " " : "") + "--require " + guardiaAbsoluta;
+
     let dataDir: string | null = null;
     if (opts.isolate) {
       dataDir = makeIsolatedDataDir(name);
       env.MAGI_DATA_DIR = dataDir;
+      // Etapa 0.2: la config de MCP también se aísla. Sin esto, cualquier test
+      // que arme tools del agente (`createAgentTools` → `createMcpTools` →
+      // `loadMcpConfig()`) lee la config MCP del USUARIO. Se apunta a un archivo
+      // que no existe: mismo efecto que "no hay servidores", sin tocar la real.
+      env.MAGI_MCP_CONFIG = path.join(dataDir, "mcp.json");
     }
 
     const child = spawn(npmCommand, ["run", name], {

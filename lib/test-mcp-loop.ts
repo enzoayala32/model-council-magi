@@ -55,14 +55,18 @@ async function main(): Promise<void> {
   const configPath = path.join(tempDir, "mcp.json");
 
   console.log("== el agente solo ve lo que declara la config ==\n");
+  // En vez de borrar MAGI_MCP_CONFIG (que haría caer a la config REAL del
+  // usuario), se apunta a un archivo que no existe: mismo efecto, hermético.
   const sinConfig = process.env.MAGI_MCP_CONFIG;
-  delete process.env.MAGI_MCP_CONFIG;
-  const vacio = loadMcpConfig(path.join(tempDir, "no-existe.json"));
+  process.env.MAGI_MCP_CONFIG = path.join(tempDir, "no-existe.json");
+  const vacio = loadMcpConfig();
   check("sin archivo de config no hay servidores", vacio.ok === true && vacio.config.servers.length === 0);
   const registryVacio = new McpToolRegistry({ approvalsEnabled: true });
   const sinTools = createMcpTools(registryVacio);
   check("sin config no se crea ninguna herramienta", Object.keys(sinTools).length === 0);
   await registryVacio.close();
+  // Restaurar: de acá en más el test usa SU config temporal.
+  process.env.MAGI_MCP_CONFIG = configPath;
 
   fs.writeFileSync(
     configPath,
