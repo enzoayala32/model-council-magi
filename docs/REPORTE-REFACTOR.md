@@ -2146,6 +2146,112 @@ dispositivo. Tests: `security:test-proxy` **85/85** y `security:test-devices`
 Filas sin columna de estado, conteos viejos de tests y secciones mezcladas. Se
 reordenó y se agregó la tabla de la Etapa 0 con evidencia por ítem.
 
+### 0.5 — Cierre del Context Engine: PENDIENTE DE APROBACIÓN DEL USUARIO
+
+**No HECHO.** El governor del historial sigue APAGADO por defecto. No se
+implementó ni se habilitó en esta etapa: es un cambio de comportamiento del
+agente que el usuario tiene que autorizar antes. Ver
+`docs/CONTEXTO-AGENTE.md`.
+
+### 0.7 — El sondeo de modelos usaba UNA key cruda y mentía el veredicto
+
+**El bug:** `scripts/probe-agent-models.ts` hacía
+`process.env.NVIDIA_API_KEY?.trim()` y mandaba ese string como Bearer. Sin el
+pool de credenciales y sin el clasificador central. Consecuencias comprobadas:
+
+1. Con dos keys configuradas, la segunda **no se usaba nunca**.
+2. Si la key del entorno estaba en cooldown o era inválida, todos los modelos
+   salían "caídos": se confundía un problema de credencial con uno del modelo.
+3. Un 401/403/429 no rotaba: se reintentaba con la misma key fallada.
+4. El JSON de salida no se escribía a disco: había que anotar a mano qué modelo
+   andaba para editar `lib/models.ts`.
+
+**Fix:** el sondeo pasa por `lib/agent/probe-models.ts`, que usa los **mismos**
+`getProviderPool` y `credentialOutcomeForError` que el loop del agente. La regla
+quedó fija en tests:
+
+| Síntoma | Veredicto | Rota key | Degrada el modelo |
+|---|---|---|---|
+| 401 / 403 de auth / 429 (cuota) | `key-problema` | **sí** | no |
+| 404 | `no-desplegado` | no | sí |
+| timeout | `lento` | no | sí |
+| respondió sin `tool_calls` | `sin-tool-calls` | no | sí |
+| sin credenciales | `sin-configurar` | — | no |
+
+**Tres bugs míos al implementarlo, encontrados por verificación en vivo:**
+
+1. **`toolCalls` vs `tool_calls`.** Leía el nombre camelado; la API devuelve
+   snake_case. Todo daba "respondió pero no llamó herramientas" — modelos que
+   SÍ funcionaban clasificados como inservibles.
+2. **`clearTimeout` en el `finally`.** Corría antes de que se leyera el body de
+   la respuesta, y la promesa del `text()` quedaba colgada: resultado vacío.
+3. **El timeout se clasificaba como problema de key.** `credentialOutcomeForError`
+   devuelve `cooldown` para un timeout, así que un modelo lento rotaba a la
+   segunda key y gastaba otra credencial. Ahora el timeout se detecta ANTES del
+   clasificador y la key queda sana.
+
+**Salida:** `npm run agent:probe-models` escribe
+`docs/bench/modelos-agente.json` (fecha, veredicto, latencia e intentos por
+modelo), así que ya no hay que editar `lib/models.ts` a mano a partir de notas.
+
+**Verificado en vivo contra `integrate.api.nvidia.com`:**
+
+| Modelo | Veredicto | Latencia | Intentos |
+|---|---|---|---|
+| `stepfun-ai/step-5-preview` | sirve | 19,9 s | 1 |
+| `minimaxai/minimax-m3.1-flash` | sirve | 5,0 s | 1 |
+| `nvidia/nemotron-3-ultra-550b-a55b` | lento (>60 s) | 60,0 s (cortado) | 1 |
+| `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | sirve | 2,3 s | 1 |
+| `nvidia/nemotron-3.5-lightning-30b-a3b` | sirve | 0,7 s | 1 |
+| `z-ai/glm-5.3-flash` | lento (>60 s) | 60,0 s (cortado) | 1 |
+| `moonshotai/kimi-k2.6` | no desplegado (404) | 0,5 s | 1 |
+| `deepseek-ai/deepseek-v4.1-flash` | sirve | 11,1 s | 1 |
+| `nvidia/nemotron-3-super-120b-a12b` | no desplegado (404) | 0,4 s | 1 |
+
+Latencias de la corrida del 2026-11-09 (valores exactos en ms en el JSON del
+bench). Corridas repetidas dieron números distintos: es un barrido, no una
+promesa de rendimiento.
+
+Tests con proveedor falso (sin red): `npm run agent:test-probe-models`
+**31/31** — key mala, 429, 404, timeout, sin `tool_calls`, sin credenciales,
+todas las keys en cooldown, y que un problema de key no deje rastro en
+`model-health`.
+
+### 0.7b — Tests del composer
+
+`lib/agent/test-composer.ts` **22/22**: crecimiento del textarea, paleta de
+comandos `/`, arrastrar y soltar. Sin librería de UI: `react-dom/server` más
+aserción sobre el HTML generado (documentado qué NO se puede probar así:
+eventos reales del navegador).
+
+### 0.8 — `/nuevo` sin recargar la página
+
+El botón hacía `window.location`; ahora llama a `startNewThread()`. Tests en
+`lib/agent/test-composer.ts`.
+
+### Tope de warnings de ESLint: 37 → 10
+
+Se bajó el tope en `.github/workflows/ci.yml` y `scripts/run-tests.ts`. Para
+llegar se borraron 27 `no-unused-vars` reales y se hizo explícita la convención
+del repo (`argsIgnorePattern`/`varsIgnorePattern`/`caughtErrorsIgnorePattern`/
+`destructuredArrayIgnorePattern: "^_"`, que cubre las desestructuraciones
+deliberadas). Quedan 8 `set-state-in-effect` y 2 `<img>`, ambos de UI: bajar
+más exigiría tocar React de forma que no vale el riesgo en esta etapa.
+
+### Cierre de la Etapa 0 — verificación sobre HEAD
+
+| Comprobación | Resultado |
+|---|---|
+| `npm run typecheck` | exit 0 |
+| `npm run lint -- --max-warnings 10` | exit 0, 10 warnings (0 errors) |
+| `npm test -- --verify` | **99/99 suites**, exit 0 |
+| `npm run build` | exit 0 |
+| Barrido de rutas | `security:test-route-enforcement` sobre **52 pares** ruta+método |
+
+Conteos del ROADMAP verificados con grep contra la salida real de `npm test`
+(correcciones: `security:test-proxy` 62/62 → **85/85**,
+`council:test-catalog` 45/45 → **46/46**, `npm test` 71/71 → **99/99**).
+
 ## Apéndice — Matriz ruta por scope
 
 Las 35 rutas (39 handlers). Todas pasan por `guardRequest`; verificado por

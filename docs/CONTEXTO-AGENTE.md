@@ -12,12 +12,13 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
   previos: el emparejamiento estaba bloqueado por el proxy y el token de
   dispositivo solo se leía de cookie), 0.6 (ROADMAP corregido).
 - **No seguir con la Etapa 1** hasta que el usuario lo indique (punto de
-  parada).
+  parada). Decisión que espera al usuario: habilitar o no
+  `deepseek-ai/deepseek-v4.1-flash` (SIRVE en el sondeo, no está en el catálogo).
 - Último commit: ver `git log -1` (branch main, pusheado).
 
 - **Misión 2**: Fases 5, 6, 7, 8 y 9 **HECHAS**, con las tres tandas de
-  correcciones de la revisión aplicadas. Últimas: 4 modelos NVIDIA NIM
-  validados con tool-calling en vivo (step-5-preview entre ellos),
+  correcciones de la revisión aplicadas. Últimas: sondeo por pool y clasificador central (`npm run agent:probe-models` ->
+  `docs/bench/modelos-agente.json`): 5 de 9 candidatos SIRVE con tool-calling,
   composer estilo opencode, y la app como servidor MCP para opencode. Conectado al producto: push con
   allowlist de servicios, herramientas MCP **fail-closed** en el loop (stdio **e
   http**), aprobación humana con step-up, rutas de aprobación y administración de
@@ -28,8 +29,8 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 ## 2. Estado de verificación (sobre HEAD)
 
 - `npm run typecheck`: exit 0.
-- `npm run lint -- --max-warnings 37`: exit 0 (37 warnings).
-- `npm test`: **95/95 OK** (incluye `agent:test-web-search-compat` 17/17) (incluye `security:test-mcp-failclosed` 61/61,
+- `npm run lint -- --max-warnings 10`: exit 0 (10 warnings).
+- `npm test`: **99/99 suites OK** (incluye `agent:test-web-search-compat` 17/17) (incluye `security:test-mcp-failclosed` 61/61,
   `security:test-mcp-http` 46/46, `security:test-mcp-admin` 36/36,
   `security:test-push-endpoint` 78/78, `security:test-web-push` 92/92,
   `security:test-mcp-client` 48/48, `security:test-mcp-server` 53/53 y
@@ -40,7 +41,7 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
   loopback (`NODE_OPTIONS=--require dns-block.js`), 93/93 exit 0. Si un test
   nuevo toca la red, eso falla.
 - Barrido de rutas: `security:test-route-enforcement` 13/13 sobre
-  **49 pares ruta+método** con guardia verificada; `security:test-peer-spoof`
+  **52 pares ruta+método** con guardia verificada; `security:test-peer-spoof`
   34/34 en verde.
 - `npm run build`: exit 0.
 - `npx tsx scripts/run-tests.ts --verify`: exit 0 (tests + tope de lint).
