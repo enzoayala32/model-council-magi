@@ -2252,6 +2252,48 @@ Conteos del ROADMAP verificados con grep contra la salida real de `npm test`
 (correcciones: `security:test-proxy` 62/62 → **85/85**,
 `council:test-catalog` 45/45 → **46/46**, `npm test` 71/71 → **99/99**).
 
+## 2B. Etapa 1 — matriz de paridad con OpenCode
+
+**Alcance decidido por el usuario:** primero la matriz, no el benchmark. La
+Etapa 1 original ("benchmark") quedó redefinida: medir qué medir requiere saber
+antes dónde están las brechas.
+
+**Qué se hizo.** Relevo de 29 capacidades de OpenCode v2 contra nuestro código,
+con veredicto por capacidad y prioridad de brecha. Fuentes: la documentación v2
+completa (índice `opencode.ai/docs/llms.txt`, páginas `tools`, `permissions`,
+`agents`, `commands`, `skills`, `instructions`, `snapshots`, `compaction`,
+`models`, `mcp-servers`) y el repo `anomalyco/opencode` rama `dev` para
+comprobar que una "ausencia" es real.
+
+**Resultado:** 7 NOSOTROS · 3 IGUAL · 11 PARCIAL · 2 DIFERENTE · 6 FALTA
+(documentado en `docs/PARIDAD-OPENCODE.md`, con el conteo verificado por script
+contra la propia tabla).
+
+**Las 6 que faltan,** en orden de cuánto duelen: instrucciones del proyecto
+(`AGENTS.md`), comandos `/` personalizados, agentes/subagentes por el usuario,
+plugins y SDK, modelos locales (Ollama/LM Studio/vLLM) e integración con el
+ecosistema comercial de OpenCode (fuera de alcance).
+
+**Dos correcciones que el relevo le hizo a nuestra propia propaganda:**
+
+1. **Tokens y costo por corrida dejaron de ser ventaja nuestra.** OpenCode
+   muestra tokens y costo por sesión (incluyendo subagentes) en la API y en el
+   header. Lo nuestro sigue siendo mejor en *trazabilidad exportable y
+   comparación de dos corridas*, pero la fila pasa de "NOSOTROS" a "IGUAL+".
+2. **La rotación multi-key sí es nuestra y de verdad.** En el repo de OpenCode
+   (`packages/core/src/session/to-session-error.ts`) `QuotaExceeded` es
+   explícitamente **no reintentable**, y el límite de uso gratis deriva a
+   suscribirse a OpenCode Go en vez de rotar credenciales. Nuestro pool con
+   cooldown, clasificador central y fallback entre proveedores no tiene
+   equivalente allá.
+
+**Lo NO VERIFICADO de esta etapa:** no se corrió OpenCode. Todo su lado sale de
+su documentación y su repo al 2026-11-10. "No encontrado" significa
+exactamente eso, no "no existe". El rendimiento comparado no se midió: esa era
+la Etapa 1 original, redefinida por decisión del usuario.
+
+**Nada de lo que falta se implementó.** La Etapa 2 arranca solo con aprobación.
+
 ## Apéndice — Matriz ruta por scope
 
 Las 35 rutas (39 handlers). Todas pasan por `guardRequest`; verificado por

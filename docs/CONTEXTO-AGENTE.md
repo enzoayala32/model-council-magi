@@ -6,7 +6,10 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 ## 1. Fase actual y último commit
 
 - **Etapa 0 (cierre de pendientes de la auditoría): HECHA**, salvo 0.5, que
-  queda **pendiente de aprobación del usuario**. Cerrados: 0.1 (admin MCP solo
+  queda **pendiente de aprobación del usuario**.
+- **Etapa 1 (matriz de paridad con OpenCode): HECHA** — `docs/PARIDAD-OPENCODE.md`,
+  29 capacidades relevadas (7 NOSOTROS, 3 IGUAL, 11 PARCIAL, 2 DIFERENTE, 6 FALTA).
+  Falta implementar: sigue pendiente de aprobación. Cerrados: 0.1 (admin MCP solo
   desde la PC con step-up), 0.2 (hermetismo de los tests de MCP), 0.3 (pin de
   IP anti-rebinding), 0.4 (docs del subagente opencode, que destapó dos bugs
   previos: el emparejamiento estaba bloqueado por el proxy y el token de
@@ -30,23 +33,19 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 - `npm run typecheck`: exit 0.
 - `npm run lint -- --max-warnings 10`: exit 0 (10 warnings).
-- `npm test`: **99/99 suites OK** (incluye `agent:test-web-search-compat` 17/17) (incluye `security:test-mcp-failclosed` 61/61,
+- `npm test`: **99/99 suites OK** (incluye `agent:test-web-search-compat` 17/17, `security:test-mcp-failclosed` 61/61,
   `security:test-mcp-http` 46/46, `security:test-mcp-admin` 36/36,
   `security:test-push-endpoint` 78/78, `security:test-web-push` 92/92,
   `security:test-mcp-client` 48/48, `security:test-mcp-server` 53/53 y
   `security:test-mcp-loop` 51/51).
 - **Hermetismo verificado**: la suite corre con un preload que rompe el DNS no
-  loopback. Si un test nuevo toca la red, eso falla.
-- **Hermetismo verificado**: la suite corre con un preload que rompe el DNS no
-  loopback (`NODE_OPTIONS=--require dns-block.js`), 93/93 exit 0. Si un test
-  nuevo toca la red, eso falla.
+  loopback (`NODE_OPTIONS=--require dns-block.js`). Si un test nuevo toca la
+  red, eso falla.
 - Barrido de rutas: `security:test-route-enforcement` 13/13 sobre
   **52 pares ruta+método** con guardia verificada; `security:test-peer-spoof`
   34/34 en verde.
 - `npm run build`: exit 0.
 - `npx tsx scripts/run-tests.ts --verify`: exit 0 (tests + tope de lint).
-- Barrido de rutas: `security:test-route-enforcement` 13/13 y
-  `security:test-peer-spoof` 34/34 en verde (incluidos en el runner).
 
 ## 3. Próximos 3 pasos concretos
 

@@ -120,6 +120,22 @@ que se ejecuten); la salida de herramientas MCP es dato, no instrucción.
 
 ---
 
+## 4D. Misión 2 — Etapa 1: paridad con OpenCode
+
+| Ítem | Estado | Evidencia |
+|---|---|---|
+| Relevo de capacidades de OpenCode v2 | **HECHA** | Documentación v2 (`opencode.ai/docs`, índice `llms.txt`) + repo `anomalyco/opencode` rama `dev`. 29 capacidades relevadas |
+| Matriz de paridad con veredicto por capacidad | **HECHA** | `docs/PARIDAD-OPENCODE.md`: 7 NOSOTROS, 3 IGUAL, 11 PARCIAL, 2 DIFERENTE, 6 FALTA |
+| Brechas priorizadas (P0/P1/P2) con dónde encajan en nuestra arquitectura | **HECHA** | Sección 4 del mismo documento |
+| Verificación de que nuestras supuestas "ventajas" son reales | **HECHA** | Contra el repo de OpenCode: `QuotaExceeded` es no reintentable (no rota keys); el Consejo multi-modelo no existe allá; tokens y costo por sesión **sí** existen allá (dejó de ser ventaja nuestra) |
+| Implementar las brechas P0/P1 | **PENDIENTE DE APROBACIÓN DEL USUARIO** | La Etapa 1 era la matriz; la Etapa 2 (implementación) arranca solo con visto bueno |
+
+Lo **NO VERIFICADO** de esta etapa, explícito: no se corrió OpenCode, todo su
+lado sale de su documentación y su repo al 2026-11-10; "no encontrado" significa
+exactamente eso, no "no existe".
+
+---
+
 ## 4B. Misión 2 — rotación de NVIDIA y catálogo automático
 
 | Ítem | Estado | Cómo se comprueba |
