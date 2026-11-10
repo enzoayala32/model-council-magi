@@ -169,6 +169,7 @@ exit 0.
 |---|---|---|
 | Encolar prompts mientras el agente trabaja | **HECHA** | `lib/agent/prompt-queue.ts` + tabla `agent_prompt_queue`. El prompt se guarda y se le pasa al agente cuando el ciclo en curso da su resumen |
 | Varios prompts consecutivos, en orden | **HECHA** | El runner drena la cola: un ciclo por prompt, misma task y mismo workspace, hasta vaciarla |
+| El ciclo siguiente recibe el contexto del anterior | **HECHA** (mejora) | `priorMessages`/`finalMessages` en el loop: el prompt encolado se agrega al historial en vez de arrancar vacío, y lo que se arrastra es la versión compactada por el governor (prendido desde 2.2), así que no crece sin techo. Tests 41/41 |
 | Encolar/listar/cancelar por API | **HECHA** | `GET`/`POST`/`DELETE /api/agent/tasks/:id/prompts` (scope observe/operate), 56 pares ruta+método en el barrido |
 | UI de la cola en el detalle de la task | **HECHA** | Lista con posición/estado/"quitar" + textarea para encolar mientras corre (`app/agent/page.tsx`) |
 | Un ciclo fallado corta la cola | **HECHA** (a propósito) | Si el proveedor está caído, reintentar el resto en cadena solo gasta tokens: los encolados quedan esperando y a la vista |
