@@ -2474,7 +2474,7 @@ su cuenta.
 3. **Los comandos anidados no se descubrían**: la lectura tomaba solo el primer
    nivel del directorio.
 
-**Y una trampa del entorno, ya conocida y vuelta a pagar:** un `` escrito
+**Y una trampa del entorno, ya conocida y vuelta a pagar:** un `\b` escrito
 dentro de un heredoc de bash llega al archivo como un carácter BACKSPACE real,
 que corrompe el regex en silencio (el placeholder más alto nunca se detectaba y
 todas las posiciones caían en el caso de un solo argumento). Ya estaba anotada en
