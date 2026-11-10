@@ -137,6 +137,12 @@ export default function AgentPage() {
   const [tasks, setTasks] = useState<CodingTask[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [newTaskPrompt, setNewTaskPrompt] = useState("");
+  // Etapa 2.3 — comandos `/` personalizados del proyecto. Solo para la paleta:
+  // la expansión la hace el servidor al crear la task. El projectId viaja con la
+  // lista para NUNCA mostrar los comandos de un proyecto que ya no está
+  // seleccionado (y para no hacer un setState sincrónico dentro del efecto, que
+  // es justo el warning que el tope de lint no deja sumar).
+  const [agentCommands, setAgentCommands] = useState<{ projectId: string; items: Array<{ id: string; description: string | null }> } | null>(null);
   const [newTaskModelId, setNewTaskModelId] = useState("");
   const [creatingTask, setCreatingTask] = useState(false);
   const [taskFormError, setTaskFormError] = useState("");
@@ -177,6 +183,23 @@ export default function AgentPage() {
       })
       .catch(() => {});
   }, []);
+
+  // --- Comandos `/` del proyecto seleccionado (Etapa 2.3) ---
+  useEffect(() => {
+    if (!selectedProjectId) return;
+    let cancelled = false;
+    fetchJson<{ commands: Array<{ id: string; description: string | null }> }>(`/api/agent/commands?projectId=${selectedProjectId}`)
+      .then((r) => {
+        if (!cancelled) setAgentCommands({ projectId: selectedProjectId, items: r.commands ?? [] });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedProjectId]);
+
+  // Solo se muestran si son del proyecto seleccionado AHORA.
+  const comandosVisibles = agentCommands && agentCommands.projectId === selectedProjectId ? agentCommands.items : [];
 
   // --- Cargar/refrescar tasks del proyecto seleccionado ---
   useEffect(() => {
@@ -551,7 +574,30 @@ export default function AgentPage() {
                 </option>
               ))}
             </select>
-            <textarea placeholder="¿Qué querés que haga el agente?" value={newTaskPrompt} onChange={(e) => setNewTaskPrompt(e.target.value)} required />
+            {comandosVisibles.length > 0 && (
+              <div className="agentCommands" role="listbox" aria-label="Comandos del proyecto">
+                {comandosVisibles.map((command) => (
+                  <button
+                    key={command.id}
+                    type="button"
+                    className="agentCommandChip"
+                    // Se INSERTA el comando con un espacio: la expansión ocurre
+                    // al enviar (en el servidor), igual que en OpenCode. Así el
+                    // usuario ve qué se mandó y puede editarlo antes.
+                    onClick={() => setNewTaskPrompt((current) => (current.trim() ? current.trimEnd() + " " : "") + command.id + " ")}
+                    title={command.description ?? undefined}
+                  >
+                    {command.id}
+                  </button>
+                ))}
+              </div>
+            )}
+            <textarea
+              placeholder="¿Qué querés que haga el agente? (o /comando del proyecto)"
+              value={newTaskPrompt}
+              onChange={(e) => setNewTaskPrompt(e.target.value)}
+              required
+            />
             <button className="agentButton" type="submit" disabled={creatingTask || models.length === 0 || selectedProject?.isGitRepo === false}>
               {creatingTask ? "Creando…" : "Crear task"}
             </button>

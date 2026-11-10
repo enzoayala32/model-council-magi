@@ -79,6 +79,7 @@ export const ROUTE_RULES: readonly RouteRule[] = [
   { pattern: "/api/agent/browse", method: "GET", scope: "observe", note: "Lista el arbol de un proyecto. Solo lectura." },
   { pattern: "/api/agent/inspect", method: "GET", scope: "observe", note: "Inspecciona simbolos/estructura. Solo lectura." },
   { pattern: "/api/agent/models", method: "GET", scope: "observe", note: "Catalogo de modelos habilitados." },
+  { pattern: "/api/agent/commands", method: "GET", scope: "observe", note: "Comandos / personalizados del proyecto. Solo lectura." },
   { pattern: "/api/agent/tasks", method: "GET", scope: "observe", note: "Lista de tareas." },
   { pattern: "/api/agent/tasks/:id", method: "GET", scope: "observe", note: "Detalle de una tarea." },
   { pattern: "/api/agent/tasks/:id/events", method: "GET", scope: "observe", note: "SSE de eventos. Es la pantalla de detalle del telefono." },

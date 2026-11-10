@@ -3,6 +3,7 @@ import { createTask, listTasks, type TaskStatus } from "@/lib/agent/task-store";
 import { getProject, touchProjectLastUsed } from "@/lib/agent/project-store";
 import { isCodingAgentEnabled } from "@/lib/models";
 import { maybeDispatchNext } from "@/lib/agent/dispatcher";
+import { resolveCommandPrompt } from "@/lib/agent/commands";
 import { guardRequest } from "@/lib/auth/guard";
 
 /** Fase 2H. `?projectId=` filtra por proyecto (lo que usa la UI para el
@@ -73,7 +74,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: `El modelo "${modelId}" no está habilitado para el Coding Agent.` }, { status: 400 });
   }
 
-  const task = createTask({ projectId, modelId, prompt });
+  // Etapa 2.3 — comandos `/` personalizados. Si el prompt empieza con `/id` y
+  // ese comando existe (en `<proyecto>/.magi/commands/` o en el directorio
+  // global), se expande su plantilla ACÁ, en el servidor: así un cliente que
+  // no conoce la feature (la API directa, otro cliente, una versión vieja de
+  // la UI) manda `/review src/x.ts` y recibe la task con el prompt ya
+  // expandido. Si no es un comando, o el comando no se pudo leer, el prompt
+  // viaja TAL CUAL — un comando roto nunca rompe la task.
+  const comando = await resolveCommandPrompt(prompt, project.localPath);
+  // El comando puede pedir otro modelo. Si ese modelo no está habilitado para
+  // el Coding Agent, se ignora el override en vez de fallar (mismo criterio
+  // que el resto: la tarea del usuario manda).
+  const modeloElegido = comando.command?.model && isCodingAgentEnabled(comando.command.model) ? comando.command.model : modelId;
+
+  const task = createTask({ projectId, modelId: modeloElegido, prompt: comando.prompt });
   touchProjectLastUsed(projectId);
 
   maybeDispatchNext(projectId);

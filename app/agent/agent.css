@@ -552,3 +552,24 @@
 .agentResilienceEvents small {
   color: #9aa1b3;
 }
+
+/* Etapa 2.3 — comandos `/` personalizados del proyecto. Chips que SOLO insertan
+   texto: la expansión la hace el servidor al crear la task. */
+.agentCommands {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.agentCommandChip {
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 8px;
+  border: 1px solid var(--line, #2a2f3a);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.agentCommandChip:hover {
+  border-color: var(--accent, #6ea8fe);
+}
