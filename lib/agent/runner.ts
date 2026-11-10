@@ -139,6 +139,15 @@ function contextEngineEnabled(): boolean {
   return !(raw === "1" || raw === "true" || raw === "yes" || raw === "on");
 }
 
+/** Etapa 2.2 (sub-bloque 4). Mismo patrón que `contextEngineEnabled`: una
+ * variable de entorno para poder apagarlo sin recompilar. Sirve para medir el
+ * antes y el después en la misma máquina, y como salida de emergencia si un
+ * modelo empeorara con la compactación puesta. */
+function historyGovernorDisabled(): boolean {
+  const raw = process.env.MAGI_HISTORY_GOVERNOR_DISABLED?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
 /** Fase 9C — adapta el resultado autónomo al mismo shape que consume el
  * mapeo de estados de `runTask`. El estado de la task lo decide
  * `outcome.status` (contrato 9A), no la mera presencia de `error`: un
@@ -414,9 +423,16 @@ export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promis
           abortSignal: abortController.signal,
           taskId,
           // Fase 8D: encendido para tasks reales; `MAGI_CONTEXT_ENGINE_DISABLED=1`
-          // restaura el comportamiento previo sin recompilar. El governor sigue
-          // apagado (8E) hasta que se apruebe explícitamente.
+          // restaura el comportamiento previo sin recompilar.
           contextEngine: { enabled: contextEngineEnabled() },
+          // Etapa 2.2 (sub-bloque 4): el governor del historial pasó a estar
+          // PRENDIDO por defecto. Solo llega acá si la ventana de contexto del
+          // modelo es conocida (ver `runAgentLoop`: con ventana desconocida
+          // queda apagado y el motivo viaja en `governor.skipReason`), así que
+          // no compacta a ciegas. `MAGI_HISTORY_GOVERNOR_DISABLED=1` lo apaga
+          // sin recompilar, para poder medir el antes y el después en la misma
+          // máquina.
+          ...(historyGovernorDisabled() ? {} : { historyGovernor: { enabled: true } }),
         });
 
     if (abortController.signal.aborted) {
