@@ -5,23 +5,21 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 ## 1. Fase actual y último commit
 
-- **Etapa 0 (cierre de pendientes de la auditoría): HECHA**, salvo 0.5, que
-  queda **pendiente de aprobación del usuario**.
+- **Etapa 0: HECHA**, salvo 0.5 (pendiente de aprobación del usuario). Cerrados
+  0.1 (admin MCP solo desde la PC con step-up), 0.2 (hermetismo de los tests de
+  MCP), 0.3 (pin de IP anti-rebinding), 0.4 (docs del subagente opencode, que
+  destapó dos bugs previos), 0.6 (ROADMAP corregido) y 0.7 (sondeo por pool).
 - **Etapa 1: HECHA. Etapas 2.1, 2.2 y 2.3: HECHAS** — las tres brechas P0 de
-  `docs/PARIDAD-OPENCODE.md` están cerradas: `AGENTS.md` leído por el loop
-  (26/26), governor del historial prendido por defecto (62/62, 42/42, 15/15,
-  7/7) y comandos `/` personalizados con plantillas (37/37). Quedan las P1/P2 de
-  la matriz, ninguna arrancada.
-- **Cola de prompts (pedido de Enzo): HECHA** — `lib/agent/prompt-queue.ts`: se
-  pueden dejar varios prompts y el runner se los pasa al agente cuando cada ciclo
-  da su resumen, en orden y sobre el mismo workspace (36/36 tests + 8/8 smoke en vivo). Quedan las P1/P2 de la matriz de paridad, ninguna arrancada. Cerrados: 0.1 (admin MCP solo
-  desde la PC con step-up), 0.2 (hermetismo de los tests de MCP), 0.3 (pin de
-  IP anti-rebinding), 0.4 (docs del subagente opencode, que destapó dos bugs
-  previos: el emparejamiento estaba bloqueado por el proxy y el token de
-  dispositivo solo se leía de cookie), 0.6 (ROADMAP corregido).
-- **No seguir con la Etapa 1** hasta que el usuario lo indique (punto de
-  parada). Decisión que espera al usuario: habilitar o no
-  `deepseek-ai/deepseek-v4.1-flash` (SIRVE en el sondeo, no está en el catálogo).
+  `docs/PARIDAD-OPENCODE.md`: `AGENTS.md` leído por el loop (26/26), governor del
+  historial prendido por defecto (62/62, 42/42, 15/15, 7/7) y comandos `/`
+  personalizados (37/37).
+- **Cola de prompts (pedido de Enzo): HECHA** — varios prompts esperan y el runner
+  se los pasa al agente cuando cada ciclo da su resumen, en orden, sobre el mismo
+  workspace y **arrastrando el contexto del ciclo anterior** (`priorMessages`,
+  compactado por el governor, así que no crece sin techo). 41/41 + 8/8 en vivo.
+- Quedan las **P1/P2** de la matriz de paridad, ninguna arrancada.
+- Decisión que espera al usuario: habilitar o no `deepseek-ai/deepseek-v4.1-flash`
+  (SIRVE en el sondeo, no está en el catálogo).
 - Último commit: ver `git log -1` (branch main, pusheado).
 
 - **Misión 2**: Fases 5, 6, 7, 8 y 9 **HECHAS**, con las tres tandas de
