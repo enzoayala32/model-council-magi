@@ -143,5 +143,7 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 - Android real (PWA instalada), acceso desde otra máquina: sin dispositivo.
 - Tailscale / Cloudflare reales: sin túnel configurado.
 - Push real a Android (Fase 6): sin servicio de push.
-- Proveedores reales: faltan `NVIDIA_API_KEY`/`GEMINI_API_KEY`.
+- Proveedores reales: `NVIDIA_API_KEY`(+`_2`), `GEMINI_API_KEY` y `OPENROUTER_API_KEY`(1-4)
+  están definidas; el sondeo de modelos corrió en vivo con ellas (arriba). Lo que sigue
+  sin correr en vivo es el consejo completo con debate/voto contra estos proveedores.
 - CI en Linux/GitHub Actions no ejecutado desde este entorno.
