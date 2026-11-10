@@ -68,6 +68,8 @@
     "agent:test-governor-default": "tsx lib/agent/test-governor-default.ts",
     "agent:test-commands": "tsx lib/agent/test-commands.ts",
     "agent:test-prompt-queue": "tsx lib/agent/test-prompt-queue.ts",
+    "agent:test-patch-parser": "tsx lib/agent/test-patch-parser.ts",
+    "agent:test-patch-tool": "tsx lib/agent/test-patch-tool.ts",
     "agent:smoke-prompt-queue": "tsx scripts/smoke-prompt-queue.ts",
     "agent:test-phase8": "npm run agent:test-context-estimate && npm run agent:test-context-budget && npm run agent:test-context-usage && npm run agent:test-context-sensitive && npm run agent:test-context-select && npm run agent:test-context-engine && npm run agent:test-context-history-governor && npm run agent:test-repo-map-snapshot && npm run agent:test-read-range && npm run agent:test-context-loop",
     "agent:test-autonomy-contract": "tsx lib/agent/autonomy/test-contract.ts",

@@ -132,7 +132,7 @@ async function main(): Promise<void> {
     const seen = await toolNamesSeenByModel({ webSearchCompatibleOverride: true });
     check("web_search NO está", !seen.includes("web_search"), seen);
     // Fase 7D: el set base pasó de 7 a 8 tools (se sumó `repo_map`, siempre disponible y sin gate): las 7 de siempre + repo_map.
-    check("el set queda exactamente en las 7 tools de siempre + repo_map + read_file_range (sin web_search, sin run_script porque el workspace no tiene package.json)", seen.length === 9 && seen.includes("run_typecheck") && seen.includes("repo_map") && seen.includes("read_file_range"), seen);
+    check("el set queda en las tools de siempre + repo_map + read_file_range + patch (sin web_search, sin run_script porque el workspace no tiene package.json)", seen.length === 10 && seen.includes("run_typecheck") && seen.includes("repo_map") && seen.includes("read_file_range") && seen.includes("patch"), seen);
   }
 
   console.log("\n--- Caso 5: searchProvider inyectado explícitamente + override false → el provider explícito gana ---");

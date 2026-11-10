@@ -6,6 +6,7 @@ import { tool } from "ai";
 import { wrapToolExecute, type ToolPolicy } from "./tool-policy";
 import { createMcpTools, type McpToolRegistry } from "./mcp-tools";
 import { createSearchProviderFromEnv, MAX_WEB_SEARCH_RESULTS, type SearchProvider } from "./search-provider";
+import { applyHunks, normalizarSaltos, parsePatch, restaurarSaltos } from "./patch-parser";
 import { redactSecrets } from "../provider-resilience/redact";
 import { execWithTreeKill } from "./exec-with-tree-kill";
 import { resolveSafePath, UnsafePathError } from "./safe-path";
@@ -19,6 +20,7 @@ import type { RepoMapService } from "./repo-map-service";
 // Re-export (Paso 0 de 7B): mismos nombres y misma clase que antes, ahora definidos en `safe-path.ts`.
 export { resolveSafePath, UnsafePathError } from "./safe-path";
 
+const SALTO = "\n";
 const MAX_READ_BYTES = 200_000;
 const MAX_SEARCH_RESULTS = 60;
 const MAX_LIST_RESULTS = 300;
@@ -354,6 +356,106 @@ export function createAgentTools(
           } catch (error) {
             return { ok: false, error: describeError(error, relPath) };
           }
+        }),
+        DEFAULT_POLICY,
+      ),
+    }),
+
+    // P1 de paridad con OpenCode: una sola llamada que puede agregar,
+    // actualizar y borrar VARIOS archivos. Antes, un cambio que cruzaba tres
+    // archivos eran tres llamadas y tres round-trips, con el riesgo de que el
+    // modelo se olvide uno. El formato y las reglas están en
+    // `lib/agent/patch-parser.ts` (con sus propios tests: 34/34).
+    patch: tool({
+      description:
+        "Aplica UN patch que puede crear, actualizar y borrar VARIOS archivos en una sola llamada. Formato: secciones '*** Add File: ruta' (el cuerpo es el contenido, líneas con +), '*** Update File: ruta' (hunks con ' ' = contexto, '-' = se va, '+' = entra; cada hunk se separa con '@@') y '*** Delete File: ruta'. En Update File el bloque contexto+borrado tiene que aparecer EXACTAMENTE UNA vez en el archivo. Los hunks se buscan por contenido, no por número de línea.",
+      inputSchema: z.object({
+        patch: z.string().describe("El patch completo, con sus secciones *** Add/Update/Delete File."),
+      }),
+      execute: wrapToolExecute(
+        "patch",
+        mutating("file", async ({ patch: patchText }) => {
+          const parseado = parsePatch(patchText);
+          if (!parseado.ok) return { ok: false, error: parseado.error };
+
+          const aplicados: string[] = [];
+          const fallos: Array<{ relPath: string; error: string }> = [];
+          // Se aplica en el orden en que vienen las secciones: si una sección
+          // falla, las anteriores QUEDAN aplicadas (no hay transacción). Eso se
+          // dice en el resultado para que el modelo sepa exactamente qué pasó.
+          for (const op of parseado.ops) {
+            let abs: string;
+            try {
+              abs = await resolveSafePath(workspaceRoot, op.relPath);
+            } catch (error) {
+              fallos.push({ relPath: op.relPath, error: describeError(error, op.relPath) });
+              continue;
+            }
+
+            try {
+              if (op.kind === "delete") {
+                const stat = await fs.stat(abs).catch(() => null);
+                if (!stat) {
+                  fallos.push({ relPath: op.relPath, error: "no existe" });
+                  continue;
+                }
+                if (!stat.isFile()) {
+                  fallos.push({ relPath: op.relPath, error: "no es un archivo" });
+                  continue;
+                }
+                await fs.unlink(abs);
+                emit({ type: "file_deleted", relPath: op.relPath });
+                aplicados.push("delete " + op.relPath);
+                continue;
+              }
+
+              if (op.kind === "add") {
+                if (await fs.stat(abs).then(() => true).catch(() => false)) {
+                  fallos.push({ relPath: op.relPath, error: "ya existe (Add File es solo para archivos nuevos: usá Update File)" });
+                  continue;
+                }
+                await fs.mkdir(path.dirname(abs), { recursive: true });
+                await fs.writeFile(abs, op.content ?? "", "utf-8");
+                emit({ type: "file_written", relPath: op.relPath });
+                aplicados.push("add " + op.relPath);
+                continue;
+              }
+
+              // update
+              let original: string;
+              try {
+                original = await fs.readFile(abs, "utf-8");
+              } catch {
+                fallos.push({ relPath: op.relPath, error: "no existe (no se puede actualizar un archivo ausente)" });
+                continue;
+              }
+              const { normalizado, eraCRLF } = normalizarSaltos(original);
+              const aplicado = applyHunks(normalizado, op.hunks ?? []);
+              if (!aplicado.ok) {
+                fallos.push({ relPath: op.relPath, error: aplicado.error });
+                continue;
+              }
+              await fs.writeFile(abs, restaurarSaltos(aplicado.lines.join(SALTO), eraCRLF), "utf-8");
+              emit({ type: "file_edited", relPath: op.relPath });
+              aplicados.push("update " + op.relPath);
+            } catch (error) {
+              fallos.push({ relPath: op.relPath, error: describeError(error, op.relPath) });
+            }
+          }
+
+          if (fallos.length > 0 && aplicados.length === 0) {
+            return { ok: false, error: "El patch no se aplicó a ningún archivo: " + fallos.map((f) => f.relPath + " (" + f.error + ")").join("; ") };
+          }
+          return {
+            ok: true,
+            applied: aplicados,
+            // Aunque el patch sea parcialmente válido, los fallos se reportan
+            // con detalle: el modelo tiene que saber EXACTO qué quedó sin
+            // aplicar, no enterarse por el siguiente typecheck.
+            ...(fallos.length > 0 ? { failed: fallos } : {}),
+            // El mapa del repo se invalida solo si algo cambió de verdad.
+            ...(aplicados.length > 0 ? { note: aplicados.length + " archivo(s) modificado(s)." } : {}),
+          };
         }),
         DEFAULT_POLICY,
       ),
