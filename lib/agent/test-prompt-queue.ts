@@ -236,6 +236,69 @@ async function main(): Promise<void> {
     check("la task quedó FAILED con el error del ciclo", final?.status === "FAILED", final?.status);
   }
 
+  console.log("\n== el ciclo siguiente recibe el contexto del anterior ==\n");
+
+  {
+    const { id: projectId } = await makeGitProject("contexto");
+    const taskId = createTask({ projectId, modelId: "test/modelo-no-registrado", prompt: "ORIGINAL" }).id;
+    enqueuePrompt(taskId, "SEGUNDO");
+    enqueuePrompt(taskId, "TERCERO");
+
+    // Lo que cada ciclo RECIBIO (historial que se le paso) y lo que DEVOLVIO.
+    const recibido: Array<{ task: string; prior: number }> = [];
+    let ciclo = 0;
+    await runTask(taskId, {
+      loopRunner: (async (opciones: { task: string; priorMessages?: unknown[] }) => {
+        const prior = Array.isArray(opciones.priorMessages) ? opciones.priorMessages.length : 0;
+        recibido.push({ task: opciones.task, prior });
+        ciclo += 1;
+        // Cada ciclo termina con un historial propio y distinto: asi se ve si el
+        // siguiente realmente recibe el del anterior.
+        const mensajes = [
+          { role: "user", content: "historial del ciclo " + ciclo },
+          { role: "assistant", content: "lei " + ciclo + " archivos" },
+        ];
+        return { stopReason: "completed", proposals: [], transcript: [], finalMessages: mensajes as never };
+      }) as never,
+    });
+
+    check("el primer ciclo arranco sin historial (prior vacio)", recibido[0]?.prior === 0, recibido[0]);
+    check("el segundo ciclo recibio el historial del primero", recibido[1]?.prior === 2, recibido[1]);
+    check("el tercer ciclo recibio el historial del segundo", recibido[2]?.prior === 2, recibido[2]);
+    check(
+      "los prompts se atendieron igual en orden",
+      recibido.map((r) => r.task).join(" | ") === "ORIGINAL | SEGUNDO | TERCERO",
+      recibido.map((r) => r.task),
+    );
+  }
+
+  console.log("\n== un ciclo que falla antes del primer request no rompe el arrastre ==\n");
+
+  {
+    const { id: projectId } = await makeGitProject("contexto-fallo");
+    const taskId = createTask({ projectId, modelId: "test/modelo-no-registrado", prompt: "ORIGINAL" }).id;
+    enqueuePrompt(taskId, "SEGUNDO");
+
+    const recibido: Array<{ task: string }> = [];
+    let ciclo = 0;
+    await runTask(taskId, {
+      loopRunner: (async (opciones: { task: string }) => {
+        recibido.push({ task: opciones.task });
+        ciclo += 1;
+        // El primer ciclo falla SIN devolver mensajes: fallo antes del request.
+        if (ciclo === 1) return { stopReason: "error", proposals: [], transcript: [], error: "se cayo antes del request" };
+        return {
+          stopReason: "completed",
+          proposals: [],
+          transcript: [],
+          finalMessages: [{ role: "user", content: "hola" }] as never,
+        };
+      }) as never,
+    });
+
+    check("el ciclo que fallo corto la cola (regla existente)", recibido.length === 1, recibido);
+  }
+
   console.log("\n== se puede encolar mientras la task corre ==\n");
 
   {

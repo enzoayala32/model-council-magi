@@ -12,6 +12,7 @@ import {
 import { getProject } from "./project-store";
 import { createWorkspaceForTask, destroyWorkspaceForTask, loadWorkspaceForTask, type TaskWorkspace } from "./workspace-manager";
 import { runAgentLoop, type AgentFileProposal, type AgentLoopResult, type RunAgentLoopOptions } from "./loop";
+import type { ModelMessage } from "ai";
 import {
   runAutonomousLoop,
   type AutonomousLoopResult,
@@ -54,6 +55,10 @@ type TaskRunResult = {
   stopReason: string | null;
   proposals: AgentFileProposal[];
   outcome?: AutonomyTaskOutcome;
+  /** Etapa 2.4: mensajes con los que terminó la corrida, para pasarle al ciclo
+   *  siguiente de la MISMA task (cola de prompts). Viene de
+   *  `AgentLoopResult.finalMessages`; el loop autónomo no lo produce. */
+  finalMessages?: ModelMessage[];
 };
 
 /** Tope de reintentos automáticos por restart antes de rendirse y dejar la
@@ -437,6 +442,11 @@ export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promis
       };
       let promptsEncoladosAtendidos = 0;
       let primerCiclo = true;
+      // Etapa 2.4: el historial con el que terminó el ciclo anterior. Se pasa al
+      // siguiente para que el prompt encolado NO tenga que re-leer lo que ya se
+      // leyó. Crece acotado: el governor del historial (prendido por defecto
+      // desde 2.2) lo compacta cuando el presupuesto blando se acerca.
+      let mensajesPrevios: ModelMessage[] | undefined;
       for (;;) {
         // El PRIMER ciclo corre SIEMPRE el prompt original de la task. Recién
         // cuando ese ciclo da su resumen se mira la cola. (Mi primera versión
@@ -466,6 +476,7 @@ export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promis
 
         const ciclo: TaskRunResult = await loopRunner({
           task: promptDeEsteCiclo,
+          ...(mensajesPrevios && mensajesPrevios.length > 0 ? { priorMessages: mensajesPrevios } : {}),
           workspaceRoot: workspace.worktreePath,
           repoRoot: workspace.basePath,
           modelId: task.modelId,
@@ -491,6 +502,10 @@ export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promis
         // ciclo falló, el resultado de la task es ese fallo, no el del primero.
         if (ciclo.error !== undefined) acumulado.error = ciclo.error;
         if (ciclo.outcome !== undefined) acumulado.outcome = ciclo.outcome;
+        // Se arrastra lo que el ciclo entregó. Si no entregó nada (falló antes
+        // del primer request), se conserva el historial anterior: el próximo
+        // ciclo arranca con lo último que sí se conversó.
+        if (ciclo.finalMessages && ciclo.finalMessages.length > 0) mensajesPrevios = ciclo.finalMessages;
 
         // ¿Se sigue? Se corta si: el usuario canceló, el ciclo falló, o ya no
         // queda nada en cola. Un ciclo fallado CORTA la cola a propósito: si el

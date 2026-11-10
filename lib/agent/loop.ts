@@ -71,6 +71,13 @@ export type AgentLoopResult = {
    * escribirse y compilar perfecto y aun así no aparecer ahí. Este
    * campo es la fuente de verdad de "¿la tool realmente actuó?". */
   touchedFiles: string[];
+  /** Etapa 2.4: los mensajes con los que TERMINÓ la corrida (ya compactados
+   * por el governor si llegó a hacerlo). El runner se los pasa al ciclo
+   * siguiente como `priorMessages`. Ausente cuando no se llegó a dar ningún
+   * paso (por ejemplo, error antes del primer request): ausente = vacío. Es
+   * opcional a propósito, para no romper los fakes de test que arman un
+   * `AgentLoopResult` a mano. */
+  finalMessages?: ModelMessage[];
   error?: string;
   /** Fase 8A/8D — telemetría de contexto por paso. Solo longitudes,
    * conteos, tokens informados por el proveedor y estado del presupuesto:
@@ -96,6 +103,17 @@ export type RunAgentLoopOptions = {
    * ningún consumidor existente — `test-run.ts`/`stress-test.ts` no pasan
    * `taskId` y siguen funcionando idéntico, sin tocar SQLite). */
   taskId?: string;
+  /** Etapa 2.4 (mejora de la cola de prompts) — mensajes del ciclo ANTERIOR
+   * de la misma task. Cuando viene, el prompt nuevo se agrega al final de ese
+   * historial en vez de arrancar una conversación vacía: es lo que hace que un
+   * prompt encolado no tenga que re-leer los archivos que el ciclo anterior ya
+   * leyó. Si no viene, el loop arranca de cero (el comportamiento de siempre).
+   *
+   * El tamaño de este historial lo controla el governor del historial (Etapa
+   * 2.2, prendido por defecto): con contexto conocido compacta cuando el
+   * presupuesto blando se acerca, así que arrastrar mensajes no crece sin
+   * techo. */
+  priorMessages?: ModelMessage[];
   /** Fase 5D: inyectable SOLO para pruebas — el default es `generateText`
    * real de "ai". Correr una task de verdad SIEMPRE debe usar el default;
    * nunca se pasa este parámetro fuera de un test (mismo patrón exacto que
@@ -471,6 +489,10 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
   // indexan por `stepNumber` (0-based) para que el `usage` que informa el
   // proveedor en `onStepFinish` corresponda exactamente a los mensajes que
   // se midieron en `prepareStep`.
+  // Etapa 2.4: los últimos mensajes que prepareStep vio. El gobernador puede
+  // compactarlos: lo que se arrastra al ciclo siguiente es la versión
+  // COMPACTADA, que es la verdad con la que el modelo trabajó.
+  let ultimosMensajes: ModelMessage[] = options.priorMessages ?? [];
   const contextTelemetry = options.contextTelemetry !== false;
   const contextUsage: ContextUsagePayload[] = [];
   const stepMeasurements = new Map<number, ContextEstimate>();
@@ -594,14 +616,23 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
     const model = buildModelForId(providerName, modelId, apiKey);
 
     try {
+      // Etapa 2.4 (mejora de la cola de prompts): si hay historial del ciclo
+      // anterior, el prompt nuevo se AGREGA al final de ese historial en vez de
+      // abrir una conversación vacía. El AI SDK acepta `messages` o `prompt`;
+      // con `prompt` arma la lista desde cero, que es justo lo que hace que un
+      // prompt encolado tenga que re-leer todo lo que el ciclo anterior ya leyó.
+      const historial: ModelMessage[] = options.priorMessages ?? [];
       await generateTextImpl({
         model,
         system: currentSystemPrompt,
-        prompt: task,
+        ...(historial.length > 0
+          ? { messages: [...historial, { role: "user", content: task } as ModelMessage] }
+          : { prompt: task }),
         tools,
         abortSignal: controller.signal,
         stopWhen: [stepCountIs(maxSteps), noProgressFor(NO_PROGRESS_STEP_LIMIT, lastProgressStepRef)],
         prepareStep: async ({ messages, stepNumber }) => {
+          ultimosMensajes = messages;
           // Fase 8D: como máximo `refreshLimit` reconstrucciones por task.
           // El refresh tiene su propio timeout dentro del engine; si vence,
           // se conserva el briefing anterior.
@@ -930,6 +961,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
     transcript,
     proposals,
     touchedFiles: Array.from(touchedFiles),
+    finalMessages: ultimosMensajes,
     error: errorMessage,
     ...(contextUsage.length > 0 ? { contextUsage } : {}),
   };

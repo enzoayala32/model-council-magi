@@ -204,6 +204,9 @@ async function main(): Promise<void> {
     log("✗ " + (error instanceof Error ? error.message : String(error)));
     log(salida.slice(-1500));
     process.exitCode = 1;
+    log("");
+    log(`${passed}/${passed + failed} casos OK`);
+    if (failed > 0) process.exitCode = 1;
   } finally {
     await matar();
     // Limpieza: la DB temporal y el server van con el proceso.
