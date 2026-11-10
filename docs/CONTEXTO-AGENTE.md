@@ -17,7 +17,7 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
   se los pasa al agente cuando cada ciclo da su resumen, en orden, sobre el mismo
   workspace y **arrastrando el contexto del ciclo anterior** (`priorMessages`,
   compactado por el governor, así que no crece sin techo). 41/41 + 8/8 en vivo.
-- Quedan las **P1/P2** de la matriz de paridad, ninguna arrancada.
+- De la paridad: **P0 las tres y dos P1 (`patch`, `webfetch`) HECHAS**. Quedan skills por archivo con carga bajo demanda y reglas de permiso por herramienta (P1), más las P2.
 - Decisión que espera al usuario: habilitar o no `deepseek-ai/deepseek-v4.1-flash`
   (SIRVE en el sondeo, no está en el catálogo).
 - Último commit: ver `git log -1` (branch main, pusheado).

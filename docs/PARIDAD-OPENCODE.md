@@ -55,7 +55,7 @@ Veredictos: **NOSOTROS** · **IGUAL** · **PARCIAL** · **FALTA**.
 | Edición multi-archivo | `patch` con `*** Add/Update/Delete File` en un solo call | Una tool por archivo (`edit_file`, `write_file`, `delete_file`) | **PARCIAL** | P1 |
 | Búsqueda | `glob` (patrón, `path`, `hidden`, `limit`) y `grep` (regex, `include`, `caseSensitive`, `limit`) | `search_files` (texto literal) y `list_files` (nombres, filtro por extensión/fragmento) — no hay patrón glob real ni regex | **PARCIAL** | P2 |
 | Shell | `shell` con `workdir`, `timeout`, `background`, y un **escáner** de permisos sobre Bash/Zsh/sh/PowerShell que rechaza sintaxis que no puede analizar | `run_typecheck` y `run_script` acotados a los scripts de `package.json`; no hay shell arbitrario | **DIFERENTE** | P2 |
-| Web | `webfetch` (markdown/text/html) + `websearch` con varios integraciones | `web_search` (Tavily) únicamente | **PARCIAL** | P1 |
+| Web | `webfetch` (markdown/text/html) + `websearch` con varios integraciones ([tools](https://opencode.ai/docs/tools/)) | **HECHA la parte de `webfetch`** (Etapa 2.5): `lib/agent/webfetch.ts` reusa el pin anti-SSRF del transporte MCP, sigue redirects revalidando cada salto, contenido como dato no confiable. Sigue siendo texto (no markdown) y `web_search` es solo Tavily | **PARCIAL** | P1 cerrada; P2 el resto |
 | Adjuntos e imágenes | Attachments en el composer, `read` pasa PNG/JPEG/GIF/WebP/PDF hasta 20 MiB, `experimental_image_generate` | Adjuntos PDF/DOCX → texto, solo en el Consejo; el agente del loop no recibe adjuntos | **PARCIAL** | P2 |
 | Límite de pasos | `steps` por agente (numérico, configurable) | `DEFAULT_MAX_STEPS = 20` + `no_progress` + timeout total (`lib/agent/loop.ts:40`) | **IGUAL** | — |
 | Inteligencia del repo | No encontrado | `repo_map`, símbolos, grafo de dependencias, análisis del repo (`lib/agent/tools.ts`, `lib/agent/repo-*.ts`) | **NOSOTROS** | — |
@@ -217,8 +217,7 @@ En el orden que sugiero, un sub-bloque por commit como venimos haciendo:
    aprueban los bloques de shell, dentro de `run_script`.
 3. Decidir el gobernador del Context Engine (0.5) — prender, dejar apagado o
    apagar con medición.
-4. `webfetch` y `patch` multi-archivo, que son los dos huecos de herramientas
-   más baratos de cerrar.
+4. ~~`webfetch` y `patch` multi-archivo~~ **HECHOS** (Etapa 2.4 y 2.5).
 5. Agentes/subagentes con perfil (system, modelo, pasos).
 
 **Nada de esto arranca sin tu visto bueno.**

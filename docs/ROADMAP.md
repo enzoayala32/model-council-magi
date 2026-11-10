@@ -163,6 +163,14 @@ exit 0.
 
 ---
 
+## 4G. Misión 2 — P1 de paridad con OpenCode implementadas
+
+| Ítem | Estado | Evidencia |
+|---|---|---|
+| `patch` multi-archivo | **HECHA** | `lib/agent/patch-parser.ts` + tool `patch`: crear/actualizar/borrar varios archivos en una llamada, hunks buscados por contenido (el `@@` separa, sus números no posicionan), CRLF normalizado y restaurado, límite del workspace respetado, fallos reportados uno por uno. `agent:test-patch-parser` 34/34 + `agent:test-patch-tool` 23/23 |
+| `webfetch` (bajar UNA url) | **HECHA** | `lib/agent/webfetch.ts`: **reusa** el pin anti-SSRF del transporte MCP (`lib/mcp/pinned-http.ts`) en vez de reescribirlo, sigue redirects revalidando y re-fijando la IP en cada saldo (tope 5), rechaza credenciales en URL y direcciones privadas/locales/metadata, contenido marcado `untrusted`. `agent:test-webfetch` 34/34 |
+| Quedan de P1: skills por archivo con carga bajo demanda, reglas de permiso por herramienta | **NO HECHAS** | En `docs/PARIDAD-OPENCODE.md`, secciones B y C |
+
 ## 4F. Misión 2 — cola de prompts (pedido de Enzo, 2026-11-10)
 
 | Ítem | Estado | Evidencia |

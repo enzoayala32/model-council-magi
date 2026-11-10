@@ -2495,6 +2495,70 @@ dentro del efecto, que es el warning que el tope de lint no deja sumar.
 pares. Una corrida de la suite quedó 102/103 por el flake documentado de
 `security:test-peer-spoof`; aislado y en la corrida siguiente, 103/103.
 
+## 2F. Etapas 2.4 y 2.5 — dos P1 de paridad: `patch` multi-archivo y `webfetch`
+
+### 2.4 `patch`: crear, actualizar y borrar VARIOS archivos en una llamada
+
+**La brecha:** el agente tocaba los archivos de a uno. Un cambio que cruzaba tres
+archivos eran tres llamadas y tres round-trips, con el riesgo de que el modelo se
+olvidara uno.
+
+**Las tres decisiones que costaron** (las tres salieron de tests, no de la
+escritura):
+
+1. **Los hunks se buscan por CONTENIDO, no por número de línea** —así un segundo
+   hunk se aplica aunque el primero haya cambiado la cantidad de líneas.
+2. **El `@@` es el SEPARADOR de hunks** (su semántica real), aunque sus números no
+   se usan para posicionar. Mi primera versión lo trataba como decorativo y dos
+   cambios lejanos del mismo archivo quedaban en UN solo hunk, que después no se
+   encontraba como bloque contiguo.
+3. **Un hunk que no está, o que aparece más de una vez, es ERROR.** Un patch que
+   se aplica "más o menos" es peor que uno que falla: el modelo creería que cambió
+   algo que no cambió. El resultado dice exactamente qué se aplicó y qué no.
+
+**Move File NO está soportado**, y se rechaza con un mensaje que explica el
+workaround (Delete + Add) y por qué: decidir qué pasa con el historial de git no
+se inventa. CRLF se normaliza para comparar y se restaura al guardar —sin eso, en
+Windows ningún hunk que cruza un salto de línea matchearía—.
+
+Tests: 34/34 del parser contra strings y 23/23 de la tool contra un workspace
+real (aplicación real, CRLF intacto, fallos reportados, patch parcial, límite del
+workspace, patch mal formado sin tocar nada).
+
+### 2.5 `webfetch`: bajar UNA url y devolver su texto
+
+**La brecha:** había `web_search` (Tavily) pero ninguna forma de ir a buscar UNA
+página concreta.
+
+**La decisión importante: la seguridad NO se reescribió.** Se reusa
+`lib/mcp/pinned-http.ts` + `http-transport.ts`, que resuelven el mismo problema
+(una URL que da un modelo): https solamente salvo opt-in, sin credenciales en la
+URL, IPs privadas/locales/de-metadata rechazadas, **la IP se resuelve una vez y se
+conecta a ESA** con Host y SNI originales, y los redirects se siguen
+**revalidando y re-fijando la IP en cada salto** con tope de 5. Un redirect a un
+rango interno es el ataque clásico para saltarse el anti-SSRF, y está testeado
+explícitamente (a metadata de nube y a loopback).
+
+**Del formato, dicho sin adornos:** no hay dependencia nueva (el repo no usa
+ninguna librería de HTML). `htmlATexto` saca script/style/comentarios y colapsa
+espacios; **no produce markdown ni conserva los `href`**, y eso queda escrito en
+la descripción de la tool para que el modelo no espere más de lo que hay. Lo que
+no es HTML se devuelve tal cual. El contenido viaja marcado `untrusted: true`,
+igual que la salida de MCP y los resultados de `web_search`.
+
+Tests: 34/34 (extracción, redirects incluidos los dos ataques, redirect sin
+Location, bucle, 8 casos de rechazo de entrada, `allowLocal`, topes de body y de
+texto, timeout como error limpio).
+
+### Verificación de las dos
+
+typecheck exit 0 · lint `--max-warnings 10` exit 0 (10 warnings) · `npm test
+--verify` **107/107** exit 0 · build exit 0.
+
+**Dos tests existentes se actualizaron dos veces** (`test-repo-map-tool`,
+`test-web-search-compat`) porque comparaban el set de tools esperado: agregar una
+tool lo cambia, y dejarlos viejos habría sido un test que miente.
+
 ## Apéndice — Matriz ruta por scope
 
 Las 35 rutas (39 handlers). Todas pasan por `guardRequest`; verificado por
