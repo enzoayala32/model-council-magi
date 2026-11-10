@@ -26,12 +26,22 @@ export type ContextSelectionSummary = {
   signals: Record<ContextSignal, number>;
 };
 
+export type GovernorSkipReason =
+  /** Nadie lo pidió: `historyGovernor.enabled` no vino en `true`. */
+  | "config"
+  /** Etapa 2.2 (sub-bloque 2): se pidió, pero la ventana de contexto del modelo
+   *  es desconocida, así que no hay número con el cual decidir compactar.
+   *  Compactar a ciegas es peor que no compactar. */
+  | "window_unknown";
+
 export type GovernorUsageSummary = {
   enabled: boolean;
   applied: boolean;
   removedMessages: number;
   summaryChars: number;
   version: number | null;
+  /** Por qué quedó apagado, cuando quedó apagado. Visible en la UI. */
+  skipReason?: GovernorSkipReason;
 };
 
 export type ContextUsagePayload = {
@@ -96,6 +106,9 @@ export function formatContextUsage(payload: ContextUsagePayload): string {
     pieces.push(`ventana ${formatTokens(payload.budget.windowTokens)}${percent}`);
   } else {
     pieces.push("ventana desconocida");
+  }
+  if (payload.governor.enabled === false && payload.governor.skipReason === "window_unknown") {
+    pieces.push("governor apagado: ventana de contexto desconocida");
   }
   if (payload.budget.status === "over_limit") pieces[0] = `⚠️ ${pieces[0]}`;
   else if (payload.budget.status === "near_limit") pieces[0] = `⚠️ ${pieces[0]}`;

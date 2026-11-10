@@ -25,6 +25,8 @@ import { computeContextBudget } from "./context/budget";
 import { extractProviderUsage } from "./context/provider-usage";
 import { buildContextUsagePayload, type ContextSelectionSummary, type ContextUsagePayload, type GovernorUsageSummary } from "./context/usage";
 import { DEFAULT_HISTORY_GOVERNOR_CONFIG, planHistoryCompaction, type HistoryGovernorConfig } from "./context/history-governor";
+import { resolveContextWindow } from "./context/budget";
+import type { GovernorSkipReason } from "./context/usage";
 /** Fase 5E: el pool singleton pasó a vivir en `registry.ts`, compartido con
  * Model Council — acá solo se importa. `ENV_PREFIX_BY_PROVIDER`/
  * `getProviderPool` se re-usan tal cual, sin ningún cambio de
@@ -474,8 +476,24 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
   const stepMeasurements = new Map<number, ContextEstimate>();
   const stepGovernor = new Map<number, GovernorUsageSummary>();
   const governorConfig = { ...DEFAULT_HISTORY_GOVERNOR_CONFIG, ...options.historyGovernor };
-  const governorEnabled = options.historyGovernor?.enabled === true;
-  const disabledGovernor: GovernorUsageSummary = { enabled: false, applied: false, removedMessages: 0, summaryChars: 0, version: null };
+  // Etapa 2.2 (sub-bloque 2): el governor solo corre si lo pidieron Y la
+  // ventana de contexto del modelo es conocida. Sin ventana no hay número con
+  // el cual decidir compactar, y compactar a ciegas es peor que no compactar:
+  // el presupuesto blando caería a los 32k de `UNKNOWN_WINDOW_SOFT_INPUT_TOKENS`
+  // sobre modelos que tienen 256k-1M, y se tiraría contexto viejo que todavía
+  // servía. El motivo queda en el payload (`skipReason`) para que se vea en la
+  // UI en vez de quedar como un silencio.
+  const governorPedido = options.historyGovernor?.enabled === true;
+  const ventanaConocida = resolveContextWindow(modelId).tokens !== null;
+  const governorEnabled = governorPedido && ventanaConocida;
+  const disabledGovernor = (reason: GovernorSkipReason): GovernorUsageSummary => ({
+    enabled: false,
+    applied: false,
+    removedMessages: 0,
+    summaryChars: 0,
+    version: null,
+    skipReason: reason,
+  });
   const emptySignals: ContextSelectionSummary["signals"] = {
     explicit_path: 0,
     touched: 0,
@@ -587,7 +605,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
             });
             if (plan.applied) effectiveMessages = plan.messages;
           } else {
-            stepGovernor.set(stepNumber, disabledGovernor);
+            stepGovernor.set(stepNumber, disabledGovernor(governorPedido ? "window_unknown" : "config"));
           }
 
           stepMeasurements.set(stepNumber, measureContext({ system: currentSystemPrompt, messages: effectiveMessages, tools }));
@@ -716,7 +734,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
               providerUsage,
               budget,
               selection: contextEngine?.getSummary() ?? disabledSelection(),
-              governor: stepGovernor.get(stepNumber) ?? disabledGovernor,
+              governor: stepGovernor.get(stepNumber) ?? disabledGovernor("config"),
             });
             contextUsage.push(payload);
             if (options.taskId) appendEvent(options.taskId, payload);

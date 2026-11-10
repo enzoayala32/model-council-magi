@@ -75,8 +75,14 @@ async function main() {
 
   __resetProviderPoolsForTests();
   process.env.OPENROUTER_API_KEY = "secret-context-loop";
+  // Etapa 2.2: el caso del governor usa un modelo del roster REAL, que se
+  // llama por NVIDIA. Sin esta key el pool se agota antes de llegar al
+  // `generateTextImpl` falso y el caso no prueba nada. La key es falsa a
+  // propósito: con el fake, el modelo nunca se construye ni se llama.
+  process.env.NVIDIA_API_KEY = "fake-key-solo-para-el-pool";
   const project = await createProject({ name: "context-loop", localPath: workspace });
-  const newTask = (prompt: string) => createTask({ projectId: project.id, modelId: "test/modelo-no-registrado", prompt }).id;
+  const newTask = (prompt: string, modelId = "test/modelo-no-registrado") =>
+    createTask({ projectId: project.id, modelId, prompt }).id;
 
   try {
     console.log("--- Motor encendido: briefing, refresco y telemetría ---");
@@ -196,7 +202,11 @@ async function main() {
 
     console.log("\n--- Governor encendido explícitamente ---");
     {
-      const taskId = newTask("arreglá facturación");
+      // Etapa 2.2 (sub-bloque 2): el governor solo corre con ventana de contexto
+      // CONOCIDA. Este modelo está en la tabla de `budget.ts` (262.144, con
+      // fuente). El de antes ("test/modelo-no-registrado") daba ventana
+      // desconocida, y con el cambio el governor queda apagado a propósito.
+      const taskId = newTask("arreglá facturación", "nvidia/nemotron-3.5-lightning-30b-a3b");
       let messagesAfter: ModelMessage[] = [];
       const fake: RunAgentLoopOptions["generateTextImpl"] = async (opts) => {
         const o = opts as { prepareStep?: (input: { messages: ModelMessage[]; stepNumber: number }) => Promise<{ messages?: ModelMessage[] }>; onStepFinish?: (step: unknown) => void };
@@ -209,7 +219,7 @@ async function main() {
         workspaceRoot: workspace,
         repoRoot: workspace,
         task: "arreglá facturación",
-        modelId: "test/modelo-no-registrado",
+        modelId: "nvidia/nemotron-3.5-lightning-30b-a3b",
         taskId,
         generateTextImpl: fake,
         historyGovernor: { enabled: true, triggerRatio: 0, keepRecentUnits: 2, minOldUnits: 2, maxSummaryChars: 2_000 },
@@ -221,6 +231,41 @@ async function main() {
       check(messagesAfter.some((message) => canon(message.content).includes("Historial compactado")), "el resumen del governor está en el historial efectivo");
       check(messagesAfter.some((message) => canon(message.content).includes("OBJETIVO: arreglar facturación")), "el objetivo del usuario sigue textual");
       check(!canon(messagesAfter).includes("TOOL_SENTINEL"), "el contenido viejo de tools no se copió");
+    }
+
+    console.log("\n--- Governor pedido con ventana DESCONOCIDA: queda apagado y lo dice ---");
+    {
+      // Etapa 2.2 (sub-bloque 2). El motivo del cambio: sin ventana de contexto
+      // conocida no hay número con el cual decidir compactar. El presupuesto
+      // blando caería a los 32k de `UNKNOWN_WINDOW_SOFT_INPUT_TOKENS` sobre
+      // modelos que tienen 256k-1M, y se tiraría contexto viejo que todavía
+      // servía: compactar a ciegas es peor que no compactar.
+      const taskId = newTask("arreglá facturación a ciegas");
+      let messagesAfter: ModelMessage[] = [];
+      const fake: RunAgentLoopOptions["generateTextImpl"] = async (opts) => {
+        const o = opts as { prepareStep?: (input: { messages: ModelMessage[]; stepNumber: number }) => Promise<{ messages?: ModelMessage[] }>; onStepFinish?: (step: unknown) => void };
+        const prepared = await o.prepareStep?.({ messages: longHistory(), stepNumber: 0 });
+        messagesAfter = prepared?.messages ?? [];
+        o.onStepFinish?.({ stepNumber: 0, text: "ok", content: [{ type: "text", text: "ok" }], toolCalls: [], toolResults: [], usage: { inputTokens: 10, outputTokens: 2 } } as never);
+        return {};
+      };
+      const result = await runAgentLoop({
+        workspaceRoot: workspace,
+        repoRoot: workspace,
+        task: "arreglá facturación",
+        modelId: "test/modelo-sin-ventana",
+        taskId,
+        generateTextImpl: fake,
+        // Mismo config que el caso que SÍ compacta: la diferencia es solo la
+        // ventana del modelo.
+        historyGovernor: { enabled: true, triggerRatio: 0, keepRecentUnits: 2, minOldUnits: 2, maxSummaryChars: 2_000 },
+      });
+      const payload = result.contextUsage?.[0];
+      check(payload !== undefined && payload.governor.enabled === false, "con ventana desconocida el governor queda apagado", () => payload?.governor);
+      check(payload?.governor.skipReason === "window_unknown", "y el motivo queda registrado como window_unknown", () => payload?.governor);
+      check(payload?.budget.windowTokens === null, "el presupuesto reporta ventana desconocida", () => payload?.budget.windowTokens);
+      check(messagesAfter.length === longHistory().length, "el historial viaja intacto (no se compactó a ciegas)", () => ({ before: longHistory().length, after: messagesAfter.length }));
+      check(messagesAfter.some((message) => canon(message.content).includes("TOOL_SENTINEL")), "el contenido viejo de tools sigue disponible");
     }
 
     console.log("\n--- Cancelación durante el arranque del motor ---");
