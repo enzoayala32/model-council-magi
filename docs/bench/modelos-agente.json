@@ -1,0 +1,88 @@
+{
+  "fecha": "2026-11-09T20:41:08.869Z",
+  "proveedor": "nvidia",
+  "nota": "Veredicto por modelo. 'key-problema' NO degrade el modelo: es de la credencial (401/403/429), y el pool rota y reintenta. 'no-desplegado' = 404 de la cuenta. 'lento' = timeout. 'sin-tool-calls' = respondió pero no llamó herramientas.",
+  "habilitadosEnElCatalogo": [
+    "nvidia/nemotron-3.5-lightning:free",
+    "nvidia/nemotron-3.5-lightning-30b-a3b",
+    "stepfun-ai/step-5-preview",
+    "minimaxai/minimax-m3.1-flash",
+    "nvidia/nemotron-3-ultra-550b-a55b",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+    "gemini-3.5-flash-lite"
+  ],
+  "modelos": [
+    {
+      "modelo": "stepfun-ai/step-5-preview",
+      "veredicto": "sirve",
+      "ms": 19878,
+      "intentos": 1,
+      "detalle": "tool_call list_files",
+      "herramienta": "list_files"
+    },
+    {
+      "modelo": "minimaxai/minimax-m3.1-flash",
+      "veredicto": "sirve",
+      "ms": 4952,
+      "intentos": 1,
+      "detalle": "tool_call list_files",
+      "herramienta": "list_files"
+    },
+    {
+      "modelo": "nvidia/nemotron-3-ultra-550b-a55b",
+      "veredicto": "lento",
+      "ms": 60025,
+      "intentos": 1,
+      "detalle": "This operation was aborted",
+      "herramienta": null
+    },
+    {
+      "modelo": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+      "veredicto": "sirve",
+      "ms": 2277,
+      "intentos": 1,
+      "detalle": "tool_call list_files",
+      "herramienta": "list_files"
+    },
+    {
+      "modelo": "nvidia/nemotron-3.5-lightning-30b-a3b",
+      "veredicto": "sirve",
+      "ms": 667,
+      "intentos": 1,
+      "detalle": "tool_call list_files",
+      "herramienta": "list_files"
+    },
+    {
+      "modelo": "z-ai/glm-5.3-flash",
+      "veredicto": "lento",
+      "ms": 60018,
+      "intentos": 1,
+      "detalle": "This operation was aborted",
+      "herramienta": null
+    },
+    {
+      "modelo": "moonshotai/kimi-k2.6",
+      "veredicto": "no-desplegado",
+      "ms": 456,
+      "intentos": 1,
+      "detalle": "{\"status\":404,\"title\":\"Not Found\",\"detail\":\"Function '23d4f03a-b8a6-4adb-a183-7daa083a09cc': Not found for account 'x6cQsN2nyJsLFqTgiCxgFu19",
+      "herramienta": null
+    },
+    {
+      "modelo": "deepseek-ai/deepseek-v4.1-flash",
+      "veredicto": "sirve",
+      "ms": 11054,
+      "intentos": 1,
+      "detalle": "tool_call list_files",
+      "herramienta": "list_files"
+    },
+    {
+      "modelo": "nvidia/nemotron-3-super-120b-a12b",
+      "veredicto": "no-desplegado",
+      "ms": 434,
+      "intentos": 1,
+      "detalle": "{\"status\":404,\"title\":\"Not Found\",\"detail\":\"Function 'ac74040f-9fc9-4c5e-ac74-279ba5161d69': Not found for account 'x6cQsN2nyJsLFqTgiCxgFu19",
+      "herramienta": null
+    }
+  ]
+}
