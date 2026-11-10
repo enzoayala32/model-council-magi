@@ -7,10 +7,11 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 - **Etapa 0 (cierre de pendientes de la auditoría): HECHA**, salvo 0.5, que
   queda **pendiente de aprobación del usuario**.
-- **Etapa 1 (matriz de paridad): HECHA** y **Etapa 2.1 (`AGENTS.md` en el loop del
-  agente): HECHA** — `docs/PARIDAD-OPENCODE.md` (29 capacidades relevadas) y
-  `lib/agent/instructions.ts` (26/26). Quedan 2.2 (governor) y 2.3 (comandos),
-  pendientes de aprobación. Cerrados: 0.1 (admin MCP solo
+- **Etapa 1 (matriz de paridad): HECHA** y **Etapas 2.1 y 2.2: HECHAS** —
+  `docs/PARIDAD-OPENCODE.md` (29 capacidades), `lib/agent/instructions.ts`
+  (26/26, `AGENTS.md` leído por el loop) y el governor del historial PRENDIDO por
+  defecto con 4 sub-bloques (`62/62`, `42/42`, `15/15`, `7/7`). Queda **2.3
+  (comandos `/` personalizados)**, pendiente de aprobación. Cerrados: 0.1 (admin MCP solo
   desde la PC con step-up), 0.2 (hermetismo de los tests de MCP), 0.3 (pin de
   IP anti-rebinding), 0.4 (docs del subagente opencode, que destapó dos bugs
   previos: el emparejamiento estaba bloqueado por el proxy y el token de
@@ -34,7 +35,7 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 - `npm run typecheck`: exit 0.
 - `npm run lint -- --max-warnings 10`: exit 0 (10 warnings).
-- `npm test`: **99/99 suites OK** (incluye `agent:test-web-search-compat` 17/17, `security:test-mcp-failclosed` 61/61,
+- `npm test`: **102/102 suites OK** (incluye `agent:test-web-search-compat` 17/17, `security:test-mcp-failclosed` 61/61,
   `security:test-mcp-http` 46/46, `security:test-mcp-admin` 36/36,
   `security:test-push-endpoint` 78/78, `security:test-web-push` 92/92,
   `security:test-mcp-client` 48/48, `security:test-mcp-server` 53/53 y

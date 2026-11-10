@@ -2335,6 +2335,106 @@ sea mecánico.
 `--max-warnings 10` exit 0 (10 warnings, 0 errors) · `npm test --verify`
 **100/100 suites** exit 0 · `npm run build` exit 0.
 
+## 2D. Etapa 2.2 — governor del historial: 4 sub-bloques, en el orden pedido
+
+El usuario pidió los cuatro, en orden. Se hicieron en ese orden y cada uno con su
+commit y su test.
+
+### 2.2.1 — La tabla de ventanas no cubría el roster real del agente
+
+**El hallazgo que cambió el rumbo de la etapa:** `lib/agent/context/budget.ts`
+tenía 7 filas de ventanas de contexto, todas sacadas de la descripción en prosa
+del roster, y **ninguna era un modelo que el Coding Agent use de verdad**. Los 5
+modelos que el sondeo en vivo dice que SIRVEN se llaman directos a NVIDIA NIM, y
+para todos ellos `resolveContextWindow` devolvía `unknown`, con lo que el
+presupuesto blando caía a `UNKNOWN_WINDOW_SOFT_INPUT_TOKENS = 32.000`. Ese es el
+número que el governor usaría para decidir compactar: sobre modelos con 256k-1M,
+compactaría a los ~27k tokens y tiraría contexto viejo que todavía servía —el
+modo de fallo que el propio governor se esmera en evitar.
+
+**De dónde salen los números (verificado el 2026-11-10, no inventado):** el
+endpoint de NVIDIA **no publica** la ventana (`GET /v1/models` devuelve solo
+`{id, object, created, owned_by}`, y el `max_tokens` que acepta el gateway es
+1048576 para todos los modelos —se verificó pidiendo exactamente ese valor y da
+200, así que es el tope del gateway y no dice nada del contexto de entrada). Los
+números salen del catálogo público de OpenRouter, campo `context_length`.
+
+**Regla conservadora, con razón:** para algunos modelos OpenRouter publica DOS
+ventanas según la ruta (la gratis y la paga). Caso real:
+`nvidia/nemotron-3.5-lightning` = 262.144 pero `:free` = 1.000.000. Nuestro
+agente llama a NIM directo, que no es ninguna de las dos rutas. Ante la duda se
+toma el **menor**: equivocarse por bajo compacta antes de tiempo (molesto pero
+recuperable: se vuelve a leer el archivo); equivocarse por alto deja que la
+petición revoque y la task muera sin recuperación.
+
+Cada fila declara `source` (URL) y `fetchedAt` (fecha), que viajan en
+`ContextWindowResolution`, y hay test que exige que toda fila los traiga: una
+fila sin fuente es un número inventado. **Tests: 62/62 (eran 43).**
+
+### 2.2.2 — El governor solo compacta con ventana conocida
+
+Sin ventana no hay número con el cual decidir. El motivo queda en el payload
+(`governor.skipReason = "window_unknown"`) y se muestra en la línea de contexto
+de la UI, en vez de quedar como un silencio.
+
+**El test del governor usaba `modelId: "test/modelo-no-registrado"`**, que da
+ventana desconocida: con este cambio quedaba apagado y el caso no probaba nada.
+Se cambió a un modelo real del roster, y se agregó el caso contrario (pedido con
+ventana desconocida → apagado, con motivo, historial intacto). El cambio de
+modelo destapó además que el test no definía `NVIDIA_API_KEY`: con un modelo del
+roster el pool pide la credencial y se agota antes de llegar al
+`generateTextImpl` falso, así que `prepareStep` nunca se llamaba y el caso pasaba
+en falso. **Tests: 42/42 (eran 37).**
+
+### 2.2.3 — Red de seguridad para `context_too_large`
+
+`classifyProviderError` marca ese error como PERMANENT (sin reintentar la misma
+key, sin rotar, sin fallback de modelo). Como regla general está bien, pero
+dejaba la corrida en un callejón sin salida: la task moría con `error` aunque se
+podía compactar y reintentar. OpenCode tiene esa recuperación; nosotros no
+teníamos nada.
+
+Ahora, ante `context_too_large`, UNA vez por corrida y con la MISMA credential:
+compactación forzada (`triggerRatio: 0`, `minOldUnits: 1`, `keepRecentUnits`
+acotado), reintento, y evento `context_compaction_forced` con el id sintético del
+pool (nunca la key).
+
+Tres decisiones que costaron y quedaron probadas:
+
+1. **El reintento no pasa por `cursor.next()`**: el cursor excluye por identidad
+   las credenciales ya entregadas EN ESTA operación, así que devolvería
+   `NO_CREDENTIALS` y el reintento se perdería con un "se agotaron las
+   credenciales" que no describe lo que pasó. Se reusa el lease guardado.
+2. **La compactación forzada no depende del gate del governor ni de que la
+   ventana sea conocida**: justamente cuando es desconocida es la única defensa.
+3. **El reintento es uno aunque todas las llamadas fallen**: si el proveedor
+   sigue rechazando, la task termina en error en vez de quedarse compactando y
+   reintentando para siempre.
+
+**Tests: 15/15**, incluido que el objetivo del usuario sobrevive a la
+compactación y que el contenido viejo de tools no se copia al resumen.
+
+### 2.2.4 — Prendido por defecto
+
+El governor existía y estaba probado, pero el runner de producción no lo pasaba.
+Ahora `runTask` pasa `historyGovernor: { enabled: true }`, con
+`MAGI_HISTORY_GOVERNOR_DISABLED` como salida sin recompilar (documentado en
+`.env.example` junto a la variable del context engine). **Tests: 7/7** con
+`loopRunner` inyectado — ningún modelo real, ninguna red.
+
+### Verificación del cierre de 2.2
+
+typecheck exit 0 · lint `--max-warnings 10` exit 0 (10 warnings) · `npm test
+--verify` **102/102** exit 0 · build exit 0.
+
+**Nota honesta sobre dos corridas de la suite:** `security:test-peer-spoof` quedó
+33/34 y 31/34 en dos intentos y 102/102 en el tercero. Las rutas que fallan
+cambian entre corridas (`projects`/`threads`/`pairing` en una, `DELETE
+/api/council/runs/:id` en otra) y aislado dio 34/34, 31/34 y 85/85 dentro de este
+mismo bloque: es la firma del flake que el propio test documenta (el primer
+compile de Next en dev responde 403/404 y reintenta hasta 12 veces con 1 s de
+espera), no una regresión. Ninguno de estos cambios toca esas rutas.
+
 ## Apéndice — Matriz ruta por scope
 
 Las 35 rutas (39 handlers). Todas pasan por `guardRequest`; verificado por

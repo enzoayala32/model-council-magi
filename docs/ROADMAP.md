@@ -142,7 +142,7 @@ exactamente eso, no "no existe".
 |---|---|---|
 | 2.1 Instrucciones del proyecto (`AGENTS.md`) leídas por el loop del agente | **HECHA** | `lib/agent/instructions.ts`: lee el `AGENTS.md` de la raíz del worktree, topes de 16 KB por archivo y 40 KB totales, contenido enmarcado entre `<project-instructions>` como **dato del proyecto** con advertencia anti-inyección. `npm run agent:test-instructions` 26/26 (incluye cableado real con `generateTextImpl` falso y límite: no lee fuera del worktree) |
 | 2.1 Dispendiente: descubrimiento anidado de `AGENTS.md` + recarga en vivo | **NO HECHO** (P2, no bloquea) | Pide hooks en `list_files`/`read_file` y refresco del prompt entre pasos; el módulo deja el gancho listo |
-| 2.2 Compactación del Context Engine (governor) | **NO HECHO** | Sigue APAGADO por defecto; requiere aprobación del usuario (punto 0.5) |
+| 2.2 Compactación del Context Engine (governor) | **HECHA** (4 sub-bloques) | 2.2.1 tabla de ventanas del roster real con fuente y fecha (`agent:test-context-budget` 62/62) · 2.2.2 governor solo con ventana conocida (`agent:test-context-loop` 42/42) · 2.2.3 red de seguridad: `context_too_large` compacta UNA vez y reintenta (`agent:test-context-recovery` 15/15) · 2.2.4 prendido por defecto con `MAGI_HISTORY_GOVERNOR_DISABLED` como salida (`agent:test-governor-default` 7/7) |
 | 2.3 Comandos `/` personalizados | **NO HECHA** | Pendiente de aprobación |
 
 Verificación del cierre de 2.1: typecheck exit 0, lint `--max-warnings 10` exit 0
