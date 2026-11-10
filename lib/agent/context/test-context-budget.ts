@@ -50,9 +50,37 @@ function main() {
   checkEq(resolveContextWindow("openai/gpt-oss-20b").tokens, 131_072, "gpt-oss-20b → 128k");
   const unknown = resolveContextWindow("test/modelo-no-registrado");
   check(unknown.tokens === null && unknown.source === "unknown" && unknown.matchedRule === null, "modelo fuera de la tabla → ventana desconocida (no se inventa)", () => unknown);
-  checkEq(resolveContextWindow("cualquiera", 50_000), { tokens: 50_000, source: "override", matchedRule: null, note: "override explícito" }, "override explícito gana a la tabla");
+  checkEq(resolveContextWindow("cualquiera", 50_000), { tokens: 50_000, source: "override", sourceUrl: null, fetchedAt: null, matchedRule: null, note: "override explícito" }, "override explícito gana a la tabla");
   checkEq(resolveContextWindow("google/gemini-3.1-pro", null).tokens, null, "override null fuerza ventana desconocida");
   checkEq(resolveContextWindow("cualquiera", 0).tokens, null, "override inválido (0) no crea un límite de 0");
+
+  // Etapa 2.2 (sub-bloque 1): la tabla tiene que cubrir el roster REAL del
+  // Coding Agent. Los 5 modelos que el sondeo en vivo dice que SIRVEN se llaman
+  // directos a NVIDIA NIM, y el endpoint de NVIDIA NO publica ventana: el
+  // número sale del catálogo de OpenRouter, con el valor más conservador
+  // cuando OpenRouter publica dos distintos (ruta gratis vs paga).
+  console.log("\n--- Roster real del Coding Agent (Etapa 2.2) ---");
+  const roster: Array<[string, number]> = [
+    ["stepfun-ai/step-5-preview", 1_000_000],
+    ["minimaxai/minimax-m3.1-flash", 1_048_576],
+    ["nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", 256_000],
+    ["nvidia/nemotron-3.5-lightning-30b-a3b", 262_144],
+    ["deepseek-ai/deepseek-v4.1-flash", 1_048_576],
+    ["nvidia/nemotron-3-ultra-550b-a55b", 262_144],
+    ["nvidia/nemotron-3-super-120b-a12b", 1_048_576],
+    ["z-ai/glm-5.3-flash", 1_048_576],
+    ["moonshotai/kimi-k2.6", 262_144],
+  ];
+  for (const [id, tokens] of roster) {
+    const r = resolveContextWindow(id);
+    checkEq(r.tokens, tokens, `${id} → ${tokens} (tabla con fuente, no inventado)`);
+    check(
+      r.source === "registry" && typeof r.sourceUrl === "string" && r.sourceUrl.length > 0 && typeof r.fetchedAt === "string" && r.fetchedAt.length > 0,
+      `${id} declara de dónde salió el número y de qué fecha`,
+      () => r,
+    );
+  }
+  checkEq(resolveContextWindow("test/modelo-no-registrado").sourceUrl, null, "un modelo desconocido no tiene fuente que declarar");
 
   console.log("\n--- Modelo conocido: límite duro y preferencia blanda ---");
   const known = computeContextBudget({ modelId: "google/gemini-3.1-pro-preview", estimate: estimateWith(400) });
