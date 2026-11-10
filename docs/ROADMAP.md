@@ -136,6 +136,19 @@ exactamente eso, no "no existe".
 
 ---
 
+## 4E. Misión 2 — Etapa 2: implementación de brechas de paridad
+
+| Ítem | Estado | Evidencia |
+|---|---|---|
+| 2.1 Instrucciones del proyecto (`AGENTS.md`) leídas por el loop del agente | **HECHA** | `lib/agent/instructions.ts`: lee el `AGENTS.md` de la raíz del worktree, topes de 16 KB por archivo y 40 KB totales, contenido enmarcado entre `<project-instructions>` como **dato del proyecto** con advertencia anti-inyección. `npm run agent:test-instructions` 26/26 (incluye cableado real con `generateTextImpl` falso y límite: no lee fuera del worktree) |
+| 2.1 Dispendiente: descubrimiento anidado de `AGENTS.md` + recarga en vivo | **NO HECHO** (P2, no bloquea) | Pide hooks en `list_files`/`read_file` y refresco del prompt entre pasos; el módulo deja el gancho listo |
+| 2.2 Compactación del Context Engine (governor) | **NO HECHO** | Sigue APAGADO por defecto; requiere aprobación del usuario (punto 0.5) |
+| 2.3 Comandos `/` personalizados | **NO HECHA** | Pendiente de aprobación |
+
+Verificación del cierre de 2.1: typecheck exit 0, lint `--max-warnings 10` exit 0
+(10 warnings), `npm test --verify` **100/100 suites** exit 0, `npm run build`
+exit 0.
+
 ## 4B. Misión 2 — rotación de NVIDIA y catálogo automático
 
 | Ítem | Estado | Cómo se comprueba |

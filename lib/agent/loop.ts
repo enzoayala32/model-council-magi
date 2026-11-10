@@ -7,6 +7,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { openRouterHeaders } from "../http-headers";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createAgentTools, isWebSearchCompatible, type AgentToolEvent } from "./tools";
+import { loadProjectInstructions } from "./instructions";
 import type { SearchProvider } from "./search-provider";
 import { getCouncilModel } from "../models";
 import { appendEvent } from "./event-log";
@@ -187,7 +188,7 @@ export function sha256(text: string): string {
   return crypto.createHash("sha256").update(text, "utf-8").digest("hex");
 }
 
-export function buildSystemPrompt(allowedScripts: string[], searchEnabled: boolean): string {
+export function buildSystemPrompt(allowedScripts: string[], searchEnabled: boolean, instructionsBlock = ""): string {
   const runScriptLine =
     allowedScripts.length > 0
       ? `\n- run_script: corre uno de estos scripts del proyecto — ${allowedScripts.join(", ")} — siempre vía "npm run <nombre>". Usalo además de run_typecheck cuando corresponda (por ejemplo, correr los tests si la tarea tocó lógica, o el build si tocó algo que podría no compilar más allá del typecheck).`
@@ -218,7 +219,7 @@ Reglas:
 - Usá edit_file para cambios puntuales a un archivo existente (necesita que oldStr sea único en el archivo); usá write_file solo para archivos nuevos o reescrituras completas.
 - Corré run_typecheck después de terminar los cambios de código (no en cada paso individual, es lento) y corregí lo que encuentres.${runScriptRule}
 - No hagas cambios fuera del alcance de la tarea pedida.
-- Cuando termines, respondé con un resumen breve en texto de qué cambiaste y por qué — sin volver a llamar ninguna tool.${webSearchSecurityNote}`;
+- Cuando termines, respondé con un resumen breve en texto de qué cambiaste y por qué — sin volver a llamar ninguna tool.${webSearchSecurityNote}${instructionsBlock}`;
 }
 
 /** Fase 5D: recibe `apiKey` explícito (el `value` de un `CredentialLease`
@@ -375,6 +376,12 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
   const currentStepIndex = { current: 0 };
 
   const allowedScripts = await detectAllowedScripts(workspaceRoot);
+  // Etapa 2.1 (brecha P0.1 de paridad con OpenCode): instrucciones del
+  // proyecto (`AGENTS.md` de la raíz del worktree). Se cargan UNA vez, antes
+  // del primer paso. Si el archivo no existe o no se puede leer, se sigue sin
+  // ellas: un fallo acá nunca rompe la task. El contenido viaja enmarcado como
+  // dato del proyecto (ver `lib/agent/instructions.ts`).
+  const projectInstructions = await loadProjectInstructions(workspaceRoot);
   // Fase 6C — gate de compatibilidad de `web_search`, ANTES de armar las
   // tools. Prioridad: (1) un `searchProvider` explícito (seam de tests)
   // SIEMPRE gana y nunca pasa por el gate; (2) si no, se consulta la
@@ -431,7 +438,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
   );
   const searchEnabled = "web_search" in tools;
   const generateTextImpl = options.generateTextImpl ?? generateText;
-  const baseSystemPrompt = buildSystemPrompt(allowedScripts, searchEnabled);
+  const baseSystemPrompt = buildSystemPrompt(allowedScripts, searchEnabled, projectInstructions.text);
 
   const controller = new AbortController();
   const timeoutTimer = setTimeout(() => controller.abort(), timeoutMs);

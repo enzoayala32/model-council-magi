@@ -30,12 +30,12 @@ archivo del código. Lo que no se pudo comprobar queda en la sección 7.
 |---|---:|---|
 | **NOSOTROS** | 7 | OpenCode no lo tiene (o no se encontró) y nosotros sí |
 | **IGUAL** | 3 (2 `IGUAL` + 1 `IGUAL+`) | Los dos lo tienen, con fuerza comparable |
-| **PARCIAL** | 11 | Los dos lo tienen, pero con distancia real de capacidad |
+| **PARCIAL** | 12 | Los dos lo tienen, pero con distancia real de capacidad |
 | **DIFERENTE** | 2 | Modelo distinto a propósito: no es "mejor" ni "peor", es otra decisión de diseño |
-| **FALTA** | 6 | OpenCode lo tiene y nosotros no |
+| **FALTA** | 5 | OpenCode lo tiene y nosotros no (una fila se movió a PARCIAL al cerrar la Etapa 2.1) |
 
-29 capacidades relevadas. Las 6 que **FALTAN**, en orden de cuánto duelen:
-instrucciones del proyecto (AGENTS.md), comandos `/` personalizados,
+29 capacidades relevadas. Las 5 que **FALTAN**, en orden de cuánto duelen:
+comandos `/` personalizados,
 agentes/subagentes definidos por el usuario, plugins y SDK, modelos locales
 (Ollama/LM Studio/vLLM) e integración con el ecosistema de OpenCode (Console,
 workspaces con SSO/SCIM) — esta última la marco **fuera de alcance**: es
@@ -49,7 +49,7 @@ Veredictos: **NOSOTROS** · **IGUAL** · **PARCIAL** · **FALTA**.
 
 | Capacidad | OpenCode v2 | MAGI | Veredicto | Prioridad |
 |---|---|---|---|---|
-| Instrucciones del proyecto | `AGENTS.md` anidado por directorio, descubierta al explorar, **recarga en vivo** entre pasos, más array `instructions` con globs y URLs ([instructions](https://opencode.ai/docs/instructions/)) | No existe: el system prompt es fijo en `lib/agent/loop.ts` (`buildSystemPrompt`) | **FALTA** | **P0** |
+| Instrucciones del proyecto | `AGENTS.md` anidado por directorio, descubierta al explorar, **recarga en vivo** entre pasos, más array `instructions` con globs y URLs ([instructions](https://opencode.ai/docs/instructions/)) | **HECHA en Etapa 2.1**: `lib/agent/instructions.ts` lee el `AGENTS.md` de la raíz del worktree y lo inyecta enmarcado como dato (`buildSystemPrompt`). Pendiente: descubrimiento anidado y recarga en vivo | **PARCIAL (camino a IGUAL)** | P0 cerrada, P2 el resto |
 | Comandos `/` | Markdown o JSONC, `$ARGUMENTS` y `$1..$n`, bloques de shell `` !`cmd` ``, override de agente y modelo, modo background, recarga en caliente ([commands](https://opencode.ai/docs/commands/)) | Un solo comando fijo: `/nuevo` (`composer.tsx:137`) | **FALTA** | **P0** |
 | Compactación de contexto | Automática por defecto (`buffer` 15%, `keep.tokens` 15k), manual por API, compactación nativa del proveedor, y background experimental ([compaction](https://opencode.ai/docs/compaction/)) | Context Engine con medición + briefing, pero el **governor está APAGADO por defecto** (pendiente 0.5, sin aprobación) | **PARCIAL** | **P0** |
 | Deshacer / revertir | Snapshots por paso, `/undo` y `/redo`, restore de archivos atribuidos a los pasos del asistente, almacenados en un git interno aparte ([snapshots](https://opencode.ai/docs/snapshots/)) | Modelo distinto: la task corre en un worktree aislado y los cambios salen como **propuesta** con hash de línea base, que el humano aprueba o descarta (`lib/agent/proposal-store.ts`, `lib/agent/apply.ts`) | **PARCIAL** | P1 |
@@ -103,7 +103,27 @@ Veredictos: **NOSOTROS** · **IGUAL** · **PARCIAL** · **FALTA**.
 
 ### P0 — Sin estas dos, "paridad" es una palabra demasiado grande
 
-**P0.1 Instrucciones del proyecto (`AGENTS.md`).** Es la feature más usada de
+**P0.1 Instrucciones del proyecto (`AGENTS.md`) — HECHA (Etapa 2.1).**
+`lib/agent/instructions.ts` lee el archivo de la raíz del worktree de la task y
+lo suma al system prompt con topes por archivo (16 KB) y total (40 KB). El
+contenido viaja **tal cual** —sanitizarlo haría perder la guía real— pero
+enmarcado entre `<project-instructions>` con la advertencia explícita de que si
+intenta cambiar las reglas o exfiltrar secretos, no se obedece y se reporta.
+Tests: `npm run agent:test-instructions` 26/26, incluido el cableado real (una
+corrida de `runAgentLoop` con `generateTextImpl` falso verifica que el texto
+llega al prompt) y que un archivo hostil queda enmarcado. Limitación dicha en
+el test: no puede probar que el modelo obedezca el marco.
+
+**Lo que quedó de P0.1 para después** (P2, no bloquea): descubrimiento anidado
+por directorio y recarga en vivo como OpenCode. Piden hooks dentro de
+`list_files`/`read_file` y refresco del prompt entre pasos.
+
+---
+
+*(Lo que sigue es el resto de la brecha P0 original, ya escrito antes de
+cerrar P0.1.)*
+
+**Compactación (P0.2, sigue pendiente).** Es la feature más usada de
 cualquier agente de código y la que más cambia la calidad de una corrida: sin
 ella, el agente no sabe que este repo usa `npm test` con tope de warnings, que
 `package.json` tiene CRLF, ni qué convenciones seguir. OpenCode además las

@@ -22,6 +22,7 @@
     "agent:test-inspect": "tsx lib/agent/test-inspect.ts",
     "agent:test-composer": "tsx lib/agent/test-composer.ts",
     "agent:test-probe-models": "tsx lib/agent/test-probe-models.ts",
+    "agent:test-instructions": "tsx lib/agent/test-instructions.ts",
     "agent:test-4a-nogit": "tsx lib/agent/test-4a-nogit.ts",
     "agent:test-run-script": "tsx lib/agent/test-run-script.ts",
     "agent:test-delete-file": "tsx lib/agent/test-delete-file.ts",

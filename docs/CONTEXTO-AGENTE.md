@@ -7,9 +7,10 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 - **Etapa 0 (cierre de pendientes de la auditoría): HECHA**, salvo 0.5, que
   queda **pendiente de aprobación del usuario**.
-- **Etapa 1 (matriz de paridad con OpenCode): HECHA** — `docs/PARIDAD-OPENCODE.md`,
-  29 capacidades relevadas (7 NOSOTROS, 3 IGUAL, 11 PARCIAL, 2 DIFERENTE, 6 FALTA).
-  Falta implementar: sigue pendiente de aprobación. Cerrados: 0.1 (admin MCP solo
+- **Etapa 1 (matriz de paridad): HECHA** y **Etapa 2.1 (`AGENTS.md` en el loop del
+  agente): HECHA** — `docs/PARIDAD-OPENCODE.md` (29 capacidades relevadas) y
+  `lib/agent/instructions.ts` (26/26). Quedan 2.2 (governor) y 2.3 (comandos),
+  pendientes de aprobación. Cerrados: 0.1 (admin MCP solo
   desde la PC con step-up), 0.2 (hermetismo de los tests de MCP), 0.3 (pin de
   IP anti-rebinding), 0.4 (docs del subagente opencode, que destapó dos bugs
   previos: el emparejamiento estaba bloqueado por el proxy y el token de
