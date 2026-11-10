@@ -20,6 +20,7 @@ export type AgentEventType =
   | "credential_failover"
   | "context_usage"
   | "context_compaction_forced"
+  | "prompt_started"
   | "progress_warning"
   | "cancellation_requested"
   | "cancelled"
@@ -66,6 +67,16 @@ export type AgentEventPayload =
   /** Fase 8A — telemetría numérica por paso. Ver `ContextUsagePayload`:
    * nunca contiene prompts, mensajes, código ni nombres de archivos. */
   | ContextUsagePayload
+  /** Cola de prompts (pedido de Enzo, 2026-11-10): arrancó el ciclo de un
+   *  prompt que estaba esperando. Guarda SOLO metadatos (id, posición, tamaño):
+   *  el texto completo ya está en `agent_prompt_queue`, y acá no se duplica
+   *  para no dejar el prompt en dos lugares que puedan divergir. */
+  | {
+      type: "prompt_started";
+      promptId: string;
+      position: number;
+      chars: number;
+    }
   /** Etapa 2.2 (sub-bloque 3) — compactación FORZADA tras un
    * `context_too_large`. Un solo evento por corrida: la recuperación se
    * intenta una única vez. NO contiene mensajes ni contenido compactado. */

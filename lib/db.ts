@@ -332,6 +332,34 @@ function createConnection(): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_agent_final_reports_task ON agent_final_reports(task_id, created_at);
 
+    -- Cola de prompts de una task (pedido de Enzo, 2026-11-10).
+    --
+    -- Motivación: el agente atiende UN prompt por ciclo y termina con un
+    -- resumen. Si el usuario escribe otro prompt mientras el agente trabaja,
+    -- ese prompt se pierde o hay que crear otra task a mano (con workspace
+    -- nuevo y contexto nuevo). Acá se guarda y se le pasa al agente cuando
+    -- TERMINA el ciclo en curso y da el resumen, y así con todos los que se
+    -- hayan encolado, en orden.
+    --
+    -- Tabla propia y NO una columna JSON en 'agent_tasks': el encolado es una
+    -- escritura concurrente (el usuario encola mientras el runner lee y borra),
+    -- y con una tabla cada INSERT es atómico sin leer-modificar-escribir la
+    -- fila de la task. Es aditiva (CREATE TABLE IF NOT EXISTS), por eso
+    -- SCHEMA_VERSION no se sube.
+    CREATE TABLE IF NOT EXISTS agent_prompt_queue (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES agent_tasks(id) ON DELETE CASCADE,
+      prompt TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      started_at INTEGER,
+      -- 'waiting' = en cola; 'running' = el ciclo actual lo está ejecutando;
+      -- 'done' = ya se ejecutó; 'cancelled' = el usuario lo sacó de la cola.
+      state TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_prompt_queue_task ON agent_prompt_queue(task_id, position);
+    CREATE INDEX IF NOT EXISTS idx_agent_prompt_queue_state ON agent_prompt_queue(state, position);
+
     -- Fase 7: trazabilidad de corridas del consejo. Son tablas NUEVAS y
     -- aditivas (CREATE TABLE IF NOT EXISTS), por eso SCHEMA_VERSION no se
     -- sube. No reemplazan a threads (que sigue guardando el snapshot del

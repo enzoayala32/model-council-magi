@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 // Solo tipos — no meten código de servidor (better-sqlite3, fs, etc.) al bundle del cliente.
 import type { AgentProject } from "@/lib/agent/project-store";
@@ -137,6 +137,14 @@ export default function AgentPage() {
   const [tasks, setTasks] = useState<CodingTask[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [newTaskPrompt, setNewTaskPrompt] = useState("");
+  // Cola de prompts de la task seleccionada (pedido de Enzo, 2026-11-10). El
+  // taskId viaja con la lista, igual que los comandos: así no se muestra nunca
+  // la cola de una task que ya no está seleccionada y no hace falta un
+  // setState sincrónico dentro del efecto (el warning que el tope no deja sumar).
+  const [queue, setQueue] = useState<{ taskId: string; items: Array<{ id: string; prompt: string; position: number; state: string; stateLabel: string }> } | null>(null);
+  const [queueInput, setQueueInput] = useState("");
+  const [queueBusy, setQueueBusy] = useState(false);
+  const [queueError, setQueueError] = useState("");
   // Etapa 2.3 — comandos `/` personalizados del proyecto. Solo para la paleta:
   // la expansión la hace el servidor al crear la task. El projectId viaja con la
   // lista para NUNCA mostrar los comandos de un proyecto que ya no está
@@ -302,6 +310,72 @@ export default function AgentPage() {
       setTaskFormError(e instanceof Error ? e.message : String(e));
     } finally {
       setCreatingTask(false);
+    }
+  }
+
+  // --- Cola de prompts de la task seleccionada ---
+  const refreshQueue = useCallback(async (taskId: string) => {
+    try {
+      const r = await fetchJson<{ prompts: Array<{ id: string; prompt: string; position: number; state: string; stateLabel: string }> }>(
+        `/api/agent/tasks/${taskId}/prompts`,
+      );
+      setQueue({ taskId, items: r.prompts ?? [] });
+    } catch {
+      // Best-effort: si falla, la cola simplemente no se muestra. Nunca rompe
+      // la pantalla de la task.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!selectedTaskId) return;
+    let cancelled = false;
+    const load = () => {
+      if (!cancelled) void refreshQueue(selectedTaskId);
+    };
+    load();
+    // Mientras la task está activa, la cola cambia sola (el runner la drena):
+    // se refresca al mismo ritmo que los eventos.
+    const interval = setInterval(load, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [selectedTaskId, refreshQueue]);
+
+  // Solo se muestra si es de la task seleccionada AHORA.
+  const queueItems = queue && queue.taskId === selectedTaskId ? queue.items : [];
+
+  async function handleEnqueuePrompt(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selectedTaskId || !queueInput.trim()) return;
+    setQueueBusy(true);
+    setQueueError("");
+    try {
+      await fetchJson(`/api/agent/tasks/${selectedTaskId}/prompts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: queueInput }),
+      });
+      setQueueInput("");
+      await refreshQueue(selectedTaskId);
+    } catch (err) {
+      setQueueError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setQueueBusy(false);
+    }
+  }
+
+  async function handleCancelQueued(promptId: string) {
+    if (!selectedTaskId) return;
+    setQueueBusy(true);
+    setQueueError("");
+    try {
+      await fetchJson(`/api/agent/tasks/${selectedTaskId}/prompts?id=${encodeURIComponent(promptId)}`, { method: "DELETE" });
+      await refreshQueue(selectedTaskId);
+    } catch (err) {
+      setQueueError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setQueueBusy(false);
     }
   }
 
@@ -674,6 +748,42 @@ export default function AgentPage() {
             </div>
             <div className="agentPrompt">{selectedTask.prompt}</div>
             {actionError && <div className="agentError">{actionError}</div>}
+
+            {/* Cola de prompts: se puede escribir mientras el agente trabaja, y
+                se le pasa cuando el ciclo en curso da su resumen. */}
+            <div className="agentQueue">
+              <div className="agentSectionTitle">
+                Cola de prompts {queueItems.some((q) => q.state === "waiting") ? `(${queueItems.filter((q) => q.state === "waiting").length} esperando)` : ""}
+              </div>
+              {queueItems.length > 0 && (
+                <ul className="agentQueueList">
+                  {queueItems.map((item) => (
+                    <li key={item.id} className={`agentQueueItem ${item.state}`}>
+                      <span className="agentQueuePosition">#{item.position}</span>
+                      <span className="agentQueueText">{item.prompt}</span>
+                      <span className="agentQueueState">{item.stateLabel}</span>
+                      {item.state === "waiting" && (
+                        <button className="agentButton secondary small" onClick={() => void handleCancelQueued(item.id)} disabled={queueBusy}>
+                          quitar
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <form className="agentQueueForm" onSubmit={handleEnqueuePrompt}>
+                <textarea
+                  placeholder="Escribí el próximo prompt: queda en cola y se le pasa al agente cuando termine el ciclo actual."
+                  value={queueInput}
+                  onChange={(e) => setQueueInput(e.target.value)}
+                  rows={2}
+                />
+                <button className="agentButton" type="submit" disabled={queueBusy || !queueInput.trim()}>
+                  {queueBusy ? "…" : "Encolar"}
+                </button>
+              </form>
+              {queueError && <div className="agentError">{queueError}</div>}
+            </div>
             {effectiveConflictedPaths && effectiveConflictedPaths.length > 0 && (
               <div className="agentError">Conflicto al aplicar en: {effectiveConflictedPaths.join(", ")}</div>
             )}

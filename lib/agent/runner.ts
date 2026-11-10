@@ -40,6 +40,7 @@ import {
   type ResumeVerdict,
 } from "./autonomy/resume";
 import { appendEvent } from "./event-log";
+import { markPromptDone, markPromptRunning, nextWaitingPrompt } from "./prompt-queue";
 import { persistProposals } from "./proposal-store";
 
 type LoopRunner = (options: RunAgentLoopOptions) => Promise<AgentLoopResult>;
@@ -413,10 +414,58 @@ export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promis
     // workspace en sí.
     updateTaskFields(taskId, { baseCommit: workspace.baseCommit });
 
-    const result: TaskRunResult = useAutonomy
-      ? await runAutonomyForTask(task, workspace, abortController.signal, opts.autonomyRunner ?? runAutonomousLoop, resume ?? undefined)
-      : await loopRunner({
-          task: task.prompt,
+    // --- Cola de prompts (pedido de Enzo, 2026-11-10) -------------------
+    //
+    // El agente atiende UN prompt por ciclo y termina con un resumen. Si el
+    // usuario escribe otro prompt mientras trabaja, se guarda en la cola y se le
+    // pasa cuando el ciclo en curso da su resumen —misma task, mismo workspace,
+    // sin contexto nuevo—. Los encolados se atienden EN ORDEN, uno por ciclo.
+    //
+    // El drenaje es SOLO del camino legacy. El loop autónomo (9C) tiene su
+    // propio contrato de plan y sus propios ítems: mezclar los dos haría que un
+    // prompt encolado a mano compitiera con el plan autónomo por el mismo
+    // workspace.
+    let result: TaskRunResult;
+    if (useAutonomy) {
+      result = await runAutonomyForTask(task, workspace, abortController.signal, opts.autonomyRunner ?? runAutonomousLoop, resume ?? undefined);
+    } else {
+      // Acumuladores entre ciclos: la task es una sola, así que el resultado
+      // final es la UNIÓN de lo que hicieron todos los ciclos.
+      const acumulado: TaskRunResult = {
+        stopReason: "completed",
+        proposals: [],
+      };
+      let promptsEncoladosAtendidos = 0;
+      let primerCiclo = true;
+      for (;;) {
+        // El PRIMER ciclo corre SIEMPRE el prompt original de la task. Recién
+        // cuando ese ciclo da su resumen se mira la cola. (Mi primera versión
+        // tomaba el prompt de la cola ya en el primer ciclo, así que si había
+        // algo encolado al arrancar, el prompt original no corría NUNCA —lo
+        // destapó el test.)
+        const siguiente = primerCiclo ? null : nextWaitingPrompt(taskId);
+        if (primerCiclo) primerCiclo = false;
+        const promptDeEsteCiclo = siguiente ? siguiente.prompt : task.prompt;
+        if (siguiente) {
+          // `markPromptRunning` devuelve false si otro proceso ya lo tomó: en
+          // ese caso se vuelve a mirar la cola en la próxima vuelta en vez de
+          // ejecutar dos veces el mismo prompt.
+          if (!markPromptRunning(siguiente.id)) continue;
+          promptsEncoladosAtendidos += 1;
+          appendEvent(taskId, {
+            type: "prompt_started",
+            promptId: siguiente.id,
+            position: siguiente.position,
+            chars: siguiente.prompt.length,
+          });
+          appendEvent(taskId, {
+            type: "text",
+            text: `▶️ Prompt en cola #${siguiente.position}: ${siguiente.prompt.slice(0, 120)}`,
+          });
+        }
+
+        const ciclo: TaskRunResult = await loopRunner({
+          task: promptDeEsteCiclo,
           workspaceRoot: workspace.worktreePath,
           repoRoot: workspace.basePath,
           modelId: task.modelId,
@@ -434,6 +483,31 @@ export async function runTask(taskId: string, opts: RunTaskOptions = {}): Promis
           // máquina.
           ...(historyGovernorDisabled() ? {} : { historyGovernor: { enabled: true } }),
         });
+        if (siguiente) markPromptDone(siguiente.id);
+
+        acumulado.stopReason = ciclo.stopReason;
+        acumulado.proposals.push(...ciclo.proposals);
+        // El `error`/`outcome` que manda es el DEL ÚLTIMO ciclo: si el segundo
+        // ciclo falló, el resultado de la task es ese fallo, no el del primero.
+        if (ciclo.error !== undefined) acumulado.error = ciclo.error;
+        if (ciclo.outcome !== undefined) acumulado.outcome = ciclo.outcome;
+
+        // ¿Se sigue? Se corta si: el usuario canceló, el ciclo falló, o ya no
+        // queda nada en cola. Un ciclo fallado CORTA la cola a propósito: si el
+        // proveedor está caído, reintentar el resto en cadena solo gasta
+        // tokens y deja la cola a medio drenar para que el usuario la vea.
+        if (abortController.signal.aborted) break;
+        if (ciclo.error) break;
+        if (ciclo.outcome && ciclo.outcome.status !== "READY_FOR_REVIEW" && ciclo.outcome.status !== "NO_CHANGES") break;
+        if (!nextWaitingPrompt(taskId)) break;
+        appendEvent(taskId, {
+          type: "text",
+          text: "📬 Ciclo terminado y quedan prompts en cola: el próximo ciclo arranca con el siguiente.",
+        });
+      }
+      void promptsEncoladosAtendidos;
+      result = acumulado;
+    }
 
     if (abortController.signal.aborted) {
       transitionAndLog(taskId, "CANCELLED");

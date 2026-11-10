@@ -82,6 +82,9 @@ export const ROUTE_RULES: readonly RouteRule[] = [
   { pattern: "/api/agent/commands", method: "GET", scope: "observe", note: "Comandos / personalizados del proyecto. Solo lectura." },
   { pattern: "/api/agent/tasks", method: "GET", scope: "observe", note: "Lista de tareas." },
   { pattern: "/api/agent/tasks/:id", method: "GET", scope: "observe", note: "Detalle de una tarea." },
+  { pattern: "/api/agent/tasks/:id/prompts", method: "GET", scope: "observe", note: "Cola de prompts de una tarea." },
+  { pattern: "/api/agent/tasks/:id/prompts", method: "POST", scope: "operate", note: "Encolar un prompt." },
+  { pattern: "/api/agent/tasks/:id/prompts", method: "DELETE", scope: "operate", note: "Cancelar un prompt en cola." },
   { pattern: "/api/agent/tasks/:id/events", method: "GET", scope: "observe", note: "SSE de eventos. Es la pantalla de detalle del telefono." },
   { pattern: "/api/agent/tasks/:id/proposals", method: "GET", scope: "observe", note: "Ver diffs propuestos. Ver no es aprobar." },
 
