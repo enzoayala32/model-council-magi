@@ -163,6 +163,21 @@ exit 0.
 
 ---
 
+## 4F. Misión 2 — cola de prompts (pedido de Enzo, 2026-11-10)
+
+| Ítem | Estado | Evidencia |
+|---|---|---|
+| Encolar prompts mientras el agente trabaja | **HECHA** | `lib/agent/prompt-queue.ts` + tabla `agent_prompt_queue`. El prompt se guarda y se le pasa al agente cuando el ciclo en curso da su resumen |
+| Varios prompts consecutivos, en orden | **HECHA** | El runner drena la cola: un ciclo por prompt, misma task y mismo workspace, hasta vaciarla |
+| Encolar/listar/cancelar por API | **HECHA** | `GET`/`POST`/`DELETE /api/agent/tasks/:id/prompts` (scope observe/operate), 56 pares ruta+método en el barrido |
+| UI de la cola en el detalle de la task | **HECHA** | Lista con posición/estado/"quitar" + textarea para encolar mientras corre (`app/agent/page.tsx`) |
+| Un ciclo fallado corta la cola | **HECHA** (a propósito) | Si el proveedor está caído, reintentar el resto en cadena solo gasta tokens: los encolados quedan esperando y a la vista |
+| Verificación en vivo con server + modelo real | **HECHA** | `npm run agent:smoke-prompt-queue`: 8/8, incluido que el SEGUNDO prompt surtió efecto en el mismo worktree |
+
+Tests: `npm run agent:test-prompt-queue` 36/36 (store + runner con `loopRunner`
+falso). Smoke en vivo: 8/8 contra el server real con
+`nvidia/nemotron-3.5-lightning-30b-a3b`.
+
 ## 5. Backlog
 
 | Ítem | Estado | Nota |

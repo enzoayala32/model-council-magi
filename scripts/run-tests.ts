@@ -103,6 +103,7 @@ const LIVE_SCRIPTS = [
   "agent:test-runner-real",
   "agent:test-model-registry",
   "agent:stress",
+  "agent:smoke-prompt-queue",
 ] as const;
 
 /** Harness manuales: piden argumentos y no tienen sentido en CI. */

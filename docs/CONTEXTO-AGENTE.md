@@ -11,7 +11,10 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
   `docs/PARIDAD-OPENCODE.md` están cerradas: `AGENTS.md` leído por el loop
   (26/26), governor del historial prendido por defecto (62/62, 42/42, 15/15,
   7/7) y comandos `/` personalizados con plantillas (37/37). Quedan las P1/P2 de
-  la matriz, ninguna arrancada. Cerrados: 0.1 (admin MCP solo
+  la matriz, ninguna arrancada.
+- **Cola de prompts (pedido de Enzo): HECHA** — `lib/agent/prompt-queue.ts`: se
+  pueden dejar varios prompts y el runner se los pasa al agente cuando cada ciclo
+  da su resumen, en orden y sobre el mismo workspace (36/36 tests + 8/8 smoke en vivo). Quedan las P1/P2 de la matriz de paridad, ninguna arrancada. Cerrados: 0.1 (admin MCP solo
   desde la PC con step-up), 0.2 (hermetismo de los tests de MCP), 0.3 (pin de
   IP anti-rebinding), 0.4 (docs del subagente opencode, que destapó dos bugs
   previos: el emparejamiento estaba bloqueado por el proxy y el token de
@@ -22,24 +25,21 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 - Último commit: ver `git log -1` (branch main, pusheado).
 
 - **Misión 2**: Fases 5, 6, 7, 8 y 9 **HECHAS**, con las tres tandas de
-  correcciones de la revisión aplicadas. Últimas: sondeo por pool y clasificador central (`npm run agent:probe-models` ->
-  `docs/bench/modelos-agente.json`): 5 de 9 candidatos SIRVE con tool-calling,
-  composer estilo opencode, y la app como servidor MCP para opencode. Conectado al producto: push con
-  allowlist de servicios, herramientas MCP **fail-closed** en el loop (stdio **e
-  http**), aprobación humana con step-up, rutas de aprobación y administración de
-  servidores MCP. **No queda nada pendiente de implementación** en la Misión 2;
-  lo que resta son los NO VERIFICADOS de abajo.
+  correcciones de la revisión aplicadas. Últimas: sondeo por pool y clasificador
+  central (5 de 9 candidatos SIRVE con tool-calling), composer estilo opencode, y
+  la app como servidor MCP para opencode. Conectado al producto: push con allowlist
+  de servicios, MCP **fail-closed** (stdio e http), aprobación humana con step-up,
+  y administración de servidores MCP. **No queda nada pendiente de
+  implementación** en la Misión 2; lo que resta son los NO VERIFICADOS de abajo.
 - Último commit: ver `git log -1` (branch main, pusheado).
 
 ## 2. Estado de verificación (sobre HEAD)
 
 - `npm run typecheck`: exit 0.
 - `npm run lint -- --max-warnings 10`: exit 0 (10 warnings).
-- `npm test`: **102/102 suites OK** (incluye `agent:test-web-search-compat` 17/17, `security:test-mcp-failclosed` 61/61,
-  `security:test-mcp-http` 46/46, `security:test-mcp-admin` 36/36,
-  `security:test-push-endpoint` 78/78, `security:test-web-push` 92/92,
-  `security:test-mcp-client` 48/48, `security:test-mcp-server` 53/53 y
-  `security:test-mcp-loop` 51/51).
+- `npm test`: **104/104 suites OK**. El detalle por suite está en el ROADMAP;
+  acá basta el total. (`security:test-peer-spoof` es falible bajo carga: el
+  propio test documenta el porqué y aislado pasa siempre.)
 - **Hermetismo verificado**: la suite corre con un preload que rompe el DNS no
   loopback (`NODE_OPTIONS=--require dns-block.js`). Si un test nuevo toca la
   red, eso falla.
@@ -52,9 +52,9 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 ## 3. Próximos 3 pasos concretos
 
 1. Verificar en vivo lo NO VERIFICADO de abajo, con las checklists manuales.
-2. Si aparece un flaky nuevo: el patrón es el de `agent:test-exec-with-tree-kill`
-   (tiempos fijos con 300ms de margen, que con la suite cargada se pasaban de
-   largo). Reemplazarlos por esperas con sondeo.
+2. Flaky nuevo: el patrón es el de `agent:test-exec-with-tree-kill` (tiempos
+   fijos con 300ms de margen que la suite cargada se pasaba de largo). Esperas
+   con sondeo, no tiempos fijos.
 3. Mantener este archivo al cierre de cada sub-bloque.
 
 ## 4. Decisiones vigentes
