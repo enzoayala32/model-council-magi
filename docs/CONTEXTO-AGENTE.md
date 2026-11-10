@@ -7,11 +7,11 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 - **Etapa 0 (cierre de pendientes de la auditoría): HECHA**, salvo 0.5, que
   queda **pendiente de aprobación del usuario**.
-- **Etapa 1 (matriz de paridad): HECHA** y **Etapas 2.1 y 2.2: HECHAS** —
-  `docs/PARIDAD-OPENCODE.md` (29 capacidades), `lib/agent/instructions.ts`
-  (26/26, `AGENTS.md` leído por el loop) y el governor del historial PRENDIDO por
-  defecto con 4 sub-bloques (`62/62`, `42/42`, `15/15`, `7/7`). Queda **2.3
-  (comandos `/` personalizados)**, pendiente de aprobación. Cerrados: 0.1 (admin MCP solo
+- **Etapa 1: HECHA. Etapas 2.1, 2.2 y 2.3: HECHAS** — las tres brechas P0 de
+  `docs/PARIDAD-OPENCODE.md` están cerradas: `AGENTS.md` leído por el loop
+  (26/26), governor del historial prendido por defecto (62/62, 42/42, 15/15,
+  7/7) y comandos `/` personalizados con plantillas (37/37). Quedan las P1/P2 de
+  la matriz, ninguna arrancada. Cerrados: 0.1 (admin MCP solo
   desde la PC con step-up), 0.2 (hermetismo de los tests de MCP), 0.3 (pin de
   IP anti-rebinding), 0.4 (docs del subagente opencode, que destapó dos bugs
   previos: el emparejamiento estaba bloqueado por el proxy y el token de

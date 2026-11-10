@@ -2435,6 +2435,66 @@ mismo bloque: es la firma del flake que el propio test documenta (el primer
 compile de Next en dev responde 403/404 y reintenta hasta 12 veces con 1 s de
 espera), no una regresión. Ninguno de estos cambios toca esas rutas.
 
+## 2E. Etapa 2.3 — comandos `/` personalizados (última brecha P0)
+
+**Qué faltaba:** paleta de comandos fija y dura en el composer, y ninguna forma
+de que el usuario definiera los suyos.
+
+**Qué se hizo:** `lib/agent/commands.ts` descubre `.magi/commands/**/*.md` del
+proyecto y un directorio global, con id derivado de la ruta (`team/review.md` →
+`/team/release`), frontmatter con `description` y `model`, y expansión de
+`$ARGUMENTS`/`$1..$n` **al enviar**, en el servidor. Si el prompt no es un
+comando, o el comando no se puede leer, viaja TAL CUAL: un comando roto nunca
+rompe la task.
+
+**Bloques de shell: apagados por defecto, y el por qué.** OpenCode soporta
+`` !`git diff` `` en la plantilla y su propia doc advierte que corre FUERA del
+flujo de permisos. Copiarlo tal cual sería aceptar que cualquier repo que el
+usuario clone —o cualquier tercero que le edite un .md— ejecute código con los
+privilegios del usuario con solo pedir una task. Nuestra postura en todo el
+resto del proyecto es fail-closed (allowlist de MCP, pin de IP anti-SSRF,
+aprobación humana para escritura), así que acá también: apagado por defecto, se
+prende con `MAGI_AGENT_COMMANDS_SHELL=1` como decisión explícita documentada en
+`.env.example`. Prendido, la salida se redacta con el registro de secretos del
+proceso, se recorta a 8.000 caracteres y se marca como dato no confiable.
+Apagado, el bloque se reemplaza por un marcador visible: dejar el `` !`cmd` ``
+crudo haría que el modelo viera el comando como texto y pudiera ejecutarlo por
+su cuenta.
+
+**Tres bugs que el test destapó, todos míos:**
+
+1. **El regex de placeholders pedía `$$ARGUMENTS`** —un `\$` de más en el grupo—,
+   así que no matcheaba nada y toda plantilla caía en el fallback. El síntoma era
+   sutil: el prompt se veía "bien" (argumentos agregados al final) pero la
+   plantilla no se usaba.
+2. **Todas las posiciones se comían el resto**, no solo la más alta:
+   "Compare api with stable" en vez de `$1`="api" y `$2`="stable branch". La regla
+   real de OpenCode ("the highest-numbered placeholder consumes its argument and
+   everything after it") se verificó contra su doc.
+3. **Los comandos anidados no se descubrían**: la lectura tomaba solo el primer
+   nivel del directorio.
+
+**Y una trampa del entorno, ya conocida y vuelta a pagar:** un `` escrito
+dentro de un heredoc de bash llega al archivo como un carácter BACKSPACE real,
+que corrompe el regex en silencio (el placeholder más alto nunca se detectaba y
+todas las posiciones caían en el caso de un solo argumento). Ya estaba anotada en
+`docs/CONTEXTO-AGENTE.md`; esta etapa la pagó de nuevo.
+
+**Tests: 37/37**, incluido que la salida del shell se redacta (con el secreto
+**registrado**, porque `redactSecrets` es un registro explícito y no una
+heurística de formato), que se recorta, que un bloque que falla deja error marcado
+y no una excepción, y que un prompt que no es comando viaja tal cual.
+
+**UI:** chips en el formulario de la task (`app/agent/page.tsx`), con el
+`projectId` viajando junto a la lista para no mostrar nunca los comandos de un
+proyecto que ya no está seleccionado —y de paso sin el `setState` sincrónico
+dentro del efecto, que es el warning que el tope de lint no deja sumar.
+
+**Verificación:** typecheck exit 0 · lint `--max-warnings 10` exit 0 (10 warnings)
+· `npm test --verify` **103/103** exit 0 · build exit 0 · barrido de rutas 53
+pares. Una corrida de la suite quedó 102/103 por el flake documentado de
+`security:test-peer-spoof`; aislado y en la corrida siguiente, 103/103.
+
 ## Apéndice — Matriz ruta por scope
 
 Las 35 rutas (39 handlers). Todas pasan por `guardRequest`; verificado por
