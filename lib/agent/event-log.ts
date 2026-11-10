@@ -19,6 +19,7 @@ export type AgentEventType =
   | "git_commit_result"
   | "credential_failover"
   | "context_usage"
+  | "context_compaction_forced"
   | "progress_warning"
   | "cancellation_requested"
   | "cancelled"
@@ -65,6 +66,16 @@ export type AgentEventPayload =
   /** Fase 8A — telemetría numérica por paso. Ver `ContextUsagePayload`:
    * nunca contiene prompts, mensajes, código ni nombres de archivos. */
   | ContextUsagePayload
+  /** Etapa 2.2 (sub-bloque 3) — compactación FORZADA tras un
+   * `context_too_large`. Un solo evento por corrida: la recuperación se
+   * intenta una única vez. NO contiene mensajes ni contenido compactado. */
+  | {
+      type: "context_compaction_forced";
+      provider: ProviderName;
+      credentialId: string;
+      reason: string;
+      note?: string;
+    }
   /** Fase 9D — advertencia accionable del detector de no-progreso. `message`
    * es un texto fijo del detector: no contiene contenido de archivos,
    * stdout/stderr ni prompts. `step` es el índice 0-based del paso. */

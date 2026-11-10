@@ -528,10 +528,31 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
 
   let stopReason: AgentLoopResult["stopReason"] = "completed";
   let errorMessage: string | undefined;
+  // Etapa 2.2 (sub-bloque 3) — red de seguridad para `context_too_large`.
+  // El clasificador marca ese error como PERMANENT (sin reintento, sin rotar,
+  // sin fallback de modelo), así que hoy la task moría sin más. OpenCode
+  // recupera una vez compactando; nosotros también. Es un único reintento por
+  // corrida, y NO depende de que el governor esté prendido ni de que la ventana
+  // sea conocida: justamente cuando la ventana es desconocida es la única
+  // defensa que queda. El flag lo consume `prepareStep` en el intento siguiente.
+  let forcedCompactionAvailable = true;
+  let forceCompactionOnNextStep = false;
+  /** Último lease entregado por el cursor, para reusarlo en el reintento
+   *  forzado (ver el comentario de arriba del `attempts`). */
+  type AcquireResult = ReturnType<ReturnType<typeof pool.beginOperation>["next"]>;
+  type LeaseDisponible = Extract<AcquireResult, { status: "AVAILABLE" }>;
+  let ultimoLease: LeaseDisponible | null = null;
 
   attempts: while (true) {
-    const acquireResult = cursor.next();
-    if (acquireResult.status !== "AVAILABLE") {
+    // Etapa 2.2 (sub-bloque 3): el reintento tras `context_too_large` usa la
+    // MISMA credential a propósito. Pedirle otra al cursor sería un error: el
+    // cursor excluye por identidad las credenciales ya entregadas EN ESTA
+    // operación, así que devolvería NO_CREDENTIALS y el reintento se perdería
+    // con un "se agotaron las credenciales" que no describe lo que pasó. Acá se
+    // reusa el lease vigente, que es exactamente la intención: no rotar.
+    // Reintento forzado: reusa el lease de la credencial que falló (nunca rota).
+    const adquirido: AcquireResult | null = forceCompactionOnNextStep ? ultimoLease : cursor.next();
+    if (!adquirido || adquirido.status !== "AVAILABLE") {
       stopReason = "error";
       // Fase 5F: antes acá había un único mensaje ("...o todas las
       // configuradas quedaron INVALID") para TODO caso de NO_CREDENTIALS —
@@ -541,13 +562,17 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
       // partir del snapshot REAL del pool en este instante — sin tocar
       // `_acquireExcluding`/el algoritmo de adquisición, solo el texto.
       let exhaustionReason: string;
-      if (acquireResult.status === "NO_CREDENTIALS") {
+      // `adquirido` nunca es null acá: el reintento forzado solo se arma cuando
+      // ya hubo un lease AVAILABLE guardado. Si alguna vez llegara null, es un
+      // bug, y el texto conservador de "sin credenciales" es el correcto.
+      const estado = adquirido?.status;
+      if (estado === "NO_CREDENTIALS" || estado === undefined) {
         const classified = classifyExhaustion(pool.snapshot());
         exhaustionReason = classified.reason;
         errorMessage = describeExhaustion(providerName, ENV_PREFIX_BY_PROVIDER[providerName], classified);
       } else {
         exhaustionReason = "all_cooldown";
-        errorMessage = `Todas las credentials de ${providerName} están en cooldown ahora mismo — la próxima estará libre en ${new Date(acquireResult.retryAt).toISOString()}.`;
+        errorMessage = `Todas las credentials de ${providerName} están en cooldown ahora mismo — la próxima estará libre en ${new Date((adquirido as { retryAt: number }).retryAt).toISOString()}.`;
       }
       if (options.taskId) {
         appendEvent(options.taskId, {
@@ -562,7 +587,10 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
       break;
     }
 
-    const { id: credentialId, value: apiKey, healthGeneration } = acquireResult.lease;
+    // `ultimoLease` solo se llena con un lease AVAILABLE, y el reintento
+    // forzado solo se arma cuando ya hubo uno: el `!` es seguro por construcción.
+    const { id: credentialId, value: apiKey, healthGeneration } = adquirido.lease;
+    ultimoLease = adquirido;
     const model = buildModelForId(providerName, modelId, apiKey);
 
     try {
@@ -587,21 +615,34 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
           }
 
           let effectiveMessages = messages;
-          if (governorEnabled) {
+          // `forced` solo es true en el paso que reintenta tras un
+          // `context_too_large`: se sale del gate del governor a propósito.
+          const forced = forceCompactionOnNextStep;
+          if (governorEnabled || forced) {
             const preEstimate = measureContext({ system: currentSystemPrompt, messages: effectiveMessages, tools });
             const preBudget = computeContextBudget({ modelId, estimate: preEstimate, providerUsage: null });
+            // Compactación FORZADA: si el proveedor rechazó por longitud, el
+            // contexto hay que reducirlo YA, no cuando se cruce un umbral
+            // blando. `triggerRatio: 0` + `estimatedTokens` en el máximo hace
+            // que el plan se evalúe siempre; `minOldUnits: 1` y
+            // `keepRecentUnits` acotado dejan el máximo lugar posible.
+            const config = forced
+              ? { ...governorConfig, enabled: true, triggerRatio: 0, minOldUnits: 1, keepRecentUnits: Math.min(governorConfig.keepRecentUnits, 2) }
+              : governorConfig;
             const plan = planHistoryCompaction({
               messages: effectiveMessages,
-              estimatedTokens: preBudget.usedInputTokens,
+              estimatedTokens: forced ? Number.MAX_SAFE_INTEGER : preBudget.usedInputTokens,
               softInputTokens: preBudget.softInputTokens,
-              config: governorConfig,
+              config,
             });
+            forceCompactionOnNextStep = false;
             stepGovernor.set(stepNumber, {
               enabled: true,
               applied: plan.applied,
               removedMessages: plan.removedMessages,
               summaryChars: plan.summary?.length ?? 0,
               version: plan.applied ? plan.version : null,
+              forced,
             });
             if (plan.applied) effectiveMessages = plan.messages;
           } else {
@@ -803,6 +844,39 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
 
       if (willRotate) {
         transcript.push(`🔁 credential ${credentialId} falló (${classified.reason}) — reintentando con otra credential de ${providerName}.`);
+        continue attempts;
+      }
+
+      // Etapa 2.2 (sub-bloque 3) — red de seguridad para `context_too_large`.
+      //
+      // El clasificador marca ese error como PERMANENT: sin reintentar la
+      // misma key, sin rotar, sin fallback de modelo. Es correcto como regla
+      // general (reintentar lo mismo no arregla un contexto demasiado largo),
+      // pero dejaba la conversación en un callejón sin salida: la task moría
+      // con `error` aunque hubría ramado compactar y reintentar.
+      //
+      // Acá se hace exactamente eso, UNA vez por corrida y con la MISMA
+      // credential. La regla de Step 0 (no reintentar con otra credential si ya
+      // se ejecutaron pasos) no aplica: no se cambia de credential, y el
+      // request que falló ocurrió ANTES de que ese step pudiera ejecutar
+      // ninguna tool, así que no hay trabajo duplicado. Si la compactación
+      // forzada no puede reducir nada (no hay unidades viejas que quitar), el
+      // reintento sería idéntico: se deja pasar el error como antes.
+      const contextoDemasiadoLargo = classified.reason === "context_too_large";
+      if (contextoDemasiadoLargo && forcedCompactionAvailable) {
+        forcedCompactionAvailable = false;
+        forceCompactionOnNextStep = true;
+        transcript.push(`🧹 el proveedor rechazó el contexto por longitud — compactando el historial y reintentando UNA vez con la misma credential.`);
+        if (options.taskId) {
+          appendEvent(options.taskId, {
+            type: "context_compaction_forced",
+            provider: providerName,
+            credentialId,
+            reason: classified.reason,
+            note: "reintento único con la misma credential tras context_too_large",
+          });
+        }
+        errorMessage = redactSecrets(buildErrorMessage(error));
         continue attempts;
       }
 

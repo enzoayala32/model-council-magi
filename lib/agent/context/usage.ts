@@ -42,6 +42,11 @@ export type GovernorUsageSummary = {
   version: number | null;
   /** Por qué quedó apagado, cuando quedó apagado. Visible en la UI. */
   skipReason?: GovernorSkipReason;
+  /** Etapa 2.2 (sub-bloque 3): true cuando la compactación de este paso fue
+   *  FORZADA por un reintento tras `context_too_large`, no por el umbral
+   *  blando del governor. Sirve para distinguir en la telemetría una
+   *  compactación de emergencia de una de rutina. */
+  forced?: boolean;
 };
 
 export type ContextUsagePayload = {
