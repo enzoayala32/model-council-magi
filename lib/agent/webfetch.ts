@@ -68,6 +68,10 @@ export type WebfetchOptions = {
   requestImpl?: (pinned: PinnedRequest, opts: { timeoutMs: number }) => Promise<RawResponse>;
   /** Para pruebas: permite http:// y loopback. */
   allowLocal?: boolean;
+  /** Resolución inyectable (tests). Mismo seam que el transporte MCP: sin esto,
+   *  un test que toca los caminos de rechazo de DNS necesita resolver nombres
+   *  reales. */
+  resolve?: (host: string) => Promise<string[]>;
 };
 
 /** GET contra la IP fijada, con Host y SNI correctos (el mismo truco que
@@ -145,6 +149,7 @@ export async function webfetch(rawUrl: string, options: WebfetchOptions = {}): P
       // ventana de rebinding (misma razón que en el transporte de MCP).
       skipDns: true,
       ...(options.allowLocal ? { allowInsecureLocal: true } : {}),
+      ...(options.resolve ? { resolve: options.resolve } : {}),
     });
     if (!pinned.ok) return { ok: false, error: reasonAEspanol(pinned.reason) };
 

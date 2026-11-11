@@ -95,7 +95,12 @@ async function fetchWarm(url: string, init: RequestInit = {}, attempts = 12): Pr
   let last: Response | null = null;
   for (let i = 0; i < attempts; i += 1) {
     last = await fetch(url, init);
-    if (last.status !== 404) return last;
+    // 404 = "ruta todavia no compilada" y 500 = "la compilacion en curso se
+    // cayo a medias". Las dos son TRANSIENTES en modo dev con la maquina
+    // cargada, y ninguna es el veredicto real de la ruta: se reintenta. Fue la
+    // causa del flake que hacia fallar este test cada tanto (una vez con 404 en
+    // /api/pairing, otra con 500 en /api/council/runs/:id).
+    if (last.status !== 404 && last.status !== 500) return last;
     await new Promise((resolve) => setTimeout(resolve, 1500));
   }
   return last as Response;

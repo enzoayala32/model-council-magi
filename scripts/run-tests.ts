@@ -66,6 +66,22 @@ function limpiarTiposDev(): void {
  * es el repo).
  */
 let guardiaCache: string | null = null;
+/** Igual que `asegurarGuardia`, para el preload de DNS (Etapa 2.6, 3b). */
+function asegurarDnsBlock(): string {
+  if (dnsBlockCache && fs.existsSync(dnsBlockCache)) return dnsBlockCache;
+  const origen = path.join(root, "lib", "test", "fixtures", "dns-block.js");
+  const destino = path.join(os.tmpdir(), "magi-dns-block.js");
+  try {
+    fs.copyFileSync(origen, destino);
+    dnsBlockCache = destino;
+  } catch {
+    dnsBlockCache = origen;
+  }
+  return dnsBlockCache;
+}
+
+let dnsBlockCache: string | null = null;
+
 function asegurarGuardia(): string {
   if (guardiaCache && fs.existsSync(guardiaCache)) return guardiaCache;
   const origen = path.join(root, "lib", "test", "fixtures", "guard-mcp-config.js");
@@ -208,7 +224,13 @@ function runOne(
     // ("model council") y cmd los destroza, así que se copia a un temporal.
     const guardiaAbsoluta = asegurarGuardia();
     const previo = env.NODE_OPTIONS ?? "";
-    env.NODE_OPTIONS = (previo ? previo + " " : "") + "--require " + guardiaAbsoluta;
+    // Etapa 2.6 (3b): el preload de DNS. Rompe dns.lookup (el que usa fetch por
+    // debajo, que es el que importa) y dns.resolve*/dns/promises, salvo loopback.
+    // ANTES estaba documentado pero no existía: el síntoma era
+    // `lib/agent/test-webfetch.ts` dando 17/30 y "funcionando" solo en redes con DNS.
+    const dnsBloqueado = asegurarDnsBlock();
+    const conGuardia = (previo ? previo + " " : "") + "--require " + guardiaAbsoluta;
+    env.NODE_OPTIONS = conGuardia + " --require " + dnsBloqueado;
 
     let dataDir: string | null = null;
     if (opts.isolate) {
