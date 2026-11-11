@@ -112,26 +112,49 @@ async function main(): Promise<void> {
     "utf-8",
   );
 
-  let punteroModificado = false;
+  // Y el ataque por la VÍA DIRECTA: escribir el puntero con fs, sin pasar por
+  // las tools. Se construye un workspace PROPIO (no el worktree real: en
+  // Windows su puntero es read-only y este caso no correría nunca) con el
+  // puntero ya manipulado. Así las dos verificaciones corren en CUALQUIER
+  // sistema operativo, que es lo que hacía falta: la versión anterior las
+  // tenía detrás de un `if`, así que en algunos SO no se ejecutaban (y cuando
+  // sí lo hacían, la de "git acepta el gitdir falso" fallaba porque un
+  // `git status` contra un gitdir sin objetos da error, que no era lo que se
+  // quería probar).
+  const wsManipulado = path.join(base, "ws-manipulado");
+  // Un gitdir falso LIMPIO (sin el fsmonitor): el config malicioso de arriba
+  // rompe a git con un error de config, asi que para probar "git confia en el
+  // puntero" hace falta uno que no reviente. El malicioso se queda para la
+  // prueba del marcador.
+  const falsoLimpio = path.join(base, "falso-limpio");
+  await fs.mkdir(path.join(falsoLimpio, "objects"), { recursive: true });
+  await fs.mkdir(path.join(falsoLimpio, "refs"), { recursive: true });
+  await fs.writeFile(path.join(falsoLimpio, "HEAD"), "ref: refs/heads/main\n", "utf-8");
+  await fs.writeFile(path.join(falsoLimpio, "config"), "[core]\n\trepositoryformatversion = 0\n\tbare = false\n", "utf-8");
+  await fs.mkdir(wsManipulado, { recursive: true });
+  await fs.writeFile(path.join(wsManipulado, ".git"), "gitdir: " + falsoLimpio + "\n", "utf-8");
+  let integridadDetecto = false;
   try {
-    await fs.writeFile(path.join(worktree, ".git"), `gitdir: ${falso}\n`, "utf-8");
-    punteroModificado = true;
-  } catch {
-    // En Windows el puntero de un worktree es read-only: el ataque ni siquiera
-    // puede intentarse por esa vía. Se usa la otra (sobrescribir el gitdir).
-    console.log("  (aviso: el SO protege el puntero contra escritura; el caso se prueba por la ruta del gitdir)");
+    await gitSafe(["status", "--porcelain"], { cwd: wsManipulado, gitDirEsperado: gitDirEsperado(repo, worktree) });
+  } catch (error) {
+    integridadDetecto = error instanceof GitIntegrityError;
   }
+  check("con el puntero manipulado, git-safe NO ejecuta git", integridadDetecto, integridadDetecto);
 
-  if (punteroModificado) {
-    let integridadDetecto = false;
-    try {
-      await gitSafe(["status", "--porcelain"], { cwd: worktree, gitDirEsperado: gitDirEsperado(repo, worktree) });
-    } catch (error) {
-      integridadDetecto = error instanceof GitIntegrityError;
-    }
-    check("con el puntero manipulado, git-safe NO ejecuta git", integridadDetecto, integridadDetecto);
-  }
+  // Y la prueba de POR QUÉ hace falta: git común confía en el puntero y se va
+  // al gitdir falso sin chistar. Se mide con `rev-parse --git-dir`, que es
+  // determinista en cualquier SO (a diferencia de `git status`, que contra un
+  // gitdir sin objetos da error y no probaba nada).
+  const gitdirQueGitUsa = await execFileAsync("git", ["rev-parse", "--git-dir"], { cwd: wsManipulado })
+    .then((r) => r.stdout.trim())
+    .catch(() => "");
+  check(
+    "git SIN endurecer se va al gitdir manipulado (por eso hace falta la verificación)",
+    gitdirQueGitUsa === falsoLimpio || gitdirQueGitUsa.endsWith("falso-limpio"),
+    { gitUsa: gitdirQueGitUsa, falsoLimpio },
+  );
 
+  // La verificación de integridad como función pura, que es lo que se puede
   // La verificación de integridad como función pura, que es lo que se puede
   // probar en cualquier SO.
   {
@@ -174,18 +197,6 @@ async function main(): Promise<void> {
     await fs.rm(sinGit, { recursive: true, force: true });
   }
 
-  // Y con el gitdir manipulado, git NORMAL (sin endurecer) acepta el puntero:
-  // es la razón por la que la verificación existe.
-  if (punteroModificado) {
-    let gitNormalAcepto = false;
-    try {
-      await execFileAsync("git", ["status", "--porcelain"], { cwd: worktree, env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" } });
-      gitNormalAcepto = true;
-    } catch {
-      gitNormalAcepto = false;
-    }
-    check("git SIN endurecer acepta el gitdir manipulado (por eso hace falta la verificación)", gitNormalAcepto, gitNormalAcepto);
-  }
 
   // El comando del fsmonitor NO se ejecutó: la app endurecida no lo corre.
   const ejecutado = await fs.stat(marcador).then(() => true).catch(() => false);
