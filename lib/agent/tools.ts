@@ -7,6 +7,7 @@ import { wrapToolExecute, type ToolPolicy } from "./tool-policy";
 import { createMcpTools, type McpToolRegistry } from "./mcp-tools";
 import { createSearchProviderFromEnv, MAX_WEB_SEARCH_RESULTS, type SearchProvider } from "./search-provider";
 import { applyHunks, normalizarSaltos, parsePatch, restaurarSaltos } from "./patch-parser";
+import { esRutaGitInternals } from "./safe-path";
 import { webfetch } from "./webfetch";
 import { renderSkillPayload, type FileSkill } from "./skills-file";
 import { redactSecrets } from "../provider-resilience/redact";
@@ -23,6 +24,9 @@ import type { RepoMapService } from "./repo-map-service";
 export { resolveSafePath, UnsafePathError } from "./safe-path";
 
 const SALTO = "\n";
+
+/** Placeholder: el bloque de helpers se movió adentro de createAgentTools. */
+
 const MAX_READ_BYTES = 200_000;
 const MAX_SEARCH_RESULTS = 60;
 const MAX_LIST_RESULTS = 300;
@@ -178,6 +182,30 @@ export function createAgentTools(
   // fallback de arriba anularía el gate para un modelo marcado
   // incompatible. Un provider explícito gana siempre sobre ambos.
   const resolvedSearchProvider = searchProvider === null ? undefined : (searchProvider ?? createSearchProviderFromEnv());
+
+/**
+ *
+ * FUNCION UNICA a proposito: si cada tool llamara a `resolveSafePath` y despues
+ * al helper, bastaria que una tool nueva se olvide del segundo llamado para
+ * reabrir el agujero. Envolviendo los dos en uno solo, "usar
+ * resolveSafePathParaEscribir" ES la regla -y el test que enumera las tools de
+ * escritura puede verificarlo.
+ *
+ * El orden importa: primero el rechazo por NOMBRE (barato, y funciona aunque el
+ * archivo no exista), despues `resolveSafePath` (que resuelve symlinks y valida
+ * que no se salga del workspace), y al final el rechazo por DESTINO REAL -con
+ * el destino ya resuelto-, que es el caso del symlink dentro del workspace que
+ * apunta a `../.git/`.
+ */
+async function resolveSafePathParaEscribir(relPath: string): Promise<string> {
+  const porNombre = await esRutaGitInternals(relPath);
+  if (porNombre) throw new UnsafePathError(porNombre);
+  const abs = await resolveSafePath(workspaceRoot, relPath);
+  const porDestino = await esRutaGitInternals(relPath, abs);
+  if (porDestino) throw new UnsafePathError(porDestino);
+  return abs;
+}
+
   const baseTools = {
     list_files: tool({
       description:
@@ -308,7 +336,7 @@ export function createAgentTools(
         "write_file",
         mutating("file", async ({ path: relPath, content }) => {
           try {
-            const abs = await resolveSafePath(workspaceRoot, relPath);
+            const abs = await resolveSafePathParaEscribir(relPath);
             await fs.mkdir(path.dirname(abs), { recursive: true });
             await fs.writeFile(abs, content, "utf-8");
             emit({ type: "file_written", relPath });
@@ -333,7 +361,7 @@ export function createAgentTools(
         "edit_file",
         mutating("file", async ({ path: relPath, oldStr, newStr }) => {
           try {
-            const abs = await resolveSafePath(workspaceRoot, relPath);
+            const abs = await resolveSafePathParaEscribir(relPath);
             const original = await fs.readFile(abs, "utf-8");
 
             // El modelo siempre escribe oldStr/newStr con \n puro — nunca \r\n,
@@ -463,7 +491,7 @@ export function createAgentTools(
           for (const op of parseado.ops) {
             let abs: string;
             try {
-              abs = await resolveSafePath(workspaceRoot, op.relPath);
+              abs = await resolveSafePathParaEscribir(op.relPath);
             } catch (error) {
               fallos.push({ relPath: op.relPath, error: describeError(error, op.relPath) });
               continue;
@@ -548,7 +576,7 @@ export function createAgentTools(
         "delete_file",
         mutating("file", async ({ path: relPath }) => {
           try {
-            const abs = await resolveSafePath(workspaceRoot, relPath);
+            const abs = await resolveSafePathParaEscribir(relPath);
             const stat = await fs.stat(abs).catch(() => null);
             if (!stat) return { ok: false, error: `${relPath} no existe — no hay nada que borrar.` };
             if (!stat.isFile()) return { ok: false, error: `${relPath} no es un archivo (¿una carpeta?) — delete_file solo borra archivos.` };
