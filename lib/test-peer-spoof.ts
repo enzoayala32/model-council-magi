@@ -119,14 +119,27 @@ async function fetchUntil(url: string, expected: number, attempts = 12, init: Re
 }
 
 /** Rutas que la matriz verifica: se precompilan al levantar el server. */
+// Rutas que se "precalientan" al levantar el server: en modo dev, Next compila
+// cada ruta en el primer pedido, y hasta que compila responde 404 por una ruta
+// que EXISTE. Precalentar las que el test va a usar es lo que evita el flake
+// (las que fallaban eran justo las que faltaban acá: /api/pairing y
+// /api/pairing/redeem, que son POST-only y por eso nadie las había incluido —
+// un GET les devuelve 405, que es exactamente lo que el bucle de abajo busca:
+// "distinto de 404" = compilada).
 const ROUTES_TO_WARM = [
   "/api/threads",
   "/api/agent/projects",
   "/api/agent/browse?path=/",
   "/api/agent/models",
+  "/api/agent/tasks",
+  "/api/agent/commands",
   "/api/council/runs",
   "/api/models/catalog",
   "/api/provider-resilience/status",
+  "/api/auth/token",
+  "/api/pairing",
+  "/api/pairing/redeem",
+  "/api/mcp",
 ];
 
 /** Levanta el server propio con las variables dadas. */

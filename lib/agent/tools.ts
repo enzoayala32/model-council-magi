@@ -8,6 +8,7 @@ import { createMcpTools, type McpToolRegistry } from "./mcp-tools";
 import { createSearchProviderFromEnv, MAX_WEB_SEARCH_RESULTS, type SearchProvider } from "./search-provider";
 import { applyHunks, normalizarSaltos, parsePatch, restaurarSaltos } from "./patch-parser";
 import { webfetch } from "./webfetch";
+import { renderSkillPayload, type FileSkill } from "./skills-file";
 import { redactSecrets } from "../provider-resilience/redact";
 import { execWithTreeKill } from "./exec-with-tree-kill";
 import { resolveSafePath, UnsafePathError } from "./safe-path";
@@ -140,6 +141,11 @@ export function createAgentTools(
   /** Fase 7.4: si viene, se agregan las herramientas MCP de la config del
    *  operador. Sin esto, el agente no ve ningún servidor MCP. */
   mcpRegistry?: McpToolRegistry,
+  /** P1 de paridad con OpenCode: skills del proyecto descubiertas en disco
+   *  (`.magi/skills`). Sin esto, la tool `skill` responde "no hay skills" — la
+   *  lista del prompt y la tool usan la MISMA fuente, para que no puedan
+   *  discrepar. */
+  fileSkills?: FileSkill[],
 ) {
   // Fase 7D — estado de `repo_map` POR INSTANCIA (nunca global): el tracker registra las mutaciones del
   // worktree y el service (caché del mapa) se crea recién en la primera consulta.
@@ -359,6 +365,41 @@ export function createAgentTools(
           }
         }),
         DEFAULT_POLICY,
+      ),
+    }),
+
+    // P1 de paridad con OpenCode: la tool `skill`. Carga una skill bajo demanda
+    // por id; sin esto, todas las skills tendrian que ir inline en el prompt.
+    skill: tool({
+      description:
+        "Carga una skill del proyecto por su id (las que estan listadas en <available-skills> del prompt). Devuelve su cuerpo completo y la carpeta donde viven sus archivos de apoyo. Usala solo cuando la tarea lo pida: el cuerpo no esta en el prompt a proposito.",
+      inputSchema: z.object({
+        id: z.string().describe("Id de la skill, tal como aparece en la lista (ej. /git-release)."),
+      }),
+      execute: wrapToolExecute(
+        "skill",
+        async ({ id }) => {
+          const skills = fileSkills ?? [];
+          const normalizado = id.startsWith("/") ? id : "/" + id;
+          const skill = skills.find((s) => s.id === normalizado || s.id === normalizado.toLowerCase());
+          if (!skill) {
+            const disponibles = skills.filter((s) => !s.autoinvokeDisabled).map((s) => s.id);
+            return {
+              ok: false,
+              error:
+                disponibles.length === 0
+                  ? "No hay skills disponibles en este proyecto."
+                  : `No existe la skill "${id}". Las disponibles son: ${disponibles.join(", ")}.`,
+            };
+          }
+          // El cuerpo de una skill son instrucciones del PROYECTO: contenido del
+          // usuario sobre su propio workspace, no de un tercero. No hace falta
+          // marcarlo como no confiable (si haria falta si viniera de un repo
+          // clonado ajeno, pero la skill vive en el workspace de la task y el
+          // usuario ya es dueno de todo lo que hay ahi).
+          return { ok: true, id: skill.id, text: renderSkillPayload(skill) };
+        },
+        { timeoutMs: 5_000, maxOutputChars: 40_000 },
       ),
     }),
 
