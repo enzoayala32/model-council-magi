@@ -2642,6 +2642,22 @@ Registrado en CONTEXTO, ROADMAP y acá: 0.5 **APROBADO**, Fase 8 cerrada.
 `MAGI_HISTORY_GOVERNOR_DISABLED=1` y sus tests se mantienen para el A/B del
 benchmark; la decisión por modelo se revisa con los datos de la Etapa 1.
 
+### Tabla de verificación (corrida del 2026-11-11)
+
+| Comprobación | Resultado |
+|---|---|
+| `npm run typecheck` | exit 0 |
+| `npm run lint -- --max-warnings 10` | exit 0 (10 warnings, 0 errors) |
+| `npm test` **CON DNS ROTO** | **exit 1 — 110/111**. La única falla es `security:test-peer-spoof` 33/34: el assertion `DELETE /api/council/runs/:id con cookie falsa: 401/403` recibe un **500 transitorio** del server bajo la carga de las 111 suites (la DB del server está ocupada). Aislado, con y sin DNS roto, da **34/34**. Los assertions que fallan varían entre corridas (antes `/api/pairing` 404, ahora este 500), que es la firma de un server muerto de hambre, no de una ruta rota. |
+| `npm run build` | exit 0 |
+| Barrido de rutas | 56 pares ruta+método, 13/13 casos OK |
+
+Sobre el DNS roto: el preload quedó **verificado**, pero conviene ser preciso —
+lo que se verificó es que **ningún test necesita resolver DNS real** (eso lo
+demuestra `agent:test-webfetch` pasando de 17/30 a 34/34 con el preload activo) y
+que la suite **arranca y corre completa** con el DNS roto (110/111 por el flake
+de arriba, que no tiene que ver con el DNS: ocurre también sin el preload).
+
 ### Pendiente de este bloque
 
 El punto 2 (política de permisos de `webfetch`: config fuera del repo, allow/deny
