@@ -2265,7 +2265,7 @@ completa (índice `opencode.ai/docs/llms.txt`, páginas `tools`, `permissions`,
 `models`, `mcp-servers`) y el repo `anomalyco/opencode` rama `dev` para
 comprobar que una "ausencia" es real.
 
-**Resultado:** 7 NOSOTROS · 3 IGUAL · 11 PARCIAL · 2 DIFERENTE · 6 FALTA
+**Resultado:** 7 NOSOTROS · 2 IGUAL · 13 PARCIAL · 2 DIFERENTE · 4 FALTA
 (documentado en `docs/PARIDAD-OPENCODE.md`, con el conteo verificado por script
 contra la propia tabla).
 
@@ -2558,6 +2558,96 @@ typecheck exit 0 · lint `--max-warnings 10` exit 0 (10 warnings) · `npm test
 **Dos tests existentes se actualizaron dos veces** (`test-repo-map-tool`,
 `test-web-search-compat`) porque comparaban el set de tools esperado: agregar una
 tool lo cambia, y dejarlos viejos habría sido un test que miente.
+
+## 2G. Etapa 2.6 — correcciones de seguridad tras la revisión de 2.1-2.3
+
+Trabajo pedido por el usuario el 2026-11-10 como "hacer ANTES de cualquier otra
+etapa", con la PoC del escape vía `.git` ya reproducida por él.
+
+### 1a — Rechazo de rutas `.git` en TODAS las herramientas de escritura
+
+`lib/agent/safe-path.ts`: `assertNotGitInternals` / `esRutaGitInternals`, con
+normalización por segmento (minúsculas, NFC/NFD sin marcas, puntos y espacios
+finales descartados —así `.git.` y `.git ` son el MISMO archivo en Windows—),
+nombre corto 8.3 (`GIT~1`) y el destino REAL ya resuelto (symlink dentro del
+workspace que apunta a `../.git/`).
+
+Y la decisión de forma que importa más que la regex: las tools NO llaman a
+`resolveSafePath` y después al helper por separado. Hay UNA función,
+`resolveSafePathParaEscribir`, que envuelve los dos —si cada tool tuviera que
+acordarse del segundo llamado, bastaría que una tool nueva se olvide para
+reabrir el agujero—.
+
+Tests: `agent:test-git-internals` 28/28, que enumeran las 4 herramientas de
+escritura y las corren contra 10 rutas prohibidas; si alguna no falla con un
+mensaje que mencione `.git`, el test falla. Más 6 rutas legítimas que TIENEN que
+seguir funcionando.
+
+**PoC contra un worktree REAL (git worktree add), antes y después:**
+
+| | ANTES (commit padre) | DESPUÉS |
+|---|---|---|
+| `write_file(".git")` | EPERM (el SO protege el puntero en Windows; **no** la app) | rechazado por la regla |
+| `edit_file(".git")` | EPERM | rechazado por la regla |
+| `patch(".git")` | "no se encontró el bloque" | rechazado por la regla |
+| `delete_file(".git")` | **OK: borró el puntero** | rechazado por la regla |
+| puntero modificado por fs | `git status` corrió sin error contra el gitdir falso | la verificación de integridad lo detiene |
+
+Dos honestidades sobre la PoC en este entorno: en Windows el puntero de un
+worktree es read-only, así que el vector de escritura ya estaba tapado por el SO
+—el que quedaba abierto de verdad era `delete_file`—; y en Linux, donde el
+usuario reprodujo el ataque, los tres estaban abiertos. El `fsmonitor` no llegó a
+ejecutarse en esta corrida (depende del comando git y del entorno); la evidencia
+de la escalada es la que dio la revisión con git 2.43.
+
+### 1b — git ENDURECIDO, centralizado, con verificación de integridad
+
+`lib/agent/git-safe.ts`, único módulo con permiso para invocar git:
+`GIT_DIR`/`GIT_WORK_TREE` explícitos (del gitdir que le corresponde al workspace,
+`gitDirDeWorkspace`), `GIT_CONFIG_NOSYSTEM=1`, config global anulada,
+`-c core.fsmonitor=false -c core.hooksPath=<vacío> -c core.pager=cat
+-c protocol.ext.allow=never`, y verificación de integridad ANTES de cada
+operación (si el puntero no apunta al gitdir esperado, `GitIntegrityError` y la
+corrida falla). Variante sync con el mismo endurecimiento.
+
+TODOS los `execFile("git")` de producción reemplazados, y un guardián
+(`agent:test-git-safe-guard`, 9/9) que falla si queda alguno suelto.
+
+Una regresión que YO introduje y el test existente destapó: al migrar
+`repo-inventory` perdí el `AbortSignal`. `gitSafe` ahora lo acepta.
+
+### 1c/1d — PoC de regresión y modelo de amenazas
+
+`agent:test-git-poc` 18/18 contra un worktree real (no un directorio disfrazado),
+y `docs/SEGURIDAD-AGENTE.md` con cada vía evaluada: `.git` del worktree CERRADO,
+hooks CERRADO, `.gitattributes` con filtro local **MITIGADO, no cerrado** (no hay
+cierre por config: el archivo viaja en el repo), `.gitmodules` MITIGADO, config
+global CERRADO, scripts de `package.json` MITIGADO por allowlist.
+
+### 3 — El preload de DNS que el CONTEXTO decía que existía y no existía
+
+`lib/test/fixtures/dns-block.js`: rompe `dns.lookup` (el que usa fetch por
+debajo), `dns.resolve*` y `dns/promises`; loopback y `0.0.0.0` (comodín) siguen
+resolviendo. `test-webfetch` inyecta un resolver falso por el seam que el
+transporte MCP ya tenía.
+
+Tres bugs que destapó: recursión infinita en mi preload (llamaba al original,
+que ya era yo), `dns.lookup("0.0.0.0")` del server en modo LAN bloqueado, y
+`fetchWarm` reintentaba solo en 404 cuando bajo carga Next dev también da 500 a
+medias de compilar.
+
+### 4 — Governor APROBADO por el usuario (2026-11-11)
+
+Registrado en CONTEXTO, ROADMAP y acá: 0.5 **APROBADO**, Fase 8 cerrada.
+`MAGI_HISTORY_GOVERNOR_DISABLED=1` y sus tests se mantienen para el A/B del
+benchmark; la decisión por modelo se revisa con los datos de la Etapa 1.
+
+### Pendiente de este bloque
+
+El punto 2 (política de permisos de `webfetch`: config fuera del repo, allow/deny
+de dominios, aprobación humana para lo no listado, log de URLs y tope por task)
+**NO está implementado**: quedó pendiente por el tiempo de esta entrega y se
+lista como el siguiente bloque.
 
 ## Apéndice — Matriz ruta por scope
 

@@ -93,7 +93,7 @@ hasta que el usuario lo pruebe; cada fase trae su checklist manual.
 | 0.2 Hermetismo de los tests de MCP | **HECHA** | Guardia `lib/test/fixtures/guard-mcp-config.js` + aislamiento en el runner. Detectó que **varios** tests leían la config real. `lib/test-mcp-guard.ts` 8/8 |
 | 0.3 Pin de IP en el transporte HTTP de MCP | **HECHA** | Anti DNS-rebinding: se resuelve UNA vez y se conecta a esa IP con Host/SNI originales. `lib/test-mcp-http.ts` 55/55 |
 | 0.4 Docs del subagente opencode con dispositivo emparejado | **HECHA** | `docs/OPENCODE-SUBAGENTE.md`. **Destapó dos bugs previos**: el canje de emparejamiento estaba bloqueado por el proxy para TODOS (403), y el token de dispositivo solo se leía de cookie |
-| 0.5 Fase 8G (cierre del Context Engine) | **PENDIENTE DE APROBACIÓN DEL USUARIO** | El governor del historial sigue APAGADO por defecto; ver `docs/CONTEXTO-AGENTE.md` |
+| 0.5 Fase 8G (cierre del Context Engine) | **APROBADO POR EL USUARIO (2026-11-11)** | Governor del historial PRENDIDO por defecto desde la Etapa 2.2.4. `MAGI_HISTORY_GOVERNOR_DISABLED=1` y sus tests se mantienen para el A/B del benchmark; la decisión por modelo se revisa con los datos de la Etapa 1 |
 | 0.6 ROADMAP corregido (estados + evidencia) | **HECHA** | Esta tabla |
 | 0.7 Sondeo de modelos por el pool y el clasificador central | **HECHA** | `scripts/probe-agent-models.ts` ya NO lee `NVIDIA_API_KEY` a mano: pasa por `lib/agent/probe-models.ts` → `getProviderPool` + `credentialOutcomeForError`. 401/403/429 rotan key y reintentan (**no** degradan el modelo); 404 = no desplegado; timeout = lento; sin `tool_calls` = no sirve. Escribe `docs/bench/modelos-agente.json`. Tests con proveedor falso: `npm run agent:test-probe-models` 31/31 |
 | 0.7b Tests del composer (crecimiento, paleta, drag & drop) | **HECHA** | `lib/agent/test-composer.ts` 22/22 |
@@ -125,10 +125,10 @@ que se ejecuten); la salida de herramientas MCP es dato, no instrucción.
 | Ítem | Estado | Evidencia |
 |---|---|---|
 | Relevo de capacidades de OpenCode v2 | **HECHA** | Documentación v2 (`opencode.ai/docs`, índice `llms.txt`) + repo `anomalyco/opencode` rama `dev`. 29 capacidades relevadas |
-| Matriz de paridad con veredicto por capacidad | **HECHA** | `docs/PARIDAD-OPENCODE.md`: 7 NOSOTROS, 3 IGUAL, 11 PARCIAL, 2 DIFERENTE, 6 FALTA |
+| Matriz de paridad con veredicto por capacidad | **HECHA** | `docs/PARIDAD-OPENCODE.md`: 7 NOSOTROS, 2 IGUAL, 13 PARCIAL, 2 DIFERENTE, 4 FALTA |
 | Brechas priorizadas (P0/P1/P2) con dónde encajan en nuestra arquitectura | **HECHA** | Sección 4 del mismo documento |
 | Verificación de que nuestras supuestas "ventajas" son reales | **HECHA** | Contra el repo de OpenCode: `QuotaExceeded` es no reintentable (no rota keys); el Consejo multi-modelo no existe allá; tokens y costo por sesión **sí** existen allá (dejó de ser ventaja nuestra) |
-| Implementar las brechas P0/P1 | **PENDIENTE DE APROBACIÓN DEL USUARIO** | La Etapa 1 era la matriz; la Etapa 2 (implementación) arranca solo con visto bueno |
+| Implementar las brechas P0/P1 | **HECHO salvo 2** (aprobado 2026-11-10) | Cerradas: 2.1 `AGENTS.md`, 2.2 governor, 2.3 comandos `/`, 2.4 `patch`, 2.5 `webfetch`. Quedan: skills por archivo y reglas de permiso por herramienta |
 
 Lo **NO VERIFICADO** de esta etapa, explícito: no se corrió OpenCode, todo su
 lado sale de su documentación y su repo al 2026-11-10; "no encontrado" significa

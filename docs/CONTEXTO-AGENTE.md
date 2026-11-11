@@ -5,7 +5,7 @@ código y el reporte: corregir este archivo y anotarlo en "Decisiones y dudas".
 
 ## 1. Fase actual y último commit
 
-- **Etapa 0: HECHA**, salvo 0.5 (pendiente de aprobación del usuario). Cerrados
+- **Etapa 0: HECHA**, incluido **0.5 APROBADO POR EL USUARIO el 2026-11-11** (governor del historial PRENDIDO por defecto; conversación del 10-11/11-11). El interruptor `MAGI_HISTORY_GOVERNOR_DISABLED=1` y sus tests se mantienen para el A/B del benchmark. La decisión de dejarlo prendido para cada modelo se revisa con los datos de la Etapa 1. Cerrados
   0.1 (admin MCP solo desde la PC con step-up), 0.2 (hermetismo de los tests de
   MCP), 0.3 (pin de IP anti-rebinding), 0.4 (docs del subagente opencode, que
   destapó dos bugs previos), 0.6 (ROADMAP corregido) y 0.7 (sondeo por pool).
