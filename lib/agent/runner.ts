@@ -10,7 +10,7 @@ import {
   type TransitionPatch,
 } from "./task-store";
 import { getProject } from "./project-store";
-import { createWorkspaceForTask, destroyWorkspaceForTask, loadWorkspaceForTask, type TaskWorkspace } from "./workspace-manager";
+import { createWorkspaceForTask, destroyWorkspaceForTask, gitDirDeWorkspace, loadWorkspaceForTask, type TaskWorkspace } from "./workspace-manager";
 import { runAgentLoop, type AgentFileProposal, type AgentLoopResult, type RunAgentLoopOptions } from "./loop";
 import type { ModelMessage } from "ai";
 import {
@@ -169,6 +169,9 @@ async function runAutonomyForTask(
     taskId: task.id,
     task: task.prompt,
     workspaceRoot: workspace.worktreePath,
+    // Etapa 2.6 (1b): el gitdir que le corresponde a este workspace, para que
+    // git-safe verifique el puntero .git antes de cada operación.
+    gitDirEsperado: gitDirDeWorkspace(workspace),
     repoRoot: workspace.basePath,
     modelId: task.modelId,
     workspaceId: workspace.id,

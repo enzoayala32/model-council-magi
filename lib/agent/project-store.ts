@@ -1,11 +1,9 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import crypto from "node:crypto";
+import { gitSafe } from "./git-safe";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { getDb } from "../db";
 
-const execFileAsync = promisify(execFile);
 
 /**
  * Un proyecto externo sobre el que puede trabajar el Coding Agent.
@@ -70,9 +68,13 @@ function rowToProject(row: AgentProjectRow): AgentProject {
  * como un repo git utilizable todavía. */
 export async function detectIsGitRepo(localPath: string): Promise<boolean> {
   try {
-    const { stdout } = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: localPath });
+    // Endurecido (Etapa 2.6, 1b): sin config global, sin hooks, sin fsmonitor.
+    // Acá no hay workspace registrado, así que no se puede verificar un gitdir
+    // esperado — pero sí se elimina toda vía de ejecución que venga de la
+    // config del repo que se está investigando.
+    const { stdout } = await gitSafe(["rev-parse", "--is-inside-work-tree"], { cwd: localPath });
     if (stdout.trim() !== "true") return false;
-    await execFileAsync("git", ["rev-parse", "--verify", "HEAD"], { cwd: localPath });
+    await gitSafe(["rev-parse", "--verify", "HEAD"], { cwd: localPath });
     return true;
   } catch {
     return false;

@@ -27,11 +27,9 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { gitSafe } from "./git-safe";
 import { resolveSafePath, UnsafePathError } from "./safe-path";
 
-const execFileAsync = promisify(execFile);
 
 /** Por encima de esto un archivo no se considera analizable (queda como
  * `skipped: too_large`). 1 MB: el código fuente escrito a mano casi nunca
@@ -186,12 +184,13 @@ export function isSyntacticallySafe(relPath: string): boolean {
 
 async function runGitLsFiles(workspaceRoot: string, args: string[], signal?: AbortSignal): Promise<string[]> {
   try {
-    const { stdout } = await execFileAsync("git", ["ls-files", "-z", ...args], {
+    // Etapa 2.6 (1b): endurecido. `signal` no lo acepta el helper (usa su
+    // propio timeout), y eso está bien: el inventario es una operación corta.
+    const { stdout } = await gitSafe(["ls-files", "-z", ...args], {
       cwd: workspaceRoot,
+      timeoutMs: GIT_TIMEOUT_MS,
       maxBuffer: GIT_MAX_BUFFER,
-      timeout: GIT_TIMEOUT_MS,
-      signal,
-      windowsHide: true,
+      ...(signal ? { signal } : {}),
     });
     return stdout.split("\0").filter((entry) => entry.length > 0);
   } catch (error) {

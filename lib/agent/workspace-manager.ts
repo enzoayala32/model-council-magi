@@ -5,6 +5,7 @@ import {
   destroyCopyWorkspace,
   getHeadCommit,
 } from "./workspace";
+import path from "node:path";
 import { recordWorkspaceCreated, recordWorkspaceDestroyed, getWorkspaceForTask, type WorkspaceMode } from "./workspace-store";
 import type { AgentProject } from "./project-store";
 import type { CodingTask } from "./task-store";
@@ -127,6 +128,25 @@ export async function destroyWorkspaceForTask(workspace: TaskWorkspace, options?
  * "el más reciente" — sigue devolviendo como mucho un resultado, igual que
  * antes, solo que ahora sin ambigüedad si alguna vez hubiera dos filas sin
  * `destroyedAt` por algún bug. */
+/**
+ * Etapa 2.6 (1b) — el gitdir que LE CORRESPONDE a un workspace.
+ *
+ * Es la fuente de la verdad contra la que `lib/agent/git-safe.ts` verifica el
+ * puntero `.git` antes de cada operación git. Se deriva del modo, no se lee del
+ * puntero (leerlo sería justamente confiar en lo que hay que verificar):
+ *
+ *  - `worktree`: `git worktree add` crea el gitdir en
+ *    `<repo>/.git/worktrees/<taskId>`. Es determinista: el directorio del
+ *    worktree se nombra con el taskId (`createAgentWorkspace`).
+ *  - `copy`: el gitdir es el `.git` de adentro del propio workspace.
+ */
+export function gitDirDeWorkspace(workspace: Pick<TaskWorkspace, "mode" | "basePath" | "worktreePath" | "taskId">): string {
+  if (workspace.mode === "worktree") {
+    return path.join(workspace.basePath, ".git", "worktrees", workspace.taskId);
+  }
+  return path.join(workspace.worktreePath, ".git");
+}
+
 export function loadWorkspaceForTask(taskId: string): TaskWorkspace | null {
   const persisted = getWorkspaceForTask(taskId);
   if (!persisted) return null;

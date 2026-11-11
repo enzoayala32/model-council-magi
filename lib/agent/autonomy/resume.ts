@@ -18,12 +18,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { gitSafe } from "../git-safe";
 import type { AutonomyBudget } from "./contract";
 import type { FileCheckpoint } from "./ledger";
 
-const execFileAsync = promisify(execFile);
 
 /** Datos mínimos que el runner le pasa al dispatcher para reanudar. No
  * incluye mensajes, prompts ni contenido: solo ids, versión de plan,
@@ -237,7 +235,8 @@ const defaultIo: ResumeIo = {
   },
   async git(cwd, args) {
     try {
-      const { stdout } = await execFileAsync("git", args, { cwd, timeout: 5_000, maxBuffer: 4 * 1024 * 1024 });
+      // Etapa 2.6 (1b): endurecido — sin hooks, sin fsmonitor, sin config global.
+      const { stdout } = await gitSafe(args, { cwd, timeoutMs: 5_000, maxBuffer: 4 * 1024 * 1024 });
       return { ok: true, stdout: stdout.trim(), code: 0 };
     } catch (error) {
       const code = (error as { code?: number | string }).code;

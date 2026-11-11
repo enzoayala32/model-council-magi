@@ -23,12 +23,11 @@
  *   de ESA llamada al modelo.
  */
 
-import { execFile, execFileSync } from "node:child_process";
+import { gitSafe, gitSafeSync } from "../git-safe";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { generateText, stepCountIs, type ModelMessage, type StopCondition, type ToolSet } from "ai";
 import { appendEvent, type AgentEventPayload } from "../event-log";
 import { createAgentTools, isWebSearchCompatible, type AgentToolEvent, type CreateAgentToolsRepoMapOptions } from "../tools";
@@ -120,7 +119,6 @@ import {
   type ProgressTracker,
 } from "./progress";
 
-const execFileAsync = promisify(execFile);
 
 const MAX_RECENT_STEPS = 20;
 const MAX_WARNING_CHARS = 300;
@@ -250,6 +248,9 @@ type LoopContext = {
   task: string;
   runId: string;
   workspaceRoot: string;
+  /** Etapa 2.6 (1b): gitdir que registró el workspace-manager, para verificar
+   *  la integridad del puntero .git antes de cada operación git. */
+  gitDirEsperado?: string | null;
   repoRoot: string;
   modelId: string;
   providerName: ReturnType<typeof resolveProviderName>;
@@ -307,6 +308,9 @@ type LoopContext = {
 };
 
 export type RunAutonomousLoopOptions = {
+  /** Etapa 2.6 (1b): gitdir que registró el workspace-manager; git-safe lo
+   *  verifica contra el puntero .git antes de cada operación. */
+  gitDirEsperado?: string | null;
   taskId: string;
   task: string;
   workspaceRoot: string;
@@ -453,13 +457,12 @@ function hashWorkspaceState(ctx: LoopContext, relPaths: string[]): string {
 
   let status = "";
   try {
-    status = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
+    // Etapa 2.6 (1b): endurecido.
+    status = gitSafeSync(["status", "--porcelain", "--untracked-files=all"], {
       cwd: ctx.workspaceRoot,
-      encoding: "utf8",
-      timeout: WORKSPACE_STATUS_TIMEOUT_MS,
-      maxBuffer: 8 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+      gitDirEsperado: ctx.gitDirEsperado ?? null,
+      timeoutMs: WORKSPACE_STATUS_TIMEOUT_MS,
+    }).stdout;
   } catch {
     status = "<git_status_unavailable>";
   }
@@ -532,13 +535,10 @@ function buildFileCheckpoint(ctx: LoopContext, relPath: string): FileCheckpointI
 
 /** HEAD actual del workspace para el checkpoint. Best-effort y con timeout
  * corto: si git falla, se conserva el HEAD anterior de la corrida. */
-function currentHeadCommit(workspaceRoot: string): string | null {
+function currentHeadCommit(workspaceRoot: string, gitDirEsperado?: string | null): string | null {
   try {
-    const value = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: workspaceRoot,
-      timeout: 2_000,
-      encoding: "utf8",
-    }).trim();
+    // Etapa 2.6 (1b): endurecido.
+    const value = gitSafeSync(["rev-parse", "HEAD"], { cwd: workspaceRoot, ...(gitDirEsperado ? { gitDirEsperado } : {}), timeoutMs: 2_000 }).stdout.trim();
     return value || null;
   } catch {
     return null;
@@ -1058,7 +1058,7 @@ function handleModelStep(ctx: LoopContext, phase: ModelPhase, step: StepLike): v
     outputTokens: ctx.outputTokens + usage.outputTokens,
     estimatedCostUsd: null,
   };
-  const headCommit = currentHeadCommit(ctx.workspaceRoot);
+  const headCommit = currentHeadCommit(ctx.workspaceRoot, ctx.gitDirEsperado);
   try {
     recordStepCheckpoint({
       step: {
@@ -1610,11 +1610,12 @@ async function verifyGlobal(ctx: LoopContext, plan: PersistedPlan): Promise<{ ok
 
 async function collectProposals(ctx: LoopContext): Promise<AgentFileProposal[]> {
   try {
-    const { stdout } = await execFileAsync("git", ["status", "--porcelain", "--untracked-files=all"], {
+    // Etapa 2.6 (1b): endurecido + verificación de integridad del puntero .git.
+    const { stdout } = await gitSafe(["status", "--porcelain", "--untracked-files=all"], {
       cwd: ctx.workspaceRoot,
-      maxBuffer: 8 * 1024 * 1024,
+      gitDirEsperado: ctx.gitDirEsperado ?? null,
     });
-    return await buildProposals(stdout, ctx.workspaceRoot, ctx.lastTypeCheckOk);
+    return await buildProposals(stdout, ctx.workspaceRoot, ctx.lastTypeCheckOk, ctx.gitDirEsperado ?? null);
   } catch {
     warn(ctx, "No se pudo calcular el diff final del workspace.");
     return [];

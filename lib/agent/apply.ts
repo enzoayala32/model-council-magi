@@ -1,17 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { getTask, updateTaskFields } from "./task-store";
 import { getProject } from "./project-store";
 import { getProposalsForTask, markProposalApplied, markProposalConflict } from "./proposal-store";
-import { destroyWorkspaceForTask, loadWorkspaceForTask, type TaskWorkspace } from "./workspace-manager";
+import { destroyWorkspaceForTask, gitDirDeWorkspace, loadWorkspaceForTask, type TaskWorkspace } from "./workspace-manager";
+import { gitSafe } from "./git-safe";
 import { resolveSafePath } from "./tools";
 import { sha256 } from "./loop";
 import { transitionAndLog } from "./runner";
 import { appendEvent } from "./event-log";
 
-const execFileAsync = promisify(execFile);
 
 export type ApplyResult = {
   status: "APPLIED" | "READY_FOR_REVIEW";
@@ -36,17 +34,21 @@ async function attemptGitCommit(
 ): Promise<{ status: "success" | "failed"; sha?: string; error?: string }> {
   const promptExcerpt = prompt.slice(0, 72);
   const message = `agent: ${promptExcerpt}\n\nTask: ${taskId}\nFiles: ${appliedPaths.length}`;
+  // Etapa 2.6 (1b): el commit se hace con git ENDURECIDO (sin hooks, sin
+  // fsmonitor, sin config global) y con la verificación de integridad del
+  // puntero .git antes de tocar nada. El gitdir esperado sale del registro del
+  // workspace: si el puntero dejó de apuntar ahí, la operación falla.
   const gitEnv = {
-    ...process.env,
     GIT_AUTHOR_NAME: "Coding Agent (MAGI)",
     GIT_AUTHOR_EMAIL: "coding-agent@localhost",
     GIT_COMMITTER_NAME: "Coding Agent (MAGI)",
     GIT_COMMITTER_EMAIL: "coding-agent@localhost",
   };
   try {
-    await execFileAsync("git", ["add", "--", ...appliedPaths], { cwd: workspace.worktreePath, env: gitEnv });
-    await execFileAsync("git", ["commit", "-m", message], { cwd: workspace.worktreePath, env: gitEnv });
-    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: workspace.worktreePath, env: gitEnv });
+    const opcionesGit = { cwd: workspace.worktreePath, env: gitEnv, gitDirEsperado: gitDirDeWorkspace(workspace) };
+    await gitSafe(["add", "--", ...appliedPaths], opcionesGit);
+    await gitSafe(["commit", "-m", message], opcionesGit);
+    const { stdout } = await gitSafe(["rev-parse", "HEAD"], opcionesGit);
     return { status: "success", sha: stdout.trim() };
   } catch (error) {
     return { status: "failed", error: error instanceof Error ? error.message : String(error) };

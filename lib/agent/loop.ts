@@ -1,5 +1,3 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import crypto from "node:crypto";
 import path from "node:path";
 import { generateText, stepCountIs, type ModelMessage, type StopCondition, type ToolSet } from "ai";
@@ -9,6 +7,7 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createAgentTools, isWebSearchCompatible, type AgentToolEvent } from "./tools";
 import { loadProjectInstructions } from "./instructions";
 import { loadFileSkills, renderSkillList } from "./skills-file";
+import { gitSafe } from "./git-safe";
 import type { SearchProvider } from "./search-provider";
 import { getCouncilModel } from "../models";
 import { appendEvent } from "./event-log";
@@ -39,7 +38,6 @@ import { getProviderPool, ENV_PREFIX_BY_PROVIDER, __resetProviderPoolsForTests, 
 
 export { __resetProviderPoolsForTests, __getProviderPoolForTests };
 
-const execFileAsync = promisify(execFile);
 
 const DEFAULT_MAX_STEPS = 20;
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
@@ -949,10 +947,15 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
     stopReason = "no_progress";
   }
 
-  const { stdout: rawGitStatus } = await execFileAsync("git", ["status", "--porcelain", "--untracked-files=all"], { cwd: workspaceRoot, maxBuffer: 8 * 1024 * 1024 }).catch(
-    (err) => ({ stdout: `<git status falló: ${err instanceof Error ? err.message : String(err)}>` }),
-  );
-  const proposals = errorMessage ? [] : await buildProposals(rawGitStatus, workspaceRoot, lastTypeCheckOk);
+  // Etapa 2.6 (1b): git ENDURECIDO + verificación de integridad. Si el
+  // puntero .git del workspace dejó de apuntar al gitdir esperado, esto tira
+  // GitIntegrityError y la corrida falla con el motivo en vez de seguir.
+  const gitDirEsperado = options.repoRoot && options.taskId ? path.join(options.repoRoot, ".git", "worktrees", options.taskId) : null;
+  const { stdout: rawGitStatus } = await gitSafe(["status", "--porcelain", "--untracked-files=all"], {
+    cwd: workspaceRoot,
+    ...(gitDirEsperado ? { gitDirEsperado } : {}),
+  }).catch((err) => ({ stdout: `<git status falló: ${err instanceof Error ? err.message : String(err)}>` }));
+  const proposals = errorMessage ? [] : await buildProposals(rawGitStatus, workspaceRoot, lastTypeCheckOk, gitDirEsperado);
 
   // Si una tool reportó haber escrito/editado un archivo pero git no lo ve
   // como cambio (típicamente: la ruta cae dentro de un .gitignore local o
@@ -993,7 +996,14 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
  * git — no hace falta snapshotear contenido "antes" a mano. `rawGitStatus`
  * se recibe ya calculado (no se vuelve a pedir acá) para que quien llama
  * pueda loguear la salida cruda si hace falta diagnosticar una discrepancia. */
-export async function buildProposals(rawGitStatus: string, workspaceRoot: string, lastTypeCheckOk: boolean | null): Promise<AgentFileProposal[]> {
+export async function buildProposals(
+  rawGitStatus: string,
+  workspaceRoot: string,
+  lastTypeCheckOk: boolean | null,
+  /** Etapa 2.6 (1b): gitdir que registró el workspace-manager, para verificar
+   *  la integridad antes de pedirle nada a git. */
+  gitDirEsperado: string | null = null,
+): Promise<AgentFileProposal[]> {
   const lines = rawGitStatus.split("\n").filter(Boolean);
 
   const typeCheck: TypeCheckResult =
@@ -1013,7 +1023,10 @@ export async function buildProposals(rawGitStatus: string, workspaceRoot: string
     let oldContent = "";
     if (!isNew) {
       try {
-        const { stdout: headContent } = await execFileAsync("git", ["show", `HEAD:${relPath}`], { cwd: workspaceRoot, maxBuffer: 8 * 1024 * 1024 });
+        const { stdout: headContent } = await gitSafe(["show", `HEAD:${relPath}`], {
+          cwd: workspaceRoot,
+          ...(gitDirEsperado ? { gitDirEsperado } : {}),
+        });
         oldContent = headContent;
       } catch {
         // No estaba en HEAD por algún motivo raro (ej. renombre) — tratamos como nuevo.

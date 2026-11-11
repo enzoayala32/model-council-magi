@@ -13,12 +13,10 @@
 import { createAgentWorkspace, destroyAgentWorkspace, sweepOrphanedWorkspaces, getRepoRoot } from "./workspace";
 import { runAgentLoop, resolveCodingModelId, type AgentLoopResult } from "./loop";
 import { createAgentTools } from "./tools";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { gitSafe } from "./git-safe";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-const execFileAsync = promisify(execFile);
 
 for (const file of [".env.local", ".env"]) {
   try {
@@ -310,9 +308,9 @@ function parsePorcelainPaths(porcelain: string): Set<string> {
 
 async function testProjectIntegrity(repoRoot: string, statusBefore: string): Promise<TestReport> {
   printTestHeader("PRUEBA 5 — Integridad del proyecto principal");
-  const { stdout: statusAfter } = await execFileAsync("git", ["status", "--porcelain", "--untracked-files=all"], { cwd: repoRoot });
-  const { stdout: diffAfter } = await execFileAsync("git", ["diff"], { cwd: repoRoot });
-  const { stdout: worktreesAfter } = await execFileAsync("git", ["worktree", "list", "--porcelain"], { cwd: repoRoot });
+  const { stdout: statusAfter } = await gitSafe(["status", "--porcelain", "--untracked-files=all"], { cwd: repoRoot });
+  const { stdout: diffAfter } = await gitSafe(["diff"], { cwd: repoRoot });
+  const { stdout: worktreesAfter } = await gitSafe(["worktree", "list", "--porcelain"], { cwd: repoRoot });
   const worktreeCount = worktreesAfter.split("\n\n").filter(Boolean).length;
 
   // Comparación por CONJUNTO de rutas, no por string exacto — el orden de
@@ -372,7 +370,7 @@ async function main() {
   console.log(`Modelo: ${modelId} (${source === "env" ? "de OPENROUTER_CODING_MODEL en .env" : "default"})`);
 
   const repoRoot = await getRepoRoot();
-  const { stdout: statusBefore } = await execFileAsync("git", ["status", "--porcelain", "--untracked-files=all"], { cwd: repoRoot });
+  const { stdout: statusBefore } = await gitSafe(["status", "--porcelain", "--untracked-files=all"], { cwd: repoRoot });
   console.log(`git status --porcelain (antes de empezar): ${JSON.stringify(statusBefore.trim())}`);
 
   // Diagnóstico explícito en vez de sospecha: confirmamos si la carpeta que
@@ -381,7 +379,7 @@ async function main() {
   // lugar a dudas sobre por qué faltaría una proposal aunque el archivo se
   // haya escrito y compilado bien.
   try {
-    await execFileAsync("git", ["check-ignore", "-v", "agent-stress-out/"], { cwd: repoRoot });
+    await gitSafe(["check-ignore", "-v", "agent-stress-out/"], { cwd: repoRoot });
     console.log(
       '⚠️  "agent-stress-out/" está gitignorada en esta máquina (local o globalmente) — si las Pruebas 1/2 escriben archivos ahí, van a compilar bien pero NO van a generar proposals (no es un bug del agente, es una limitación esperada de comparar contra git status). Revisá el mensaje de arriba para ver qué regla la está ignorando.',
     );
