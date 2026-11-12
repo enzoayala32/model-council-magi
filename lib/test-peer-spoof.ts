@@ -147,6 +147,17 @@ const ROUTES_TO_WARM = [
   "/api/mcp",
 ];
 
+/** Pedidos NO-GET que el test hace después: se precalientan también porque
+ *  cada handler se compila por separado en modo dev, y un 404/500 a medias de
+ *  compilar era justo el flake (el `DELETE /api/council/runs/:id` con cookie
+ *  falsa devolvía 500 transitorio bajo carga). */
+const PETICIONES_WARM: Array<{ ruta: string; init: RequestInit }> = [
+  { ruta: "/api/council/runs/id-inventado", init: { method: "DELETE" } },
+  { ruta: "/api/agent/projects", init: { method: "POST", headers: { "content-type": "application/json" }, body: "{}" } },
+  { ruta: "/api/pairing/redeem", init: { method: "POST", headers: { "content-type": "application/json" }, body: "{}" } },
+  { ruta: "/api/auth/token", init: { method: "DELETE" } },
+];
+
 /** Levanta el server propio con las variables dadas. */
 async function startServer(env: Record<string, string>, wantedPort?: number): Promise<ServerHandle> {
   const port = wantedPort ?? (await freePort());
@@ -185,20 +196,25 @@ async function startServer(env: Record<string, string>, wantedPort?: number): Pr
   // de `fetchWarm` y el test ve 404 donde en realidad sigue compilando, con
   // falsos negativos. Se piden una vez aca (el status no importa) para que
   // las estimaciones de la matriz ya no paguen ese costo.
-  for (const route of ROUTES_TO_WARM) {
+  const precalentar = async (ruta: string, init: RequestInit = {}) => {
     // 20 intentos: con un distDir nuevo la PRIMERA compilacion de la app en
     // modo dev tarda mucho mas que los reintentos cortos.
     for (let attempt = 0; attempt < 20; attempt += 1) {
       try {
-        const response = await fetch(base + route);
+        const response = await fetch(base + ruta, init);
         await response.arrayBuffer();
-        if (response.status !== 404) break;
+        // 404 = ruta todavia no compilada, 500 = la compilacion en curso se
+        // cayo a medias: las dos son transitorias y ninguna es el veredicto.
+        if (response.status !== 404 && response.status !== 500) return;
       } catch {
         // el server sigue levantando: se reintenta
       }
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
-  }
+  };
+
+  for (const route of ROUTES_TO_WARM) await precalentar(route);
+  for (const pedido of PETICIONES_WARM) await precalentar(pedido.ruta, pedido.init);
   return {
     child,
     base,
