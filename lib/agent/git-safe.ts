@@ -176,17 +176,21 @@ export async function gitSafe(args: string[], opciones: GitSafeOptions): Promise
   const hooks = await directorioHooksVacio();
   const globalNula = await configGlobalAnulada();
 
+  // El entorno arranca del proceso HOERE: sin PATH, execFile no encuentra el
+  // binario de git (en Windows se descubre igual y por eso el bug pasó
+  // desapercibido acá; en Linux falla con ENOENT y TODA la suite que usa git
+  // se cae — fue exactamente lo que rompió el CI desde el commit 5e953d2).
+  // Los de git van DESPUÉS, para pisar cualquier cosa que haya quedado.
   const entorno: Record<string, string | undefined> = {
+    ...process.env,
     ...opciones.env,
     GIT_DIR: gitDir,
     GIT_WORK_TREE: opciones.cwd,
-    // Config del sistema y global: fuera.
+    // Config del sistema y global: fuera. Un `include.path` con comando en la
+    // config global del usuario también ejecutaría.
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: globalNula,
-    // Lo que no queremos que el repo pueda prender.
     ...(process.platform === "win32" ? {} : { GIT_CONFIG_SYSTEM: "/dev/null" }),
-    // Por si algo de afuera quedó en el entorno heredado.
-    ...(process.env.GIT_INDEX_FILE ? {} : {}),
     LC_ALL: "C",
   };
 
@@ -239,7 +243,10 @@ export function gitSafeSync(args: string[], opciones: GitSafeOptions): { stdout:
   const hooks = directorioHooksVacioSync();
   const globalNula = configGlobalAnuladaSync();
 
+  // Mismo entorno que la variante async: HOERE primero (PATH incluido), los de
+  // git después.
   const entorno: Record<string, string | undefined> = {
+    ...process.env,
     ...opciones.env,
     GIT_DIR: gitDir,
     GIT_WORK_TREE: opciones.cwd,

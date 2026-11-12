@@ -15,6 +15,13 @@
  * Uso: npm run agent:test-git-safe-guard
  */
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
+import os from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { gitSafe } from "./git-safe";
+
+const execFileAsync = promisify(execFile);
 import path from "node:path";
 
 let passed = 0;
@@ -62,7 +69,7 @@ function archivosDeProduccion(raiz: string): string[] {
 /** Llamadas a git "sueltas": execFile/execFileSync/spawn con "git". */
 const LLAMADA_GIT = /(execFile(?:Async|Sync)?\s*\(\s*["']git["']|spawn(?:Sync)?\s*\(\s*["']git["'])/;
 
-function main(): void {
+async function main(): Promise<void> {
   const raiz = path.resolve(import.meta.dirname, "..", "..");
   const archivos = archivosDeProduccion(raiz).filter((abs) => {
     const rel = path.relative(raiz, abs);
@@ -105,9 +112,42 @@ function main(): void {
     check(`git-safe.ts endurece: ${marca}`, fuente.includes(marca), marca);
   }
 
+  // Y el entorno que arma tiene que PARTIR del del proceso (PATH incluido), no
+  // de las variables de git solamente: sin PATH, `execFile("git")` no encuentra
+  // el binario. Ese bug rompió el CI desde el commit 5e953d2 —en Linux falla
+  // con ENOENT y en Windows no, así que la suite local pasaba sin problemas—.
+  // Este check es el que lo impide volver.
+  const entornos = fuente.match(/const entorno: Record<string, string \| undefined> = \{[\s\S]*?\};/g) ?? [];
+  check("hay dos variantes de entorno (async y sync)", entornos.length === 2, entornos.length);
+  for (const [indice, entorno] of entornos.entries()) {
+    const empiezaPorProceso = /\{\s*\.\.\.process\.env/.test(entorno);
+    check(`entorno #${indice + 1} parte de process.env (PATH heredado)`, empiezaPorProceso, (entorno.split(String.fromCharCode(10))[1] ?? "").trim());
+  }
+
+
+  // Y la prueba FUNCIONAL, que es la que hubiera cazado el bug: con un `env`
+  // minimo (sin PATH), gitSafe tiene que encontrar el binario igual. En Windows
+  // `execFile` lo busca en el PATH del sistema aunque no se lo pases, así que
+  // este test pasa en los dos sistemas — pero en Linux es la diferencia entre
+  // "funciona" y "ENOENT en toda la suite".
+  {
+    const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "magi-gitsafe-fn-"));
+    await execFileAsync("git", ["init"], { cwd: dir });
+    const { stdout } = await gitSafe(["rev-parse", "--is-inside-work-tree"], {
+      cwd: dir,
+      // A propósito SIN process.env: solo lo mínimo de un commit.
+      env: { GIT_AUTHOR_NAME: "test" },
+    });
+    check("gitSafe encuentra el binario aunque el env no traiga PATH", stdout.trim() === "true", stdout.trim());
+    await fsPromises.rm(dir, { recursive: true, force: true });
+  }
+
   console.log("");
   console.log(passed + "/" + (passed + failed) + " casos OK");
   if (failed > 0) process.exit(1);
 }
 
-main();
+main().catch((error: unknown) => {
+  console.error(error);
+  process.exit(1);
+});
