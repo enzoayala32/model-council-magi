@@ -42,7 +42,22 @@ jobs:
         run: npm run lint -- --max-warnings 10
 
       - name: Tests offline
-        run: npm test
+        # `set -o pipefail` para que el exit code sea el de npm test y no el de
+        # tee: sin eso, un fallo de tests pasaria por exito.
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test-output.log
+
+      # Deja la salida de los tests descargable. Sin esto, un fallo en CI era
+      # imposible de diagnosticar desde aca (los logs de GitHub requieren ser
+      # admin del repo) y habia que adivinar.
+      - name: Subir log de tests
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output
+          path: test-output.log
+          if-no-files-found: warn
 
       - name: Build
         run: npm run build

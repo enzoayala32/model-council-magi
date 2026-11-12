@@ -26,6 +26,7 @@ import { extractProviderUsage } from "./context/provider-usage";
 import { buildContextUsagePayload, type ContextSelectionSummary, type ContextUsagePayload, type GovernorUsageSummary } from "./context/usage";
 import { DEFAULT_HISTORY_GOVERNOR_CONFIG, planHistoryCompaction, type HistoryGovernorConfig } from "./context/history-governor";
 import { resolveContextWindow } from "./context/budget";
+import { loadWorkspaceForTask, gitDirDeWorkspace } from "./workspace-manager";
 import type { GovernorSkipReason } from "./context/usage";
 /** Fase 5E: el pool singleton pasó a vivir en `registry.ts`, compartido con
  * Model Council — acá solo se importa. `ENV_PREFIX_BY_PROVIDER`/
@@ -950,7 +951,14 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
   // Etapa 2.6 (1b): git ENDURECIDO + verificación de integridad. Si el
   // puntero .git del workspace dejó de apuntar al gitdir esperado, esto tira
   // GitIntegrityError y la corrida falla con el motivo en vez de seguir.
-  const gitDirEsperado = options.repoRoot && options.taskId ? path.join(options.repoRoot, ".git", "worktrees", options.taskId) : null;
+  // Etapa 2.6 (1b): el gitdir esperado sale del REGISTRO del workspace (lo que
+  // anotó el workspace-manager al crearlo), que es la fuente de la verdad. NO se
+  // arma a mano: la versión anterior inventaba `<repoRoot>/.git/worktrees/<id>`
+  // asumiendo modo worktree, y en un repo normal (tests, modo copia) eso no
+  // existe → GitIntegrityError en cada operación git. Ese error además se lo
+  // comía el `.catch` de acá abajo, así que la task seguía como si nada.
+  const registroWorkspace = options.taskId ? loadWorkspaceForTask(options.taskId) : null;
+  const gitDirEsperado = registroWorkspace ? gitDirDeWorkspace(registroWorkspace) : null;
   const { stdout: rawGitStatus } = await gitSafe(["status", "--porcelain", "--untracked-files=all"], {
     cwd: workspaceRoot,
     ...(gitDirEsperado ? { gitDirEsperado } : {}),
