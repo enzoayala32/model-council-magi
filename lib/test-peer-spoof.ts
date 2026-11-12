@@ -170,6 +170,17 @@ async function startServer(env: Record<string, string>, wantedPort?: number): Pr
   // modo dev devuelve 404 por rutas que existen. El fallo aparecía solo
   // dentro del runner, nunca al correr el test solo.
   const devDistDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "magi-nextdev-"));
+  // El server bajo test NO es un test: no debe heredar los preloads que el
+  // runner inyecta por NODE_OPTIONS (guardia de config MCP y bloqueo de DNS).
+  // Esas rutas viven en temporales que pueden desaparecer, y cuando eso pasa el
+  // proceso del server muere al arrancar con MODULE_NOT_FOUND — Next lo
+  // reinicia y, mientras arranca, TODAS las rutas dan 500. Ese era el flake que
+  // rompía este test (y el CI) de forma intermitente: el
+  // `DELETE /api/council/runs/:id` recibía 500 justo cuando el server estaba
+  // muerto.
+  const preloads = (process.env.NODE_OPTIONS ?? "").split(/\s+/).filter((a) => a !== "--require" && !/magi-.*\.js$/.test(a));
+  const entorno: Record<string, string> = { NODE_OPTIONS: preloads.join(" ") };
+
   const child = spawn(process.execPath, ["--import", "tsx", "scripts/dev-server.ts"], {
     cwd: path.resolve(import.meta.dirname, ".."),
     env: {
@@ -184,6 +195,7 @@ async function startServer(env: Record<string, string>, wantedPort?: number): Pr
       // (trampa en la que caímos con el rate limiting).
       MAGI_DEV: "1",
       ...env,
+      ...entorno,
     },
     stdio: "ignore",
   });
@@ -329,7 +341,7 @@ async function main(): Promise<void> {
     check("POST /api/agent/projects con cookie falsa: 401/403", post.status === 401 || post.status === 403, post.status);
 
     const del = await fetchWarm(`${viaLan}/api/council/runs/id-inventado`, { method: "DELETE", headers: fake });
-    check("DELETE /api/council/runs/:id con cookie falsa: 401/403", del.status === 401 || del.status === 403, del.status);
+        check("DELETE /api/council/runs/:id con cookie falsa: 401/403", del.status === 401 || del.status === 403, del.status);
 
     // Y con el operador real, esas mismas rutas sí pasan.
     check("GET projects con operador: 200", (await fetchWarm(`${viaLan}/api/agent/projects`, { headers: { Host: `${lanIp}:${port}`, authorization: "Bearer operador-de-prueba" } })).status === 200);
